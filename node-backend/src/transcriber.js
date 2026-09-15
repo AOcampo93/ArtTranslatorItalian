@@ -56,6 +56,26 @@ const CODIGOS_WINDOWS = {
   },
 }
 
+/**
+ * Extrae del `system_info` de whisper las instrucciones que sí están activas.
+ * Con eso se deduce qué DLL `ggml-cpu-*` ganó el despacho: AVX2 y F16C activos
+ * significan `haswell` o mejor; solo SSE significa que cayó a `sse42`, que es
+ * la variante para CPUs de 2010 y rendiría fatal sin avisar.
+ */
+function resumirSystemInfo (linea) {
+  const activas = []
+  for (const par of linea.split('|')) {
+    const m = par.trim().match(/^([A-Z0-9_]+)\s*=\s*1$/)
+    if (m) activas.push(m[1])
+  }
+  const tiene = (x) => activas.includes(x)
+  const nivel = tiene('AVX512F') ? 'AVX-512 (skylakex o superior)'
+    : tiene('AVX2') ? 'AVX2 (haswell o superior)'
+    : tiene('AVX') ? 'AVX (sandybridge)'
+    : 'solo SSE — variante sse42, rendimiento muy pobre'
+  return { instrucciones: activas, nivel, sospechoso: !tiene('AVX2') }
+}
+
 /** Traduce un código de salida a algo que el usuario pueda accionar. */
 function explicarCodigo (code) {
   const m = CODIGOS_WINDOWS[code]
@@ -96,6 +116,10 @@ class Transcriber {
     this.puerto = null
     this._limpiadores = []
     this._ultimoError = null
+    // Qué variante de DLL eligió el despacho por microarquitectura.
+    // Si cae a `sse42` en una CPU moderna, algo va mal con el empaquetado y
+    // el rendimiento será pésimo SIN dar ningún error.  (PLAN.md §7)
+    this.infoSistema = null
   }
 
   /**
@@ -154,8 +178,13 @@ class Transcriber {
     ], { stdio: ['ignore', 'pipe', 'pipe'] })
 
     this.proc.stderr.on('data', d => {
-      const s = d.toString().trim()
-      if (s) console.log('[whisper]', s.split('\n')[0])
+      const texto = d.toString()
+      // whisper.cpp anuncia en su arranque qué juego de instrucciones usa.
+      // Es el único sitio donde se puede leer qué variante ganó el despacho.
+      const m = texto.match(/system_info:\s*(.+)/)
+      if (m && !this.infoSistema) this.infoSistema = resumirSystemInfo(m[1])
+      const linea = texto.trim().split('\n')[0]
+      if (linea) console.log('[whisper]', linea)
     })
     this.proc.on('exit', (code) => {
       if (code) {
@@ -267,4 +296,4 @@ function limpiar (texto) {
 }
 
 module.exports = { Transcriber, AUDIO_CTX }
-module.exports._internos = { limpiar, puertoLibre, explicarCodigo, CODIGOS_WINDOWS }
+module.exports._internos = { limpiar, puertoLibre, explicarCodigo, CODIGOS_WINDOWS, resumirSystemInfo }

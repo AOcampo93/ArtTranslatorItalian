@@ -164,6 +164,39 @@ async function probarAudio (soportado) {
   }
 }
 
+/**
+ * Enumera los dispositivos de entrada disponibles.
+ *
+ * Es lo único que una máquina virtual NO puede contestar, porque Mezcla
+ * estéreo es una función del driver de audio físico. Y es nuestro plan C si
+ * el loopback falla, así que saber si existe cambia el plan de contingencia.
+ *
+ * Ojo: si el permiso de micrófono de Windows está desactivado,
+ * enumerateDevices() devuelve entradas SIN etiqueta. Eso se detecta y se dice,
+ * en vez de concluir que no hay dispositivos.
+ */
+async function enumerarEntradas () {
+  try {
+    const todos = await navigator.mediaDevices.enumerateDevices()
+    const entradas = todos.filter(d => d.kind === 'audioinput')
+    const sinEtiqueta = entradas.filter(d => !d.label).length
+
+    // "Stereo Mix" cambia de nombre según el idioma de Windows.
+    const RE_MEZCLA = /stereo\s*mix|mezcla\s*est|st[eé]r[eé]o|what\s*u\s*hear|wave\s*out|mixage\s*st/i
+    const mezcla = entradas.find(d => RE_MEZCLA.test(d.label || ''))
+
+    return {
+      total: entradas.length,
+      sinEtiqueta,
+      permisoDudoso: entradas.length > 0 && sinEtiqueta === entradas.length,
+      mezclaEstereo: mezcla ? mezcla.label : null,
+      etiquetas: entradas.map(d => d.label).filter(Boolean),
+    }
+  } catch (err) {
+    return { error: err.message }
+  }
+}
+
 async function ejecutar () {
   el('btn').disabled = true
   el('btn').textContent = 'Midiendo…'
@@ -174,6 +207,8 @@ async function ejecutar () {
   marcar('audio',
     !audio.concluyente ? 'aviso' : audio.ok ? 'ok' : 'mal',
     !audio.concluyente ? 'no aplica' : audio.ok ? `${audio.sampleRate} Hz` : 'falló')
+
+  const entradas = await enumerarEntradas()
 
   marcar('hw', 'curso'); marcar('trans', 'curso'); marcar('trad', 'curso')
   const backend = await window.diag.backend()
@@ -190,7 +225,7 @@ async function ejecutar () {
   }
 
   // El informe lo construye el proceso principal con el módulo probado.
-  const r = await window.diag.informe({ plataforma: plat, audio, backend })
+  const r = await window.diag.informe({ plataforma: plat, audio, backend, entradas })
   informe = r.texto
   const bien = r.bien
 

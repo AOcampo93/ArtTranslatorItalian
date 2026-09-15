@@ -132,6 +132,7 @@ ipcMain.handle('diagnostico:backend', async () => {
     await tr.start()
     await translator.cargar()
     salida.transcripcion = { ok: true, hilos: tr.hilos }
+    salida.infoSistema = tr.infoSistema
     salida.traduccion = { ok: true }
     salida.admision = await admision.ejecutar(
       { transcriber: tr, translator, wavItaliano: fs.readFileSync(wav), perfil },

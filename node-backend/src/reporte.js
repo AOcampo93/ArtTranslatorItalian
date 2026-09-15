@@ -22,7 +22,7 @@
  * @param {object} datos.backend     { perfil, admision, motivoOmision, error }
  * @returns {string}
  */
-function construir ({ plataforma, audio, backend }) {
+function construir ({ plataforma, audio, backend, entradas }) {
   const L = []
   const p = backend?.perfil
 
@@ -63,7 +63,27 @@ function construir ({ plataforma, audio, backend }) {
     L.push(`  FALLÓ — ${audio.motivo}`)
     L.push('  Habría que usar el selector de dispositivo de entrada.')
   }
-  L.push('')
+
+  // ── Dispositivos de entrada: el plan C del audio ────────────────────────
+  if (entradas) {
+    L.push('DISPOSITIVOS DE ENTRADA')
+    if (entradas.error) {
+      L.push(`  NO SE PUDIERON LEER — ${entradas.error}`)
+    } else if (entradas.permisoDudoso) {
+      // enumerateDevices devuelve entradas sin etiqueta cuando el permiso de
+      // micrófono de Windows está desactivado. No es que no haya dispositivos.
+      L.push(`  ${entradas.total} dispositivos, todos SIN NOMBRE`)
+      L.push('  Probablemente el permiso de micrófono de Windows está desactivado:')
+      L.push('  Configuración > Privacidad > Micrófono > permitir a apps de escritorio')
+    } else {
+      L.push(`  ${entradas.total} dispositivos`)
+      for (const e of entradas.etiquetas.slice(0, 8)) L.push(`    · ${e}`)
+      L.push(entradas.mezclaEstereo
+        ? `  MEZCLA ESTÉREO DISPONIBLE: ${entradas.mezclaEstereo}`
+        : '  Sin Mezcla estéreo: el plan C del audio no está disponible en este equipo')
+    }
+    L.push('')
+  }
 
   // ── Rendimiento ─────────────────────────────────────────────────────────
   L.push('RENDIMIENTO')
@@ -75,6 +95,13 @@ function construir ({ plataforma, audio, backend }) {
     L.push(`  transcripción  p50 ${a.medidas.whisper.p50} ms · p95 ${a.medidas.whisper.p95} ms`)
     L.push(`  traducción     p50 ${a.medidas.marian.p50} ms · p95 ${a.medidas.marian.p95} ms`)
     L.push(`  ${a.medidas.vecesTiempoReal}× tiempo real · ${a.condiciones.hilosWhisper} hilos`)
+    if (backend.infoSistema) {
+      L.push(`  Instrucciones de CPU: ${backend.infoSistema.nivel}`)
+      if (backend.infoSistema.sospechoso) {
+        L.push('  AVISO: cayó a una variante para CPUs antiguas. Revisar el empaquetado:')
+        L.push('  las nueve DLL ggml-cpu-* tienen que estar junto a ggml-base.dll')
+      }
+    }
     if (a.condiciones.avisoSostenida) L.push(`  AVISO: ${a.condiciones.avisoSostenida}`)
     if (a.condiciones.avisoEnergia) L.push(`  AVISO: ${a.condiciones.avisoEnergia}`)
   } else {
@@ -87,6 +114,9 @@ function construir ({ plataforma, audio, backend }) {
   if (!audio?.concluyente) pendientes.push('si el loopback capta el audio de una videollamada real')
   if (plataforma?.plataforma !== 'win32') pendientes.push('si existe Mezcla estéreo como respaldo')
   if (a?.ok && !a.condiciones.sostenida) pendientes.push('cómo aguanta tras varios minutos, con la máquina caliente')
+  if (entradas && !entradas.error && !entradas.mezclaEstereo && !entradas.permisoDudoso) {
+    pendientes.push('si el loopback aguanta con una videollamada real, ya que no hay Mezcla estéreo de respaldo')
+  }
   if (pendientes.length) {
     L.push('LO QUE ESTE INFORME NO DICE')
     for (const x of pendientes) L.push(`  · ${x}`)

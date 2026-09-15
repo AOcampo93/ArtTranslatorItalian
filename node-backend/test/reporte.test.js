@@ -81,6 +81,76 @@ describe('lo medido frente a lo no comprobado', () => {
   })
 })
 
+describe('dispositivos de entrada — el plan C del audio', () => {
+  // Es lo ÚNICO que una máquina virtual no puede contestar: Mezcla estéreo es
+  // una función del driver de audio físico.
+  test('declara Mezcla estéreo cuando existe', () => {
+    const txt = construir({
+      plataforma: WIN, audio: null, backend: { perfil: PERFIL_BASE, admision: ADMISION_OK },
+      entradas: { total: 3, sinEtiqueta: 0, mezclaEstereo: 'Mezcla estéreo (Realtek)',
+                  etiquetas: ['Micrófono', 'Mezcla estéreo (Realtek)', 'Línea'] },
+    })
+    assert.match(txt, /MEZCLA ESTÉREO DISPONIBLE/)
+    assert.match(txt, /Realtek/)
+  })
+
+  test('dice claramente cuando NO hay, que es el caso probable en portátil', () => {
+    const txt = construir({
+      plataforma: WIN, audio: null, backend: { perfil: PERFIL_BASE, admision: ADMISION_OK },
+      entradas: { total: 2, sinEtiqueta: 0, mezclaEstereo: null, etiquetas: ['Micrófono', 'Cámara'] },
+    })
+    assert.match(txt, /Sin Mezcla estéreo/)
+    assert.match(txt, /no está disponible/)
+  })
+
+  test('distingue "sin permiso" de "sin dispositivos"', () => {
+    // enumerateDevices devuelve entradas sin etiqueta cuando el permiso de
+    // micrófono está desactivado. Confundirlo con "no hay nada" nos haría
+    // descartar el plan C por un motivo equivocado.
+    const txt = construir({
+      plataforma: WIN, audio: null, backend: { perfil: PERFIL_BASE, admision: ADMISION_OK },
+      entradas: { total: 3, sinEtiqueta: 3, permisoDudoso: true, mezclaEstereo: null, etiquetas: [] },
+    })
+    assert.match(txt, /SIN NOMBRE/)
+    assert.match(txt, /permiso de micrófono/)
+    assert.doesNotMatch(txt, /Sin Mezcla estéreo/, 'no debe concluir que no existe')
+  })
+
+  test('sin Mezcla estéreo, avisa de que no hay respaldo', () => {
+    const txt = construir({
+      plataforma: WIN,
+      audio: { ok: true, concluyente: true, sampleRate: 44100 },
+      backend: { perfil: PERFIL_BASE, admision: ADMISION_OK },
+      entradas: { total: 2, sinEtiqueta: 0, mezclaEstereo: null, etiquetas: ['Micrófono'] },
+    })
+    assert.match(txt, /no hay Mezcla estéreo de respaldo/)
+  })
+})
+
+describe('variante de CPU que eligió whisper', () => {
+  test('avisa si cayó a una variante para CPUs antiguas', () => {
+    // Si el empaquetado dispersa las DLL, el despacho cae a sse42 y el
+    // rendimiento se hunde SIN dar ningún error. Este aviso es el health check.
+    const txt = construir({
+      plataforma: WIN, audio: null, entradas: null,
+      backend: { perfil: PERFIL_BASE, admision: ADMISION_OK,
+                 infoSistema: { nivel: 'solo SSE — variante sse42', sospechoso: true } },
+    })
+    assert.match(txt, /AVISO/)
+    assert.match(txt, /ggml-cpu/)
+  })
+
+  test('sin aviso cuando la variante es la correcta', () => {
+    const txt = construir({
+      plataforma: WIN, audio: null, entradas: null,
+      backend: { perfil: PERFIL_BASE, admision: ADMISION_OK,
+                 infoSistema: { nivel: 'AVX2 (haswell o superior)', sospechoso: false } },
+    })
+    assert.match(txt, /AVX2/)
+    assert.doesNotMatch(txt, /variante para CPUs antiguas/)
+  })
+})
+
 describe('la sección de lo que el informe no dice', () => {
   test('en macOS advierte de las tres cosas que quedan sin saber', () => {
     const txt = construir({
