@@ -134,7 +134,10 @@ class Pipeline extends EventEmitter {
     this.maxFraseMs = opts.maxFraseMs ?? MAX_FRASE_MS
     this.watchdogMs = opts.watchdogMs ?? WATCHDOG_MS
 
-    // Glosario del contexto de proyecto: mejora siglas y nombres propios.
+    // Glosario del contexto de proyecto: mejora notablemente la transcripción
+    // de siglas y nombres propios. Se pasa ya recortado al presupuesto de
+    // whisper por contexto.promptParaWhisper(), porque pasarse hace que whisper
+    // lo trunque EN SILENCIO.
     this.prompt = opts.prompt || ''
 
     this._buffer = []          // muestras de la frase en curso

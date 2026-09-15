@@ -49,7 +49,9 @@ async function init () {
       ended_at    TEXT,
       duration_s  INTEGER,
       ai_model    TEXT,
-      line_count  INTEGER DEFAULT 0
+      line_count  INTEGER DEFAULT 0,
+      profile_id  INTEGER,
+      context_id  INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS transcripts (
@@ -73,9 +75,37 @@ async function init () {
       responses   TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS profiles (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre     TEXT    NOT NULL,
+      edad       INTEGER,
+      ocupacion  TEXT,
+      contexto   TEXT,
+      activo     INTEGER NOT NULL DEFAULT 0,
+      creado_en  TEXT    NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS project_contexts (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre         TEXT    NOT NULL,
+      tipo_reunion   TEXT,
+      tipo_proyecto  TEXT,
+      contexto       TEXT,
+      glosario       TEXT,
+      activo         INTEGER NOT NULL DEFAULT 0,
+      actualizado_en TEXT    NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_transcripts_session ON transcripts(session_id);
     CREATE INDEX IF NOT EXISTS idx_questions_session   ON questions(session_id);
   `)
+
+  // Migración de bases anteriores: ALTER TABLE falla si la columna ya está,
+  // así que se intenta y se ignora el error. Es más simple que consultar el
+  // esquema y no tiene efecto si ya está migrada.
+  for (const col of ['profile_id INTEGER', 'context_id INTEGER']) {
+    try { db.run(`ALTER TABLE sessions ADD COLUMN ${col}`) } catch { /* ya existe */ }
+  }
 
   persist()
   console.log('[db] SQLite ready at', DB_PATH)
@@ -156,10 +186,10 @@ function get (sql, params = []) {
 // ── Public API ────────────────────────────────────────────────────────────
 
 /** Create a new session row. Returns the new session id. */
-function startSession (aiModel) {
+function startSession (aiModel, { profileId = null, contextId = null } = {}) {
   const id = run(
-    'INSERT INTO sessions (started_at, ai_model) VALUES (?, ?)',
-    [new Date().toISOString(), aiModel]
+    'INSERT INTO sessions (started_at, ai_model, profile_id, context_id) VALUES (?, ?, ?, ?)',
+    [new Date().toISOString(), aiModel, profileId, contextId]
   )
   persist()
   return id
@@ -249,6 +279,11 @@ module.exports = {
   persist,
   persistAgrupado,
   vaciar,
+  // Acceso de bajo nivel, para los módulos que gestionan sus propias tablas
+  // (contexto.js). No es para uso general: las consultas viven con su dominio.
+  run,
+  all,
+  get,
   startSession,
   endSession,
   saveTranscript,
