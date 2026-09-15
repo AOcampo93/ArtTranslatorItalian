@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'">
+<title>Diagnóstico — Traductor Italiano</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0B0F14; --sup: #11161D; --sup2: #161C25; --linea: #222A35;
+    --tx: #E6EDF3; --tx2: #8B949E; --tx3: #565F6B;
+    --ok: #00D4AA; --mal: #F85149; --aviso: #E3B341;
+    --sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    --mono: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  }
+  body { background: var(--bg); color: var(--tx); font-family: var(--sans); font-size: 14px; line-height: 1.55; }
+  .env { max-width: 620px; margin: 0 auto; padding: 32px 26px 48px; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  .sub { color: var(--tx2); font-size: 13px; margin-top: 6px; }
+  .nota { background: var(--sup); border: 1px solid var(--linea); border-left: 3px solid var(--aviso);
+          padding: 12px 14px; margin-top: 18px; font-size: 12.5px; color: var(--tx2); }
+  .nota b { color: var(--tx); font-weight: 600; }
+  button { font-family: var(--sans); font-size: 14px; font-weight: 600; padding: 11px 22px;
+           border: none; border-radius: 6px; background: var(--ok); color: #05231D; cursor: pointer; }
+  button:disabled { background: var(--sup2); color: var(--tx3); cursor: default; }
+  button.sec { background: transparent; border: 1px solid var(--linea); color: var(--tx2); font-weight: 500; }
+  .fila { display: flex; gap: 10px; align-items: center; margin-top: 22px; flex-wrap: wrap; }
+  .paso { display: grid; grid-template-columns: 18px 1fr auto; gap: 12px; align-items: baseline;
+          padding: 12px 0; border-top: 1px solid var(--linea); }
+  .paso:first-of-type { border-top: none; }
+  .bolita { width: 9px; height: 9px; border-radius: 50%; background: var(--sup2); margin-top: 6px; }
+  .bolita.ok { background: var(--ok); } .bolita.mal { background: var(--mal); }
+  .bolita.aviso { background: var(--aviso); }
+  .bolita.curso { background: var(--tx3); animation: lat 1s infinite; }
+  @keyframes lat { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+  .pt { font-weight: 500; } .pd { color: var(--tx2); font-size: 12.5px; display: block; margin-top: 2px; }
+  .pv { font-family: var(--mono); font-size: 11.5px; color: var(--tx2); white-space: nowrap; }
+  #veredicto { margin-top: 24px; padding: 18px 20px; border-radius: 8px; display: none; }
+  #veredicto.ok { background: rgba(0,212,170,.1); border: 1px solid var(--ok); }
+  #veredicto.mal { background: rgba(248,81,73,.1); border: 1px solid var(--mal); }
+  #veredicto h2 { font-size: 16px; margin-bottom: 6px; }
+  #veredicto.ok h2 { color: var(--ok); } #veredicto.mal h2 { color: var(--mal); }
+  pre { background: var(--sup); border: 1px solid var(--linea); border-radius: 6px; padding: 14px;
+        font-family: var(--mono); font-size: 11px; color: var(--tx2); overflow-x: auto;
+        margin-top: 18px; white-space: pre-wrap; display: none; max-height: 260px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<div class="env">
+  <h1>Diagnóstico del equipo</h1>
+  <p class="sub">Comprueba que tu computadora puede con el traductor. No graba ni envía nada:
+     solo mide y escribe un archivo que tú decides si compartir.</p>
+
+  <div class="nota" id="avisoPlataforma" style="display:none"></div>
+
+  <div class="fila">
+    <button id="btn">Comenzar</button>
+    <button id="btnGuardar" class="sec" style="display:none">Guardar informe</button>
+  </div>
+
+  <div id="pasos" style="margin-top:24px"></div>
+  <div id="veredicto"></div>
+  <pre id="detalle"></pre>
+</div>
+
+<script>
+'use strict'
+
+const PASOS = [
+  { id: 'hw',    t: 'Tu equipo',      d: 'Procesador, memoria y tarjeta gráfica' },
+  { id: 'audio', t: 'Audio',          d: 'Comprueba si puedo oír el sonido de tu computadora' },
+  { id: 'trans', t: 'Transcripción',  d: 'Entender italiano hablado' },
+  { id: 'trad',  t: 'Traducción',     d: 'Pasar el italiano a español' },
+]
+
+const el = (id) => document.getElementById(id)
+let informe = null
+
+function pintarPasos () {
+  el('pasos').innerHTML = PASOS.map(p => `
+    <div class="paso" id="paso-${p.id}">
+      <span class="bolita" id="bol-${p.id}"></span>
+      <span><span class="pt">${p.t}</span><span class="pd">${p.d}</span></span>
+      <span class="pv" id="val-${p.id}">—</span>
+    </div>`).join('')
+}
+
+function marcar (id, estado, valor) {
+  el('bol-' + id).className = 'bolita ' + estado
+  if (valor !== undefined) el('val-' + id).textContent = valor
+}
+
+/**
+ * Comprobación de audio: la app reproduce un tono y trata de oírse a sí misma
+ * por el loopback.
+ *
+ * Es el test que convierte el mayor riesgo del proyecto en algo que se descubre
+ * ANTES de la reunión. Y no le pide nada al usuario: si oye su propio tono, el
+ * loopback funciona.
+ */
+async function probarAudio (soportado) {
+  if (!soportado) {
+    return { ok: false, concluyente: false,
+             motivo: 'la captura del sonido del sistema solo existe en Windows' }
+  }
+
+  let flujo = null, ctx = null, osc = null
+  try {
+    flujo = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+    if (!flujo.getAudioTracks().length) {
+      return { ok: false, concluyente: true, motivo: 'no llegó ninguna pista de audio' }
+    }
+
+    // Nunca asumir 48 kHz: si el dispositivo va a 44,1 o 96 y el código asume
+    // otra cosa, el remuestreo entrega audio a velocidad equivocada, todo
+    // "funciona" y la calidad se desploma sin que nadie se entere.  (§0.11)
+    ctx = new AudioContext()
+    const sampleRate = ctx.sampleRate
+
+    const fuente = ctx.createMediaStreamSource(flujo)
+    const analizador = ctx.createAnalyser()
+    analizador.fftSize = 2048
+    fuente.connect(analizador)
+    const datos = new Float32Array(analizador.fftSize)
+
+    const medirRms = () => {
+      analizador.getFloatTimeDomainData(datos)
+      let s = 0
+      for (let i = 0; i < datos.length; i++) s += datos[i] * datos[i]
+      return Math.sqrt(s / datos.length)
+    }
+
+    // Nivel de fondo antes de sonar nada.
+    await new Promise(r => setTimeout(r, 400))
+    let fondo = 0
+    for (let i = 0; i < 8; i++) { fondo = Math.max(fondo, medirRms()); await new Promise(r => setTimeout(r, 50)) }
+
+    // Tono de prueba, suave y corto.
+    osc = ctx.createOscillator()
+    const vol = ctx.createGain()
+    osc.frequency.value = 440
+    vol.gain.value = 0.25
+    osc.connect(vol); vol.connect(ctx.destination)
+    osc.start()
+
+    await new Promise(r => setTimeout(r, 300))
+    let conTono = 0
+    for (let i = 0; i < 14; i++) { conTono = Math.max(conTono, medirRms()); await new Promise(r => setTimeout(r, 50)) }
+    osc.stop()
+
+    // Si el tono se oye claramente por encima del fondo, el loopback capta.
+    const seOye = conTono > Math.max(fondo * 3, 0.01)
+    return {
+      ok: seOye, concluyente: true, sampleRate,
+      fondo: +fondo.toFixed(4), conTono: +conTono.toFixed(4),
+      motivo: seOye ? null : 'reproduje un tono y no lo capté',
+    }
+  } catch (err) {
+    return { ok: false, concluyente: true, motivo: err.message }
+  } finally {
+    try { osc && osc.disconnect() } catch {}
+    try { ctx && await ctx.close() } catch {}
+    try { flujo && flujo.getTracks().forEach(t => t.stop()) } catch {}
+  }
+}
+
+async function ejecutar () {
+  el('btn').disabled = true
+  el('btn').textContent = 'Midiendo…'
+  const plat = await window.diag.plataforma()
+
+  marcar('audio', 'curso')
+  const audio = await probarAudio(plat.loopbackSoportado)
+  marcar('audio',
+    !audio.concluyente ? 'aviso' : audio.ok ? 'ok' : 'mal',
+    !audio.concluyente ? 'no aplica' : audio.ok ? `${audio.sampleRate} Hz` : 'falló')
+
+  marcar('hw', 'curso'); marcar('trans', 'curso'); marcar('trad', 'curso')
+  const backend = await window.diag.backend()
+
+  const p = backend.perfil
+  marcar('hw', 'ok', `${p.cpu.nucleosFisicos || p.cpu.nucleosLogicos} núcleos · ${p.memoria.totalGB} GB`)
+
+  if (backend.admision?.ok) {
+    marcar('trans', 'ok', `${backend.admision.medidas.whisper.p50} ms`)
+    marcar('trad', 'ok', `${backend.admision.medidas.marian.p50} ms`)
+  } else {
+    marcar('trans', 'mal', 'no medido')
+    marcar('trad', 'mal', 'no medido')
+  }
+
+  // El informe lo construye el proceso principal con el módulo probado.
+  const r = await window.diag.informe({ plataforma: plat, audio, backend })
+  informe = r.texto
+  const bien = r.bien
+
+  const v = el('veredicto')
+  v.className = bien ? 'ok' : 'mal'
+  v.style.display = 'block'
+  v.innerHTML = bien
+    ? `<h2>Listo</h2><p>${backend.admision.consecuencia}</p>`
+    : `<h2>Hay algo que revisar</h2><p>Guarda el informe y envíalo: ahí está el detalle.</p>`
+
+  el('detalle').textContent = informe
+  el('detalle').style.display = 'block'
+  el('btnGuardar').style.display = 'inline-block'
+  el('btn').textContent = 'Repetir'
+  el('btn').disabled = false
+}
+
+window.addEventListener('DOMContentLoaded', async () => {
+  pintarPasos()
+  const plat = await window.diag.plataforma()
+  if (!plat.loopbackSoportado) {
+    const n = el('avisoPlataforma')
+    n.style.display = 'block'
+    n.innerHTML = '<b>Estás en ' + plat.plataforma + '.</b> La captura del sonido del sistema '
+      + 'solo funciona en Windows, así que esa comprobación no dará un resultado válido aquí. '
+      + 'El resto sí se mide.'
+  }
+  el('btn').addEventListener('click', ejecutar)
+  el('btnGuardar').addEventListener('click', async () => {
+    const r = await window.diag.guardar(informe)
+    if (r.ok) {
+      el('btnGuardar').textContent = 'Guardado ✓'
+      window.diag.abrirCarpeta(r.ruta)
+    } else {
+      el('btnGuardar').textContent = 'No se pudo guardar'
+    }
+  })
+})
+</script>
+</body>
+</html>
