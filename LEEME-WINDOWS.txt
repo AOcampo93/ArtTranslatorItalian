@@ -28,13 +28,10 @@ que luego no se cumple.
 SI NO ARRANCA
 -------------
 
-Lo más probable es que falte el runtime de Microsoft, que muchos programas
-necesitan y no viene con Windows.
+No hace falta instalar nada aparte: la aplicación ya lleva dentro todo lo
+que necesita, incluido el runtime de Microsoft.
 
-Ejecuta "vc_redist.x64.exe", que está en esta misma carpeta, acepta la
-instalación, y vuelve a intentarlo.
-
-Si aun así no abre, ejecútala desde la terminal para ver el error.
+Si no abre, ejecútala desde la terminal para ver el error.
 
 En PowerShell (la ventana azul), hace falta el símbolo & delante, o solo
 imprimirá el nombre sin ejecutar nada:

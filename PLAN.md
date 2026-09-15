@@ -33,7 +33,7 @@ se discute y se cambia el documento; no se salta.
 | 2 | `wsServer` y `whisper-server` escuchan en **`127.0.0.1` explícito** y puerto efímero | El Firewall pregunta en el primer arranque, el usuario cancela, y **la app queda rota para siempre sin mensaje** |
 | 3 | **Autoguardado** append-only a `.jsonl` desde la primera frase confirmada | Un crash en el minuto 58 **borra la reunión entera** |
 | 4 | El modelo de Whisper va **embebido en el instalador**, nunca se descarga al arrancar | Barra de descarga que puede fallar por red y deja la app muda sin explicación |
-| 5 | Embarcar `VCRUNTIME140`, `VCRUNTIME140_1`, `MSVCP140` y **`VCOMP140`** | En un Windows limpio sin VC++ Redistributable, **el binario no arranca** |
+| 5 | Embarcar `VCRUNTIME140`, `VCRUNTIME140_1`, `MSVCP140` y **`VCOMP140`** junto al binario, nunca como instalador aparte | En un Windows limpio **el binario no arranca** (`0xC0000135`, visto en la VM). Incluir el redistribuible no basta: nadie lo ejecuta `[verificado]` |
 | 6 | Las nueve DLL `ggml-cpu-*` junto a `ggml-base.dll`, **y loguear cuál se cargó** | El despacho cae a la peor variante **sin dar error** |
 | 7 | Anclar el tag **`b5130`** con su hash, nunca "latest release" | El release `v1.9.4` **no tiene assets**: el instalador no descarga nada |
 | 8 | Job Object con `KILL_ON_JOB_CLOSE` para los procesos hijo | `whisper-server` huérfano comiendo 700 MB y ocupando el puerto |
@@ -407,12 +407,27 @@ hay que preguntar nada al usuario.
 
 ### Cuatro cosas que lo rompen, y ninguna es el despacho
 
-1. **El zip no trae el runtime de MSVC.** Sus DLL importan `VCRUNTIME140.dll`,
-   `VCRUNTIME140_1.dll`, `MSVCP140.dll` y **`VCOMP140.DLL`** (OpenMP), y ninguna viene
-   dentro `[verificado]`. En un Windows 11 limpio sin el VC++ Redistributable 2015-2022
-   x64, el binario **no arranca**. `VCOMP140` es la que siempre se olvida porque no forma
-   parte de Windows. El instalador encadena el redist o embarca las cuatro DLL. **Esto es
-   riesgo directo de la prioridad nº 1.**
+1. ~~**El zip no trae el runtime de MSVC.**~~ **RESUELTO** `[verificado]`. Sus DLL
+   importan `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, `MSVCP140.dll` y **`VCOMP140.DLL`**
+   (OpenMP), y ninguna viene dentro. En un Windows limpio el binario **no arranca**:
+   se comprobó en la máquina virtual, que dio `0xC0000135` (STATUS_DLL_NOT_FOUND).
+
+   Se intentó primero incluir `vc_redist.x64.exe` en el paquete y pedir al cliente que
+   lo ejecutara. **Falló, y la lista de verificación salió entera en verde**, porque
+   comprobaba que el instalador estuviera *incluido* — e incluir un instalador no
+   instala nada.
+
+   Ahora las cuatro DLL viajan junto a `whisper-server.exe` (*despliegue local*,
+   documentado por Microsoft): cero pasos para el cliente, sin permisos de
+   administrador, funciona igual en el zip portable que en el instalador, y 925 KB en
+   lugar de 25 MB. Las extrae del redistribuible oficial
+   `herramientas/extraer-runtime-msvc.py`, verificando arquitectura, firma Authenticode,
+   `CompanyName` y `OriginalFilename` de cada una.
+
+   La lección no es "acordarse de ejecutar el redist": es que la comprobación medía lo
+   fácil de medir en vez de lo que importaba. La sustituye
+   `herramientas/dependencias-windows.js`, que lee la tabla de importaciones de cada PE
+   y la compara con lo que hay al lado. Corre en `npm test` y en `verificar-paquete.sh`.
 2. **Hay que anclar el tag exacto y su hash.** El release `v1.9.4` **no tiene assets**, y
    la regla no es estable: `v1.9.3` tampoco, pero `v1.9.2` sí. El flag `prerelease`
    tampoco filtra. Un instalador apuntado a "latest release" no descarga nada
@@ -945,7 +960,7 @@ Reordenadas por la prioridad nº 3: primero lo que da más resultado por menos t
 | 0 | **Andamiaje** — copiar base, quitar Python y Swift, **subir Electron 28 → 43.4.0+** | Arranca en limpio sobre Electron moderno | medio |
 | 1 | **Vía rápida** — Marian ONNX en proceso + `whisper-server -l it` con VAD y `-ac 512` | Traduce IT→ES; la mayor ganancia de latencia por unidad de trabajo | bajo |
 | 2 | **Audio en Windows** — ruta A (`loopback`) + AudioWorklet 48→16 kHz + vigilante de `devicechange` + medidor de nivel, **la ruta B completa con su selector**, y el **auto-test de tono** de la comprobación previa | **Un botón, cero configuración** — y el fallo descubierto antes de la reunión, no durante | **el más alto** |
-| 3 | **Empaquetado** — NSIS, VC++ redist encadenado, modelo embebido, tag `b5130` anclado, health check del backend | `.exe` que instala y arranca en un Windows limpio | medio |
+| 3 | **Empaquetado** — NSIS, runtime de MSVC al lado del binario (hecho), modelo embebido, tag `b5130` anclado, health check del backend | `.exe` que instala y arranca en un Windows limpio | medio |
 | 4 | **Perfil y contexto** — tablas, CRUD, selector en barra, `buildContextBlock()`, glosario a Whisper | Las dos secciones que pide el cliente | bajo |
 | 5 | **Preguntas y respuestas** — detector italiano de tres capas, respuestas en italiano bajo demanda | Panel funcionando con el contexto cargado | medio |
 | 6 | **UI y flujo** — los dos modos, comprobación previa con sus cuatro semáforos, burbujas del modo en vivo, medidor y contador de coste | El flujo completo de una reunión, de preparar a guardar | medio |
@@ -966,7 +981,7 @@ no hacer falta.
 |---|---|---|
 | **No tenemos su entorno**: ni Windows nativo, ni GPU NVIDIA, ni un driver con Mezcla estéreo | **alto** | La build de diagnóstico (§14) mide en sus equipos antes de construir. La ruta GPU sale de la v1 por no poder ejecutarla |
 | El `loopback` no capta la app de videollamada concreta del cliente, y **falla en silencio** | ~~alto~~ **medio** — confirmado en **dos** máquinas Windows distintas, VM y portátil real `[medido]`. Queda por ver con una videollamada real | La ruta B con selector de origen se construye en la fase 2, no se deja como contingencia (§6). El medidor de nivel detecta el fallo a los 5 s y la app ofrece B con un clic; la elección se recuerda |
-| Falta el VC++ Redistributable y el binario no arranca | **alto** | Encadenar el redist en el instalador; embarcar las 4 DLL como respaldo |
+| ~~Falta el VC++ Redistributable y el binario no arranca~~ **cerrado** | — | Las 4 DLL viajan junto al binario. Lo vigila una prueba que lee la tabla de importaciones, no una que mira si un archivo está |
 | El salto de Electron 28 → 43 rompe cosas del original | medio | Es la fase 0 a propósito: que falle al principio y no al final |
 | El despacho de DLL falla en silencio por el empaquetado | medio | Loguear la variante cargada al arrancar como health check |
 | Auriculares a media reunión dejan la captura muda | medio | Vigilante de `devicechange` que reinicia la captura, medidor de nivel visible, y caída a B1 si el reinicio no recupera señal |

@@ -54,10 +54,6 @@
         "to": "models/ggml-small.bin"
       },
       {
-        "from": "../vendor/vc_redist.x64.exe",
-        "to": "vc_redist.x64.exe"
-      },
-      {
         "from": "../LEEME-WINDOWS.txt",
         "to": "LEEME.txt"
       }

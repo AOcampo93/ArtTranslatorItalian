@@ -21,8 +21,14 @@ chk "sin binarios de macOS sobrantes" \
    '[ ! -d "'"$D"'/resources/node-backend/node_modules/@img/sharp-darwin-arm64" ]'
 chk "modelo multilingüe embebido, no descargado al arrancar" \
    '[ $(stat -f%z "'"$D"'/resources/models/ggml-small.bin" 2>/dev/null || stat -c%s "'"$D"'/resources/models/ggml-small.bin") -gt 400000000 ]'
-chk "runtime de MSVC incluido (el zip de whisper.cpp NO lo trae)" \
-   '[ -f "'"$D"'/resources/vc_redist.x64.exe" ]'
+# Esta es la comprobación que importa, y sustituye a una que daba verde en falso:
+# la anterior miraba que `vc_redist.x64.exe` estuviera INCLUIDO en el paquete,
+# pero incluir un instalador no instala nada. Nadie lo ejecutó y whisper-server
+# murió con 0xC0000135 en la máquina virtual, con la lista entera en verde.
+# Ahora se lee la tabla de importaciones de cada PE y se compara con lo que hay
+# al lado, que es la pregunta de verdad.
+chk "ninguna DLL sin resolver (lee la tabla de importaciones de cada binario)" \
+   'node herramientas/dependencias-windows.js "'"$D"'/resources/bin"'
 chk "whisper-server.exe" '[ -f "'"$D"'/resources/bin/whisper-server.exe" ]'
 chk "audio italiano de prueba" \
    '[ -f "'"$D"'/resources/node-backend/test/fixtures/italiano.wav" ]'
