@@ -29,7 +29,7 @@ se discute y se cambia el documento; no se salta.
 
 | | Regla | Si no se hace |
 |---|---|---|
-| 1 | `win.setContentProtection(true)` en la ventana del modo en vivo | Al compartir pantalla en Teams, **la sala entera lee las respuestas sugeridas del cliente** |
+| 1 | `win.setContentProtection(true)` en la ventana del modo en vivo | Al compartir pantalla en Teams, **la sala entera lee las respuestas sugeridas del cliente**. Se traduce a `WDA_EXCLUDEFROMCAPTURE`, que necesita Windows 10 build 19041+; por debajo la ventana sale negra en vez de invisible — protege igual, se ve distinto |
 | 2 | `wsServer` y `whisper-server` escuchan en **`127.0.0.1` explícito** y puerto efímero | El Firewall pregunta en el primer arranque, el usuario cancela, y **la app queda rota para siempre sin mensaje** |
 | 3 | **Autoguardado** append-only a `.jsonl` desde la primera frase confirmada | Un crash en el minuto 58 **borra la reunión entera** |
 | 4 | El modelo de Whisper va **embebido en el instalador**, nunca se descarga al arrancar | Barra de descarga que puede fallar por red y deja la app muda sin explicación |
@@ -98,7 +98,7 @@ para ellos. Es más barato de hacer (prioridad nº 3) y más predecible de sopor
 
 | | Requisito | Por qué ese umbral |
 |---|---|---|
-| SO | Windows 11 (x64) | `loopback` es solo-Windows; en 10 debería ir pero no se soporta |
+| SO | Windows 10 o superior (x64) | Electron soporta *"Windows 10 and up"* `[verificado]`. Se declara Windows 11 porque es lo que tiene el cliente, pero Windows 10 sirve para desarrollar y probar |
 | CPU | 8 núcleos físicos con **AVX2** | AVX2 selecciona la DLL `haswell` o mejor; por debajo cae a `sse42` y no llega a tiempo real `[verificado]` |
 | RAM | 16 GB | `small` ocupa ~600-700 MB, pero Win11 + Teams en llamada + navegador ya consumen 8-9 GB |
 | Disco | 2 GB libres | Modelo embebido en el instalador |
