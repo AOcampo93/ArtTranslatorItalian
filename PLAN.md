@@ -227,7 +227,11 @@ audio del sistema  ──loopback──►  48→16 kHz mono Float32
                refina término · detecta pregunta
 ```
 
-Marian: **p50 131 ms, rango 120-139 ms, 101 MB quantizado, BLEU 61.2 it→es** `[medido]`.
+Marian: **p50 67 ms, rango 56-139 ms, 101 MB quantizado, BLEU 61.2 it→es** `[medido]`.
+El rango tiene dos extremos por un motivo: 120-139 ms fue la primera medición con
+carga en frío y frases largas; 56-74 ms es lo que da ya integrado, con el modelo
+caliente y reutilizado entre llamadas — que es como funcionará en producción.
+La latencia **crece con la longitud de la frase**, no es constante.
 Sin internet la app sigue traduciendo; se pierden el refinado y las respuestas, no la
 función principal.
 

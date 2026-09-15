@@ -1,0 +1,18 @@
+{
+  "name": "art-translator-italian-backend",
+  "version": "0.1.0",
+  "description": "ArtTranslator Italian — orquestación de IA, traducción local IT→ES y servidor WebSocket",
+  "main": "src/wsServer.js",
+  "scripts": {
+    "start": "node src/wsServer.js",
+    "dev": "node --watch src/wsServer.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "@huggingface/transformers": "^3.3.0",
+    "dotenv": "^16.4.5",
+    "sql.js": "^1.12.0",
+    "ws": "^8.17.0"
+  }
+}
