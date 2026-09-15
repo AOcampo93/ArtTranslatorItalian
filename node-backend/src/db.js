@@ -81,11 +81,52 @@ async function init () {
   console.log('[db] SQLite ready at', DB_PATH)
 }
 
-/** Write the in-memory DB to disk */
+/**
+ * Escribe la base a disco de forma ATÓMICA: primero a un temporal y luego
+ * `rename`, que el sistema garantiza indivisible.
+ *
+ * Por qué importa: la versión anterior escribía directamente sobre el archivo
+ * bueno. Si el proceso moría a media escritura, no se perdía la sesión — se
+ * perdían **los perfiles y los contextos de proyecto**, que es justo lo
+ * laborioso de volver a escribir.
+ */
 function persist () {
   if (!db) return
   const data = db.export()
-  fs.writeFileSync(DB_PATH, Buffer.from(data))
+  const tmp = DB_PATH + '.tmp'
+  fs.writeFileSync(tmp, Buffer.from(data))
+  fs.renameSync(tmp, DB_PATH)   // atómico: o está el viejo o está el nuevo
+  _pendiente = false
+}
+
+// ── Agrupación de escrituras ────────────────────────────────────────────────
+// La versión heredada llamaba a persist() en CADA inserción, y persist()
+// serializa la base COMPLETA. Con 3.936 transcripciones en 1 MB, cada línea
+// nueva reescribía 1 MB entero, de forma síncrona y en el mismo hilo del
+// pipeline. Una reunión de 200 frases escribía ~200 MB para guardar 200 filas.
+//
+// Ahora las transcripciones no pasan por aquí (van al .jsonl de autosave.js) y
+// lo que sí pasa —sesiones, perfiles, contextos— se agrupa.
+let _pendiente = false
+let _temporizador = null
+const RETRASO_MS = 400
+
+/** Marca que hay cambios y programa una escritura. */
+function persistAgrupado () {
+  if (!db) return
+  _pendiente = true
+  if (_temporizador) return
+  _temporizador = setTimeout(() => {
+    _temporizador = null
+    if (_pendiente) persist()
+  }, RETRASO_MS)
+  _temporizador.unref?.()
+}
+
+/** Fuerza la escritura ya, si queda algo pendiente. Para el cierre limpio. */
+function vaciar () {
+  if (_temporizador) { clearTimeout(_temporizador); _temporizador = null }
+  if (_pendiente) persist()
 }
 
 /** Run a statement and return lastInsertRowid */
@@ -130,7 +171,7 @@ function endSession (sessionId, { durationSeconds, lineCount }) {
     'UPDATE sessions SET ended_at = ?, duration_s = ?, line_count = ? WHERE id = ?',
     [new Date().toISOString(), durationSeconds, lineCount, sessionId]
   )
-  persist()
+  persistAgrupado()
 }
 
 /**
@@ -138,12 +179,22 @@ function endSession (sessionId, { durationSeconds, lineCount }) {
  * @param {number} sessionId
  * @param {{ en, es, intent, is_question, pos_tags }} chunk
  */
-function saveTranscript (sessionId, { en, es, intent, is_question, pos_tags }) {
-  run(
-    'INSERT INTO transcripts (session_id, created_at, en, es, intent, is_question, pos_tags) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [sessionId, new Date().toISOString(), en, es, intent || '', is_question ? 1 : 0, JSON.stringify(pos_tags || [])]
-  )
-  persist()
+/**
+ * OBSOLETO. Las transcripciones ya no van a sql.js.
+ *
+ * Guardarlas aquí era el defecto heredado: cada frase reescribía la base
+ * completa. Ahora van al `.jsonl` de `autosave.js`, que escribe en modo append
+ * y no puede corromper lo anterior.
+ *
+ * Se mantiene la función para no romper a quien la llame, pero no escribe a
+ * disco: solo avisa una vez.
+ */
+let _avisadoTranscript = false
+function saveTranscript () {
+  if (!_avisadoTranscript) {
+    console.warn('[db] saveTranscript está obsoleto: las transcripciones van al autoguardado (.jsonl)')
+    _avisadoTranscript = true
+  }
 }
 
 /**
@@ -155,14 +206,14 @@ function saveQuestion (sessionId, { question_en, question_es, context }) {
     'INSERT INTO questions (session_id, created_at, question_en, question_es, context) VALUES (?, ?, ?, ?, ?)',
     [sessionId, new Date().toISOString(), question_en, question_es || '', JSON.stringify(context || [])]
   )
-  persist()
+  persistAgrupado()
   return id
 }
 
 /** Attach AI-generated responses to a saved question. */
 function updateQuestionResponses (questionId, responses) {
   run('UPDATE questions SET responses = ? WHERE id = ?', [JSON.stringify(responses), questionId])
-  persist()
+  persistAgrupado()
 }
 
 /** Load a full session with all its transcripts and questions. */
@@ -196,6 +247,8 @@ function recentSessions (limit = 20) {
 module.exports = {
   init,
   persist,
+  persistAgrupado,
+  vaciar,
   startSession,
   endSession,
   saveTranscript,
