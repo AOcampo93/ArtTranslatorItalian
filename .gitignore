@@ -1,0 +1,28 @@
+# Dependencias
+node_modules/
+
+# Compilados y empaquetado
+dist/
+build/
+out/
+*.exe
+
+# Modelos: pesan cientos de MB, no van a git
+*.bin
+*.onnx
+models/
+whisper-cpp/
+
+# Secretos
+.env
+.env.*
+!.env.example
+
+# Datos de sesión y transcripciones
+data/*.db
+*.sqlite
+*.jsonl
+
+# Sistema
+.DS_Store
+Thumbs.db
