@@ -30,6 +30,15 @@ chk "modelo multilingüe embebido, no descargado al arrancar" \
 chk "ninguna DLL sin resolver (lee la tabla de importaciones de cada binario)" \
    'node herramientas/dependencias-windows.js "'"$D"'/resources/bin"'
 chk "whisper-server.exe" '[ -f "'"$D"'/resources/bin/whisper-server.exe" ]'
+# El modelo de Marian viaja dentro de node_modules/.cache, que solo existe si
+# alguien tradujo algo en la máquina de compilación: `npm ci` en un clon limpio
+# NO lo trae. Sin esta comprobación, una máquina de compilación nueva produciría
+# un paquete sin modelo y la app intentaría descargarlo en casa del cliente —en
+# medio de una reunión, y sin explicar por qué no traduce.
+chk "modelo de Marian embebido (npm ci NO lo trae: hay que traducir una vez antes de empaquetar)" \
+   'M="'"$D"'/resources/node-backend/node_modules/@huggingface/transformers/.cache/Xenova/opus-mt-it-es/onnx";
+    [ -f "$M/encoder_model_quantized.onnx" ] && [ -f "$M/decoder_model_merged_quantized.onnx" ] &&
+    [ $(cat "$M/encoder_model_quantized.onnx" "$M/decoder_model_merged_quantized.onnx" | wc -c) -gt 50000000 ]'
 chk "audio italiano de prueba" \
    '[ -f "'"$D"'/resources/node-backend/test/fixtures/italiano.wav" ]'
 chk "instrucciones para el cliente" '[ -f "'"$D"'/resources/LEEME.txt" ]'

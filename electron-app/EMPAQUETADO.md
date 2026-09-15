@@ -57,6 +57,19 @@ Descarga el zip anclado de whisper.cpp, comprueba su tamaño, se queda con los 1
 archivos que se usan, extrae el runtime de MSVC y verifica que no falte ninguna
 DLL. Verificado: reconstruir desde cero da un resultado **idéntico byte a byte**.
 
+## El modelo de Marian no lo trae `npm ci`
+
+`@huggingface/transformers` guarda los `.onnx` de `Xenova/opus-mt-it-es` en
+`node_modules/.cache`, y esa carpeta **solo existe si alguien tradujo algo en
+esa máquina**. Un clon limpio con `npm ci` no la tiene: el modelo se descarga
+en el primer uso.
+
+Consecuencia: una máquina de compilación nueva produce un paquete **sin modelo
+de traducción**, y la app intentaría descargarlo en el equipo del cliente, en
+medio de una reunión, sin explicar por qué no traduce. Antes de empaquetar hay
+que traducir una vez (basta `npm test` en `node-backend`), y `verificar-paquete.sh`
+lo comprueba.
+
 ## Qué se podó
 
 El zip oficial de whisper.cpp trae **40 archivos**; se usan **13**. Fuera quedan
