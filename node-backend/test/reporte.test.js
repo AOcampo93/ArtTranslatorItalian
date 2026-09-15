@@ -221,3 +221,43 @@ describe('veredicto global', () => {
     }), false)
   })
 })
+
+describe('la sobresuscripción de hilos se ve en el informe', () => {
+  // Del informe del HP Pavilion: 4 núcleos físicos, 8 lógicos, y la heurística
+  // pedía 6 hilos. Ponía "4 núcleos · 6 hilos" en páginas distintas y estuvo a
+  // un dedo de pasar desapercibido.
+  const base = {
+    perfil: {
+      cpu: { modelo: 'Intel Core i5-10210U', nucleosFisicos: 4, nucleosLogicos: 8, hibrida: false },
+      memoria: { totalGB: 15.8 },
+      energia: { fuente: 'batería' },
+    },
+    admision: {
+      ok: true, veredicto: 'justo', consecuencia: 'unos 1,7 s por frase',
+      medidas: { whisper: { p50: 1983, p95: 2400 }, marian: { p50: 578, p95: 700 }, vecesTiempoReal: 1.2 },
+      condiciones: { hilosWhisper: 6 },
+    },
+  }
+
+  test('avisa cuando se piden más hilos que núcleos físicos', () => {
+    const t = construir({ backend: base })
+    assert.match(t, /AVISO: 6 hilos sobre 4 núcleos físicos/)
+    assert.match(t, /fallo nuestro/, 'debe dejar claro que no es culpa del equipo')
+  })
+
+  test('no avisa cuando los hilos caben', () => {
+    const cabe = { ...base, admision: { ...base.admision, condiciones: { hilosWhisper: 3 } } }
+    assert.doesNotMatch(construir({ backend: cabe }), /sobresuscripción|hilos sobre/)
+  })
+
+  test('distingue físicos de lógicos, que es lo que lo hacía invisible', () => {
+    assert.match(construir({ backend: base }), /4 núcleos físicos · 8 lógicos/)
+  })
+
+  test('sin dato de físicos lo dice, en vez de dar un número que engaña', () => {
+    const sin = { ...base, perfil: { ...base.perfil, cpu: { ...base.perfil.cpu, nucleosFisicos: null } } }
+    const t = construir({ backend: sin })
+    assert.match(t, /8 núcleos lógicos \(los físicos no se pudieron leer\)/)
+    assert.doesNotMatch(t, /hilos sobre/, 'sin el dato no se puede afirmar que sobren')
+  })
+})

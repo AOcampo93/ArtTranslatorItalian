@@ -36,8 +36,13 @@ function construir ({ plataforma, audio, backend, entradas }) {
   L.push('EQUIPO')
   if (p) {
     L.push(`  ${p.cpu.modelo}`)
-    const nucleos = p.cpu.nucleosFisicos || p.cpu.nucleosLogicos
-    L.push(`  ${nucleos} núcleos${p.cpu.hibrida ? ' (híbrida)' : ''} · ${p.memoria.totalGB} GB`)
+    // Se separan físicos de lógicos a propósito. En el informe del HP Pavilion
+    // ponía "4 núcleos · 6 hilos" y la sobresuscripción pasó a un dedo de
+    // colarse: con un solo número no hay forma de verla.
+    const nucleos = p.cpu.nucleosFisicos
+      ? `${p.cpu.nucleosFisicos} núcleos físicos · ${p.cpu.nucleosLogicos} lógicos`
+      : `${p.cpu.nucleosLogicos} núcleos lógicos (los físicos no se pudieron leer)`
+    L.push(`  ${nucleos}${p.cpu.hibrida ? ' · híbrida' : ''} · ${p.memoria.totalGB} GB`)
     if (p.cpu.hibrida) {
       // Se dice que no se sabe, en vez de dar un número inventado.
       L.push('  No se puede contar cuántos son rápidos: requiere un componente nativo')
@@ -95,6 +100,15 @@ function construir ({ plataforma, audio, backend, entradas }) {
     L.push(`  transcripción  p50 ${a.medidas.whisper.p50} ms · p95 ${a.medidas.whisper.p95} ms`)
     L.push(`  traducción     p50 ${a.medidas.marian.p50} ms · p95 ${a.medidas.marian.p95} ms`)
     L.push(`  ${a.medidas.vecesTiempoReal}× tiempo real · ${a.condiciones.hilosWhisper} hilos`)
+    // Pedir más hilos que núcleos físicos degrada hasta 2x: los hermanos
+    // compiten por la misma unidad de ejecución. Que lo diga el informe y no
+    // dependa de que alguien compare dos números en páginas distintas.
+    const fisicos = backend?.perfil?.cpu?.nucleosFisicos
+    if (fisicos > 0 && a.condiciones.hilosWhisper > fisicos) {
+      L.push(`  AVISO: ${a.condiciones.hilosWhisper} hilos sobre ${fisicos} núcleos físicos.`)
+      L.push('  Eso es sobresuscripción y degrada la transcripción. Es un fallo nuestro,')
+      L.push('  no del equipo: revisar Transcriber.hilosRecomendados()')
+    }
     if (backend.infoSistema) {
       L.push(`  Instrucciones de CPU: ${backend.infoSistema.nivel}`)
       if (backend.infoSistema.sospechoso) {
