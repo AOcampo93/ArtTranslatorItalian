@@ -226,7 +226,11 @@ function frase (veredicto, ms) {
 function accion (veredicto) {
   if (veredicto === 'sobrado') return null
   if (veredicto === 'justo') return 'Cierra el navegador antes de reuniones largas.'
-  return 'Se usará transcripción en la nube, con un coste aproximado de 0,15 USD por hora.'
+  // El precio se nombra con su proveedor: es lo que permite comprobarlo, y
+  // AssemblyAI factura por tiempo de conexión abierta, no por audio enviado,
+  // así que una hora de reunión es una hora facturada. (PLAN.md §16.1)
+  return 'Se usará transcripción en la nube, unos 0,15 USD por hora de reunión '
+       + '(AssemblyAI; se factura el tiempo conectado, no solo cuando se habla).'
 }
 
 /** Informe en texto plano, para que el cliente lo devuelva por correo. */

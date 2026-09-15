@@ -267,7 +267,7 @@ segundo después.
 |---|---|---|
 | **A — Local** (por defecto) | whisper local + Marian local; LLM solo para preguntas y respuestas | **0,008–0,137 $** `[estimado]` |
 | **B — Refinado** (opt-in) | Lo anterior + refinar cada frase con LLM | 0,350 $ con Haiku |
-| **C — Nube** (escalado) | STT en la nube + **Marian sigue local** | +0,15 $ |
+| **C — Nube** (escalado) | STT en la nube + **Marian sigue local** | +0,15 $ con AssemblyAI streaming `[verificado]`, y factura por **socket abierto**, no por audio enviado (§16.1) |
 
 Los tres costes son `[estimado]`, con la aritmética a la vista y no verificados con
 `count_tokens` sobre italiano y español reales. El del nivel A se calculó además con **90
