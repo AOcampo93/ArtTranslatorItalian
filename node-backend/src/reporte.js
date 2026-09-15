@@ -48,7 +48,23 @@ function construir ({ plataforma, audio, backend, entradas }) {
       L.push('  No se puede contar cuántos son rápidos: requiere un componente nativo')
     }
     if (p.gpu?.nombre) L.push(`  GPU: ${p.gpu.nombre}${p.gpu.vram ? ' · ' + p.gpu.vram : ''}`)
-    L.push(`  Energía: ${p.energia?.fuente || 'desconocida'}`)
+
+    // La energía se dice CON su motivo cuando no se sabe. Antes una consulta
+    // expirada se informaba como "corriente", y eso invalida en silencio el
+    // veredicto de rendimiento: a batería Windows recorta la frecuencia y el
+    // mismo equipo puede tardar el doble.
+    const e = p.energia || {}
+    L.push(e.fuente === 'desconocida'
+      ? `  Energía: NO SE PUDO LEER (${e.motivo || 'sin motivo'})`
+      : `  Energía: ${e.fuente}${e.nota ? ' — ' + e.nota : ''}`)
+
+    // Y lo que no se pudo leer, con la causa, porque cada causa se arregla
+    // distinto: instalar algo, pedir permiso a sistemas, o dar más plazo.
+    const fallos = Object.entries(p.lecturas || {})
+      .filter(([, v]) => v !== 'ok' && v !== 'no-aplica')
+    if (fallos.length) {
+      L.push(`  Consultas al sistema que fallaron: ${fallos.map(([k, v]) => `${k} (${v})`).join(', ')}`)
+    }
   } else {
     L.push('  NO MEDIDO')
   }
@@ -125,6 +141,21 @@ function construir ({ plataforma, audio, backend, entradas }) {
 
   // ── Qué falta por saber ─────────────────────────────────────────────────
   const pendientes = []
+
+  // Esto va primero porque es lo que puede invalidar TODO lo de arriba. Un
+  // veredicto de rendimiento medido sin saber si el portátil estaba enchufado
+  // no es comparable con otro: a batería el mismo equipo puede tardar el doble.
+  // El informe del HP Pavilion decía "corriente" cuando en realidad la consulta
+  // había fallado, así que el 2x de diferencia entre dos ejecuciones no se pudo
+  // atribuir a nada con certeza.
+  if (a?.ok && p?.energia?.fuente === 'desconocida') {
+    pendientes.push('si estas cifras se midieron enchufado o a batería: no se pudo leer, '
+      + 'y a batería el mismo equipo puede tardar el doble')
+  }
+  if (a?.ok && p?.energia?.aBateria === true) {
+    pendientes.push('cómo van estas cifras enchufado: se midieron a batería, '
+      + 'donde Windows recorta la frecuencia')
+  }
   if (!audio?.concluyente) pendientes.push('si el loopback capta el audio de una videollamada real')
   if (plataforma?.plataforma !== 'win32') pendientes.push('si existe Mezcla estéreo como respaldo')
   if (a?.ok && !a.condiciones.sostenida) pendientes.push('cómo aguanta tras varios minutos, con la máquina caliente')

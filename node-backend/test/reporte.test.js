@@ -261,3 +261,53 @@ describe('la sobresuscripción de hilos se ve en el informe', () => {
     assert.doesNotMatch(t, /hilos sobre/, 'sin el dato no se puede afirmar que sobren')
   })
 })
+
+describe('una condición desconocida no se presenta como medida', () => {
+  const conEnergia = (energia, lecturas) => ({
+    perfil: {
+      cpu: { modelo: 'Intel Core i5-10210U', nucleosFisicos: 4, nucleosLogicos: 8, hibrida: false },
+      memoria: { totalGB: 15.8 },
+      energia,
+      lecturas: lecturas || { consultaWindows: 'ok', nucleosFisicos: 'ok', energia: 'ok' },
+    },
+    admision: {
+      ok: true, veredicto: 'justo', consecuencia: 'unos 1,7 s por frase',
+      medidas: { whisper: { p50: 1983, p95: 2400 }, marian: { p50: 578, p95: 700 }, vecesTiempoReal: 1.2 },
+      condiciones: { hilosWhisper: 4 },
+    },
+  })
+
+  test('si no se pudo leer la energía, lo dice con su motivo', () => {
+    const t = construir({ backend: conEnergia(
+      { fuente: 'desconocida', aBateria: null, motivo: 'expiró' },
+      { consultaWindows: 'expiró', nucleosFisicos: 'expiró', energia: 'expiró' }) })
+    assert.match(t, /Energía: NO SE PUDO LEER \(expiró\)/)
+    assert.doesNotMatch(t, /Energía: corriente/, 'no puede afirmar corriente sin saberlo')
+  })
+
+  test('y advierte de que eso invalida la comparación de cifras', () => {
+    const t = construir({ backend: conEnergia({ fuente: 'desconocida', motivo: 'expiró' }) })
+    assert.match(t, /enchufado o a batería/)
+    assert.match(t, /tardar el doble/)
+  })
+
+  test('enumera las consultas que fallaron, con la causa', () => {
+    const t = construir({ backend: conEnergia(
+      { fuente: 'desconocida', motivo: 'expiró' },
+      { consultaWindows: 'expiró', nucleosFisicos: 'expiró', energia: 'expiró' }) })
+    assert.match(t, /Consultas al sistema que fallaron:.*nucleosFisicos \(expiró\)/)
+  })
+
+  test('medido a batería, avisa de que no vale para enchufado', () => {
+    const t = construir({ backend: conEnergia({ fuente: 'batería', aBateria: true }) })
+    assert.match(t, /se midieron a batería/)
+  })
+
+  test('un sobremesa no genera ningún aviso: ahí sí se sabe', () => {
+    const t = construir({ backend: conEnergia(
+      { fuente: 'corriente', aBateria: false, nota: 'sin batería: sobremesa' }) })
+    assert.match(t, /Energía: corriente — sin batería: sobremesa/)
+    assert.doesNotMatch(t, /enchufado o a batería/)
+    assert.doesNotMatch(t, /Consultas al sistema que fallaron/)
+  })
+})

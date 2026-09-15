@@ -31,31 +31,98 @@ const { execFile } = require('child_process')
 const ES_WINDOWS = process.platform === 'win32'
 const ES_MAC = process.platform === 'darwin'
 
-/** Ejecuta un comando con timeout. Nunca lanza: devuelve null si falla. */
-function correr (cmd, args, ms = 2500) {
+/**
+ * Ejecuta un comando con timeout y **dice por qué falló**.
+ *
+ * El motivo importa. Antes esto devolvía `null` igual si el comando no existía,
+ * si expiró o si devolvió error, y eso dejó un informe imposible de interpretar:
+ * en el HP Pavilion los núcleos físicos salieron `null` y no había forma de
+ * saber si PowerShell no estaba, estaba restringido por política, o simplemente
+ * no llegó a tiempo. Tres causas con tres arreglos distintos.
+ *
+ * @returns {Promise<{ok: boolean, salida: string|null, motivo: string}>}
+ */
+function ejecutar (cmd, args, ms = 2500) {
   return new Promise(resolve => {
     let hecho = false
-    const fin = (v) => { if (!hecho) { hecho = true; resolve(v) } }
+    const fin = (r) => { if (!hecho) { hecho = true; resolve(r) } }
     try {
-      const p = execFile(cmd, args, { timeout: ms, windowsHide: true },
-        (err, stdout) => fin(err ? null : String(stdout).trim()))
-      p.on('error', () => fin(null))
-    } catch { fin(null) }
-    setTimeout(() => fin(null), ms + 250)
+      const p = execFile(cmd, args, { timeout: ms, windowsHide: true }, (err, stdout) => {
+        if (!err) return fin({ ok: true, salida: String(stdout).trim(), motivo: 'ok' })
+        // `killed` con SIGTERM es lo que pone execFile al agotar su propio timeout.
+        const motivo = err.code === 'ENOENT' ? 'no-existe'
+          : (err.killed || err.signal) ? 'expiró'
+          : 'falló'
+        fin({ ok: false, salida: null, motivo })
+      })
+      p.on('error', e => fin({
+        ok: false, salida: null, motivo: e.code === 'ENOENT' ? 'no-existe' : 'falló',
+      }))
+    } catch { fin({ ok: false, salida: null, motivo: 'falló' }) }
+    // Red de seguridad por si execFile no llega a llamar al callback.
+    setTimeout(() => fin({ ok: false, salida: null, motivo: 'expiró' }), ms + 250)
   })
 }
 
+/** La forma corta, para quien solo quiere la salida. */
+async function correr (cmd, args, ms = 2500) {
+  return (await ejecutar(cmd, args, ms)).salida
+}
+
+/**
+ * Las tres consultas de Windows en UNA sola invocación de PowerShell.
+ *
+ * Antes eran tres, lanzadas a la vez con `Promise.all`, cada una con 4 s de
+ * plazo: núcleos, GPU y energía. Arrancar PowerShell cuesta cientos de
+ * milisegundos, y **tres arranques simultáneos en un portátil de 15 W compiten
+ * entre ellos**, de modo que las tres pueden agotar su plazo a la vez. En el
+ * informe del HP Pavilion los núcleos físicos salieron `null` en una ejecución
+ * y 4 en otra del MISMO equipo. Un proceso en lugar de tres elimina esa
+ * competencia.  [por medir: si era esta la causa, lo dirá el próximo informe]
+ *
+ * El plazo es holgado a propósito. Esto corre una vez, mientras el usuario
+ * configura su perfil, y el coste de quedarse sin el dato es peor que esperar:
+ * de los núcleos físicos dependía el número de hilos.
+ *
+ * Devuelve `baterias` como CUENTA, no como presencia. Es la diferencia entre
+ * "este equipo no tiene batería, es de sobremesa" —que es una medida— y "la
+ * consulta falló" —que no lo es—. Antes ambas daban el mismo resultado y la app
+ * informaba "corriente" cuando en realidad no lo sabía.
+ */
+const PS_CONSULTA = [
+  '$ErrorActionPreference=\'SilentlyContinue\';',
+  '$p=Get-CimInstance Win32_Processor;',
+  '$b=@(Get-CimInstance Win32_Battery);',
+  '[pscustomobject]@{',
+  'nucleos=($p|Measure-Object -Property NumberOfCores -Sum).Sum;',
+  'logicos=($p|Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum;',
+  'gpu=(Get-CimInstance Win32_VideoController|Select-Object -First 1).Name;',
+  'baterias=$b.Count;',
+  'estadoBateria=$(if($b.Count -gt 0){[int]$b[0].BatteryStatus}else{$null})',
+  '}|ConvertTo-Json -Compress',
+].join('')
+
+async function consultarWindows () {
+  const r = await ejecutar('powershell',
+    ['-NoProfile', '-NonInteractive', '-Command', PS_CONSULTA], 9000)
+  if (!r.ok || !r.salida) return { ok: false, motivo: r.motivo, datos: null }
+  try {
+    return { ok: true, motivo: 'ok', datos: JSON.parse(r.salida) }
+  } catch {
+    // PowerShell respondió algo que no era JSON: casi siempre un aviso de
+    // política de ejecución. Se distingue de un timeout a propósito.
+    return { ok: false, motivo: 'respuesta-ilegible', datos: null }
+  }
+}
+
 /** Núcleos físicos. Ojo: en CPU híbrida esto es P + E, no distingue. */
-async function nucleosFisicos () {
+async function nucleosFisicos (win) {
+  if (ES_WINDOWS) {
+    const n = parseInt(win?.datos?.nucleos, 10)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
   if (ES_MAC) {
     const s = await correr('sysctl', ['-n', 'hw.physicalcpu'])
-    const n = parseInt(s, 10)
-    return Number.isFinite(n) ? n : null
-  }
-  if (ES_WINDOWS) {
-    // PowerShell y no wmic: wmic está deprecado y puede no existir.
-    const s = await correr('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      '(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum'], 4000)
     const n = parseInt(s, 10)
     return Number.isFinite(n) ? n : null
   }
@@ -79,7 +146,7 @@ function esHibrida (modelo) {
 }
 
 /** GPU. Con NVIDIA, `nvidia-smi` es la mejor fuente y la única con VRAM fiable. */
-async function gpu () {
+async function gpu (win) {
   const nv = await correr('nvidia-smi',
     ['--query-gpu=name,memory.total,driver_version', '--format=csv,noheader'], 3000)
   if (nv) {
@@ -89,9 +156,9 @@ async function gpu () {
 
   if (ES_WINDOWS) {
     // AdapterRAM es un uint32 y miente por encima de 4 GB, así que ni lo pedimos.
-    const s = await correr('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      '(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name'], 4000)
-    return s ? { nombre: s.split('\n')[0].trim(), vram: null, driver: null, fuente: 'Win32_VideoController' } : null
+    // El nombre viene de la consulta única, no de un PowerShell propio.
+    const n = win?.datos?.gpu
+    return n ? { nombre: String(n).trim(), vram: null, driver: null, fuente: 'Win32_VideoController' } : null
   }
   if (ES_MAC) {
     const s = await correr('sh', ['-c',
@@ -102,24 +169,46 @@ async function gpu () {
 }
 
 /**
+ * Interpreta la consulta de energía de Windows. Función pura y separada porque
+ * es la decisión que estaba mal, y enterrada tras un `if (process.platform)` no
+ * se podía probar desde macOS.
+ *
+ * El fallo que corrige: `null` significaba a la vez "este equipo no tiene
+ * batería" y "la consulta no llegó", y la app respondía **"corriente"** en los
+ * dos casos. En un portátil cuya consulta expira, eso es afirmar que está
+ * enchufado sin saberlo — y a batería Windows recorta la frecuencia, así que
+ * invalida en silencio cualquier veredicto de rendimiento.
+ *
+ * Ahora se cuentan las baterías: cero es una medida ("es de sobremesa"), y que
+ * la consulta falle es otra cosa ("no lo sé").
+ */
+function interpretarEnergiaWindows (win) {
+  if (!win?.ok) {
+    return { fuente: 'desconocida', aBateria: null, motivo: win?.motivo || 'no-disponible' }
+  }
+  if (win.datos?.baterias === 0) {
+    return { fuente: 'corriente', aBateria: false, nota: 'sin batería: sobremesa' }
+  }
+  // BatteryStatus 2 = conectado a corriente.
+  const n = parseInt(win.datos?.estadoBateria, 10)
+  if (!Number.isFinite(n)) {
+    return { fuente: 'desconocida', aBateria: null, motivo: 'estado-ilegible' }
+  }
+  return { fuente: n === 2 ? 'corriente' : 'batería', aBateria: n !== 2 }
+}
+
+/**
  * ¿A batería o enchufado? En batería Windows baja el límite de frecuencia y el
  * mismo modelo puede tardar el doble, así que un veredicto medido enchufado no
  * vale a batería.
  */
-async function energia () {
+async function energia (win) {
   if (ES_MAC) {
     const s = await correr('pmset', ['-g', 'batt'], 2000)
     if (!s) return { fuente: 'desconocida', aBateria: null }
     return { fuente: /AC Power/i.test(s) ? 'corriente' : 'batería', aBateria: !/AC Power/i.test(s) }
   }
-  if (ES_WINDOWS) {
-    // BatteryStatus 2 = conectado a corriente. Sin batería, no hay objeto.
-    const s = await correr('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      '(Get-CimInstance Win32_Battery | Select-Object -First 1).BatteryStatus'], 4000)
-    if (s === null || s === '') return { fuente: 'corriente', aBateria: false }  // sobremesa
-    const n = parseInt(s, 10)
-    return { fuente: n === 2 ? 'corriente' : 'batería', aBateria: n !== 2 }
-  }
+  if (ES_WINDOWS) return interpretarEnergiaWindows(win)
   return { fuente: 'desconocida', aBateria: null }
 }
 
@@ -132,8 +221,11 @@ async function perfilar () {
   const modelo = cpus[0]?.model?.trim() || 'desconocido'
   const logicos = cpus.length
 
+  // En Windows, UNA consulta de PowerShell para los tres datos. nvidia-smi va
+  // aparte porque no es PowerShell y es la única fuente fiable de VRAM.
+  const win = ES_WINDOWS ? await consultarWindows() : null
   const [fisicos, tarjeta, alimentacion] = await Promise.all([
-    nucleosFisicos(), gpu(), energia(),
+    nucleosFisicos(win), gpu(win), energia(win),
   ])
 
   const hibrida = esHibrida(modelo)
@@ -165,6 +257,16 @@ async function perfilar () {
     gpu: tarjeta,
     energia: alimentacion,
     node: process.versions.node,
+    // Qué no se pudo leer y por qué. Sin esto, un `null` en el informe es un
+    // misterio: no se sabe si el comando no existe, si la política de la
+    // empresa lo bloquea o si no llegó a tiempo, y cada causa se arregla
+    // distinto.
+    lecturas: {
+      consultaWindows: win ? win.motivo : 'no-aplica',
+      nucleosFisicos: fisicos === null ? (win?.motivo || 'no-disponible') : 'ok',
+      energia: alimentacion.fuente === 'desconocida'
+        ? (alimentacion.motivo || 'no-disponible') : 'ok',
+    },
   }
 }
 
@@ -181,4 +283,6 @@ function resumir (p) {
 }
 
 module.exports = { perfilar, resumir }
-module.exports._internos = { esHibrida, correr }
+module.exports._internos = {
+  esHibrida, correr, ejecutar, interpretarEnergiaWindows, PS_CONSULTA,
+}
