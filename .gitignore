@@ -26,3 +26,6 @@ data/*.db
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Binarios de desarrollo (los de producción se anclan al tag b5130)
+bin/
