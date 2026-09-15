@@ -1,0 +1,61 @@
+DIAGNÓSTICO — Traductor Italiano
+================================
+
+Esta herramienta NO traduce ni graba nada. Solo mide tu computadora y escribe
+un archivo de texto que tú decides si compartir.
+
+
+CÓMO USARLA
+-----------
+
+1. Abre "Diagnostico Traductor Italiano.exe".
+2. Pulsa "Comenzar".
+3. Cuando termine, pulsa "Guardar informe". Se guarda en tu Escritorio.
+4. Envía ese archivo.
+
+Tarda menos de un minuto.
+
+
+PARA QUE LA MEDICIÓN SIRVA
+--------------------------
+
+Ábrela con una videollamada en marcha, o al menos con lo que sueles tener
+abierto durante una reunión. La aplicación real competirá por el procesador con
+Teams o Zoom, así que medir con la computadora vacía daría un número optimista
+que luego no se cumple.
+
+
+SI NO ARRANCA
+-------------
+
+Lo más probable es que falte el runtime de Microsoft, que muchos programas
+necesitan y no viene con Windows.
+
+Ejecuta "vc_redist.x64.exe", que está en esta misma carpeta, acepta la
+instalación, y vuelve a intentarlo.
+
+Si aun así no abre, ejecútala desde la terminal para ver el error:
+
+    set DIAG_AUTO=1
+    "Diagnostico Traductor Italiano.exe"
+
+Eso hace todo automáticamente y escribe el informe sin usar la ventana.
+
+
+QUÉ MIDE
+--------
+
+  · Tu procesador, memoria y tarjeta gráfica.
+  · Si puede oír el sonido de tu computadora.
+  · Cuánto tarda en entender italiano hablado.
+  · Cuánto tarda en traducirlo a español.
+
+El informe dice también, de forma explícita, qué cosas NO pudo comprobar. Eso
+es tan importante como lo que sí midió.
+
+
+PRIVACIDAD
+----------
+
+No graba audio. No envía nada por internet. El único archivo que sale de tu
+computadora es el informe de texto, y lo mandas tú a mano.

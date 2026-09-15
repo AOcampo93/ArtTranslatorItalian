@@ -31,3 +31,8 @@ Thumbs.db
 bin/
 
 electron-app/node_modules/
+
+# Artefactos de construcción y binarios descargados
+vendor/
+bin-win/
+*.zip
