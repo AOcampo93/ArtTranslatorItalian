@@ -44,8 +44,12 @@ describe('códigos de salida de Windows', () => {
   test('0xC0000135 se traduce a "falta una DLL" con su arreglo', () => {
     const m = _internos.explicarCodigo(3221225781)
     assert.match(m, /falta una DLL/i)
-    assert.match(m, /vc_redist/i, 'debe decir qué ejecutar')
     assert.match(m, /C0000135/, 'debe mostrar el código en hexadecimal')
+    // Ya no dice "ejecuta vc_redist": las cuatro DLL del runtime viajan junto
+    // al binario, así que ese consejo mandaría al usuario a un archivo que no
+    // existe. El arreglo tiene que ser accionable HOY.
+    assert.doesNotMatch(m, /vc_redist/i, 'el redistribuible ya no viaja en el paquete')
+    assert.match(m, /dependencias-windows/, 'debe decir cómo comprobarlo')
   })
 
   test('un código desconocido no se inventa una causa', () => {
@@ -60,6 +64,31 @@ describe('códigos de salida de Windows', () => {
       assert.ok(info.arreglo, `${code} sin arreglo accionable`)
     }
   })
+
+  test('cada clave coincide con el hexadecimal de su comentario', () => {
+    // Esta es la prueba que faltaba. La anterior solo comprobaba que los textos
+    // no estuvieran vacíos, y con eso pasó inadvertido que 3221225595 estaba
+    // etiquetado 0xC0000139 cuando es 0xC000007B — y que el 0xC0000139 de
+    // verdad (3221225785) no estaba en la tabla, así que ese fallo nunca se
+    // habría traducido.
+    const fuente = fs.readFileSync(path.join(__dirname, '..', 'src', 'transcriber.js'), 'utf8')
+    const vistos = []
+    for (const m of fuente.matchAll(/^\s*(\d{7,10}): \{\s*\/\/ (0x[0-9A-F]{8})/gm)) {
+      const [, clave, hex] = m
+      const esperado = '0x' + (Number(clave) >>> 0).toString(16).toUpperCase().padStart(8, '0')
+      assert.strictEqual(hex, esperado, `${clave} está etiquetado ${hex} y es ${esperado}`)
+      vistos.push(clave)
+    }
+    assert.strictEqual(vistos.length, Object.keys(_internos.CODIGOS_WINDOWS).length,
+      'cada entrada de la tabla debe llevar su hexadecimal en el comentario')
+  })
+
+  test('están los dos códigos de DLL que de verdad se distinguen', () => {
+    // 0xC0000135 = no se encontró la DLL. 0xC0000139 = está, pero le falta el
+    // símbolo. Son causas distintas y arreglos distintos, y el segundo faltaba.
+    assert.ok(_internos.CODIGOS_WINDOWS[3221225781], 'falta 0xC0000135')
+    assert.ok(_internos.CODIGOS_WINDOWS[3221225785], 'falta 0xC0000139')
+  })
 })
 
 describe('elección de hilos', () => {
@@ -69,22 +98,44 @@ describe('elección de hilos', () => {
     assert.ok(n <= require('os').cpus().length, `devolvió ${n}`)
   })
 
-  test('NUNCA pide más hilos que núcleos físicos', () => {
-    // El fallo medido en el HP Pavilion: i5-10210U con 4 físicos y 8 lógicos,
-    // la heurística calculaba sobre los lógicos y pedía 6. Está medido que
-    // pasarse de los físicos degrada hasta 2x.
-    for (const fisicos of [2, 4, 6, 8, 12, 24]) {
-      const n = Transcriber.hilosRecomendados(fisicos)
-      assert.ok(n <= fisicos, `con ${fisicos} físicos pidió ${n} hilos`)
-      assert.ok(n >= 2, `con ${fisicos} físicos pidió solo ${n}`)
+  test('NUNCA pide más hilos que núcleos disponibles', () => {
+    // Esto sustituye a una prueba que exigía no pasarse de los núcleos FÍSICOS,
+    // justificándolo con una degradación "de hasta 2x" que nadie había medido.
+    // Lo medido es otra cosa, y más grave: el límite que importa son los
+    // núcleos DISPONIBLES, y pasarse de ahí no degrada un 2x sino que se cae
+    // por un precipicio — 12 hilos sobre 10 núcleos dieron 73.652 ms frente a
+    // 909 ms con 8, o sea 81 veces más. La causa está en ggml: la barrera entre
+    // hilos es espera activa, así que un hilo que espera quema un núcleo.
+    for (const logicos of [1, 2, 3, 4, 6, 8, 10, 16, 32]) {
+      const n = Transcriber.hilosRecomendados({ logicos })
+      assert.ok(n <= logicos, `con ${logicos} disponibles pidió ${n} hilos`)
+      assert.ok(n >= 1, `con ${logicos} disponibles pidió ${n}`)
     }
   })
 
-  test('sin dato de físicos, asume la mitad de los lógicos', () => {
-    // Es lo correcto en cualquier CPU con hyperthreading o SMT.
-    const n = Transcriber.hilosRecomendados()
-    assert.ok(n <= Math.ceil(require('os').cpus().length / 2),
-      'sin el dato debe ser conservador, no optimista')
+  test('reserva núcleos para la videollamada', () => {
+    // El óptimo medido se mueve con la carga: en reposo ganó 8 hilos (909 ms),
+    // con 4 de 10 núcleos ocupados ganó 6 (1.500 ms) y 8 pasó a ser 1,4x peor.
+    // La app nunca corre en reposo, así que la regla reserva núcleos.
+    for (const logicos of [8, 10, 16, 32]) {
+      const n = Transcriber.hilosRecomendados({ logicos })
+      assert.ok(n <= logicos - 2,
+        `con ${logicos} disponibles pidió ${n}: no deja sitio a la videollamada`)
+    }
+  })
+
+  test('el óptimo medido en el M5 con carga es lo que devuelve', () => {
+    // Anclado a la medición concreta: 10 núcleos, 4 ocupados, mejor 6 hilos.
+    assert.strictEqual(Transcriber.hilosRecomendados({ logicos: 10 }), 6)
+  })
+
+  test('una firma equivocada no puede colar un número peligroso', () => {
+    // La versión anterior recibía `nucleosFisicos` posicional. Si alguien
+    // llamara con la costumbre vieja, con firma de objeto cae al valor por
+    // defecto en vez de tomar 4 como si fueran los lógicos y devolver 2.
+    const conObjeto = Transcriber.hilosRecomendados({ logicos: 8 })
+    assert.strictEqual(conObjeto, 4)
+    assert.strictEqual(Transcriber.hilosRecomendados(8), Transcriber.hilosRecomendados())
   })
 
   test('WHISPER_HILOS anula la heurística', () => {

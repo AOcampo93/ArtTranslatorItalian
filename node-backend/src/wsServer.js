@@ -212,7 +212,15 @@ let sessionStart     = Date.now()
 let transcriptBuffer    = []   // { en, es, timestamp }
 let lastQuestionScan    = 0
 let questionScanInterval = null
-const QUESTION_SCAN_INTERVAL = 25000  // scan at most every 25s
+// 40 s, no 25. Heredado en 25 del proyecto base; el plan decidió subirlo a 40
+// porque recorta ~34% del coste por hora del nivel A —con 144 llamadas/h el 66%
+// de los tokens de entrada es contexto repetido y el prompt caching no lo
+// amortiza, porque el mínimo cacheable son 4.096 tokens y nuestro prefijo ronda
+// 400— pero el cambio nunca llegó al código. Dos comentarios del repo
+// (contexto.js y shared/prompts.js) ya describían los 40 s como si estuvieran
+// puestos, y el coste publicado al cliente se calculó con 90 llamadas/h cuando
+// la realidad eran 144: infravalorado 1,6x.  (PLAN.md §11)
+const QUESTION_SCAN_INTERVAL = 40000
 
 function broadcastToAll (payload) {
   const str = JSON.stringify(payload)

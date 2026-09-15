@@ -37,7 +37,7 @@ se discute y se cambia el documento; no se salta.
 | 6 | Las nueve DLL `ggml-cpu-*` junto a `ggml-base.dll`, **y loguear cuál se cargó** | El despacho cae a la peor variante **sin dar error** |
 | 7 | Anclar el tag **`b5130`** con su hash, nunca "latest release" | El release `v1.9.4` **no tiene assets**: el instalador no descarga nada |
 | 8 | Job Object con `KILL_ON_JOB_CLOSE` para los procesos hijo | `whisper-server` huérfano comiendo 700 MB y ocupando el puerto |
-| 9 | Hilos **conscientes de núcleos híbridos**, nunca `núcleos − 2` | En el i9-13900HX serían 22 hilos y rendiría **peor** que usando 8 |
+| 9 | Hilos **por debajo de los núcleos disponibles**, reservando para la videollamada, y **nunca un barrido en el arranque** | Pasarse no degrada un poco: **81x** medido (12 hilos sobre 10 núcleos). La barrera de ggml es espera activa, así que el hilo que espera quema un núcleo. Y el óptimo en reposo (8) es 1,4x peor que el óptimo con la CPU ocupada (6), que es el escenario real `[medido]` |
 | 10 | **VAD + `-ac 512` + paso adaptativo**, siempre | La ventana de 30 s del encoder hunde los dos equipos |
 | 11 | Leer `audioContext.sampleRate`, **nunca asumir 48 kHz** | Remuestreo erróneo: todo "funciona" y el WER se dispara sin que nadie lo note. **Confirmado en DOS máquinas Windows con valores DISTINTOS: 44100 Hz en una y 48000 Hz en otra** `[medido]`. Fijar cualquiera de los dos habría roto la otra en silencio |
 | 12 | Ventana de silencio de **20-30 s**, aviso no modal en el medidor | Falsos positivos cada pocos minutos; el usuario aprende a ignorar el aviso |
@@ -99,14 +99,17 @@ para ellos. Es más barato de hacer (prioridad nº 3) y más predecible de sopor
 | | Requisito | Por qué ese umbral |
 |---|---|---|
 | SO | Windows 10 o superior (x64) | Electron soporta *"Windows 10 and up"* `[verificado]`. Se declara Windows 11 porque es lo que tiene el cliente, pero Windows 10 sirve para desarrollar y probar |
-| CPU | 8 núcleos físicos con **AVX2** | AVX2 selecciona la DLL `haswell` o mejor; por debajo cae a `sse42` y no llega a tiempo real `[verificado]` |
+| CPU | 4 núcleos físicos con **AVX2** | Que AVX2 selecciona la DLL `haswell` o mejor está `[verificado]`; que por debajo, con `sse42`, no llegue a tiempo real está `[por medir]` — se puede medir forzando esa variante, que el empaquetado ya permite. El mínimo baja de 8 a 4 núcleos porque el i5-10210U, con 4, midió 1,7 s por frase con 6 hilos: llega |
 | RAM | 16 GB | `small` ocupa ~600-700 MB, pero Win11 + Teams en llamada + navegador ya consumen 8-9 GB |
 | Disco | 2 GB libres | Modelo embebido en el instalador |
 | Red | Solo para las respuestas | Sin red sigue traduciendo |
 
-Con el mínimo, el techo de calidad es `small`: **9,8% de error en italiano con audio limpio
-y 22,9% con audio tipo reunión** `[verificado]`. Es usable, no es excelente, y esa cifra
-hay que decirla antes de entregar (§13).
+Con el mínimo, el techo de calidad es `small`: **9,8% de error en italiano con audio limpio**
+`[verificado]` (Common Voice italiano, cifra publicada de whisper-small). El **22,9% con
+audio tipo reunión** es una extrapolación, no una medición nuestra: queda `[por medir]` hasta
+tener los 20-30 minutos de audio real de reunión que pide §15 — y es justo la cifra que el
+cliente va a experimentar, así que no puede ir marcada como verificada. Es usable, no es
+excelente, y hay que decirlo antes de entregar (§13).
 
 ### Recomendado — y fuera del alcance de la v1
 
@@ -230,10 +233,16 @@ audio del sistema  ──loopback──►  48→16 kHz mono Float32
 Marian: **101 MB quantizado, BLEU 61.2 it→es**, pero la latencia **depende mucho
 de la máquina** y presentarla como un solo número sería engañoso `[medido]`:
 
-| Máquina | Whisper p50 | Marian p50 | Frase típica |
-|---|---|---|---|
-| Apple M5 (desarrollo) | 185 ms | 67 ms | ~0,3 s |
-| HP Pavilion i5-10210U, 15 W | **1.983 ms** | **578 ms** | **~1,7 s** |
+| Máquina | hilos | Whisper p50 | Marian p50 | Frase típica |
+|---|---|---|---|---|
+| Apple M5 (desarrollo, GPU Metal) | cualquiera | 185 ms | 67 ms | ~0,3 s |
+| HP Pavilion i5-10210U, 15 W | 6 | **1.983 ms** | 578 ms | **~1,7 s** |
+| HP Pavilion i5-10210U, 15 W | 3 | **4.246 ms** | 707 ms | **~3,7 s** |
+
+**La columna de hilos no es decorativa**: el mismo equipo cambió de veredicto —de "justo",
+local y gratis, a "no-llega", nube de pago— solo por el número de hilos. Y la "frase típica"
+multiplica la medida por un supuesto de 4 s **que no está medido**: con 3 s, la fila de 3
+hilos también sería "justo". Ver §12.
 
 El HP es un ultraportátil de 2019 con 4 núcleos a 1,6 GHz, y está cerca del
 mínimo declarado en §3: es el suelo, no el caso típico. El i9-13900HX del
@@ -256,14 +265,20 @@ segundo después.
 
 | Nivel | Qué hace | Coste/hora |
 |---|---|---|
-| **A — Local** (por defecto) | whisper local + Marian local; LLM solo para preguntas y respuestas | **0,008–0,137 $** `[verificado]` |
+| **A — Local** (por defecto) | whisper local + Marian local; LLM solo para preguntas y respuestas | **0,008–0,137 $** `[estimado]` |
 | **B — Refinado** (opt-in) | Lo anterior + refinar cada frase con LLM | 0,350 $ con Haiku |
 | **C — Nube** (escalado) | STT en la nube + **Marian sigue local** | +0,15 $ |
 
+Los tres costes son `[estimado]`, con la aritmética a la vista y no verificados con
+`count_tokens` sobre italiano y español reales. El del nivel A se calculó además con **90
+llamadas por hora** (una cada 40 s), que es el valor que §11 decidió pero que **no estaba en
+el código**: `wsServer.js` escaneaba cada 25 s, o sea 144 llamadas por hora, 1,6x más. Ya
+está corregido en el código; la cifra queda igualmente `[estimado]`.
+
 **La escalada va de A a C, nunca a "todo en la nube".** Si whisper local no cumple, se
 sustituye **solo el STT** y Marian se queda donde está. Mandar también la traducción a la
-nube es peor en las dos dimensiones a la vez: más lento (400-800 ms con red, frente a 131
-ms) y de pago, sin tocar el cuello de botella real.
+nube es peor en las dos dimensiones a la vez: más lento (400-800 ms con red, frente a los 67-707 ms
+de Marian en local según la máquina) y de pago, sin tocar el cuello de botella real.
 
 El hecho económico que ordena esto: **el coste está en la transcripción, no en el LLM.**
 Todo el bloque de preguntas y respuestas con Haiku cuesta menos que el STT en nube más
@@ -453,12 +468,52 @@ Sin esto, ninguna cifra de latencia de este plan se cumple. La ganancia concreta
 `small` multilingüe es el techo en CPU (los `.en` no sirven para italiano). Parámetros de
 arranque: `-l it -ac 512 --vad -fa -t N`.
 
-**El número de hilos no es "núcleos físicos menos 2", y esa heurística habría sido un error
-grave en el equipo del cliente.** El i9-13900HX tiene 8 P-cores y 16 E-cores: la fórmula
-antigua daría **22 hilos**, y como whisper.cpp reparte el trabajo por igual, los P rápidos
-acabarían esperando a los E lentos y rendiría *peor* que usando solo los 8 P. Lo correcto
-en esa CPU es **`-t 8` anclado a P-cores**. Está medido que sobresuscribir degrada 2x
-`[verificado]`.
+**El número de hilos: lo que se midió, después de equivocarse dos veces.**
+
+Aquí decía que sobresuscribir "degrada 2x `[verificado]`", que con 8 P + 16 E la fórmula
+`núcleos − 2` daría 22 hilos, y que usar los E rendiría peor que usar solo los P. **Las tres
+cosas eran falsas**, y la marca `[verificado]` no correspondía a ninguna medición.
+
+Lo medido (Apple M5, 10 núcleos 4P+6E, sin hyperthreading, GPU apagada para que mida la CPU
+como el build de Windows, audio de 6,5 s) `[medido]`:
+
+| hilos | en reposo | con 4 de 10 núcleos ocupados |
+|------:|----------:|-----------------------------:|
+| 3 | 1.435 ms | 1.892 ms |
+| 4 | 1.203 ms | 1.632 ms |
+| 6 | 1.006 ms | **1.500 ms** |
+| 8 | **909 ms** | 2.158 ms |
+| 10 | 1.360 ms | 4.465 ms |
+| 12 | **73.652 ms** | — |
+
+Y en el HP Pavilion i5-10210U (4 físicos / 8 lógicos, en reposo) `[medido]`:
+6 hilos → 1.983 ms · 3 hilos → 4.246 ms.
+
+Tres conclusiones, y ninguna coincide con lo que había escrito:
+
+1. **Usar los E-cores va MEJOR, no peor.** 8 hilos (4P+4E) baten a 4 hilos (solo P) por un
+   25%. La afirmación contraria venía del dominio del álgebra densa, donde sí se cumple.
+2. **El óptimo se mueve con la carga, y el óptimo es el número de núcleos LIBRES.** En
+   reposo gana 8; con cuatro núcleos ocupados gana exactamente 6 = 10 − 4, y 8 pasa a ser
+   1,4x peor. La app nunca corre en reposo: corre con la videollamada que la hizo
+   necesaria. **Por eso no hay barrido de hilos en el arranque**: mediría el escenario
+   equivocado y fijaría un valor que se hunde en el uso real.
+3. **El error es asimétrico, así que la regla yerra por lo bajo.** Quedarse corto cuesta
+   entre un 10% y un 30%. Pasarse cuesta 1,4x y luego se cae por un precipicio: **12 hilos
+   sobre 10 núcleos tardaron 81 veces más**. No es una anomalía, es el diseño de ggml: la
+   barrera entre hilos es **espera activa** (`ggml_thread_cpu_relax`, o sea `_mm_pause` en
+   x86 y `yield` en ARM), de modo que un hilo que espera **quema el núcleo** que otro
+   necesita para avanzar.
+
+La regla es `clamp(mín 2, máx 6, disponibles − 4)`, calculada sobre
+`os.availableParallelism()` —que respeta cgroups y afinidad, a diferencia de `os.cpus()`— y
+nunca por encima de los núcleos que hay. Da 4 en el HP, 6 en el M5, 6 en el i9 y en el
+Ryzen, 2 en una VM de 4 vCPU. whisper.cpp usa por defecto `min(4, hardware_concurrency)`
+`[verificado]`, y no consulta núcleos físicos en ningún sitio.
+
+**Lo que sigue sin medirse `[por medir]`:** las dos constantes salen de una sola máquina.
+Cuántos núcleos reserva de verdad una llamada de Teams, y dónde está el óptimo en el
+i9-13900HX y el Ryzen 7 del cliente, hay que medirlo en esos equipos con `WHISPER_HILOS`.
 
 **Y el dato que decide esto no se puede leer.** Distinguir P de E requiere
 `GetSystemCpuSetInformation`, que no es accesible desde Node sin un addon nativo. Sin él, la

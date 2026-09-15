@@ -14,10 +14,13 @@
  *    de ponerla es lo que evita olvidarla en la app de verdad, donde su ausencia
  *    significa que al compartir pantalla la sala entera lee lo que le soplamos
  *    al usuario.
- *  - **§0.2 nada escucha en `0.0.0.0`.** Aquí no se abre ningún puerto, y es
- *    deliberado: el diálogo del Firewall en el primer arranque es justo lo que
- *    haría que el cliente cancelara y se quedara con una app rota sin saber
- *    por qué.
+ *  - **§0.2 nada escucha en `0.0.0.0`.** Sí se abre un puerto —whisper-server
+ *    escucha en `127.0.0.1` con puerto efímero, ver `transcriber.js`— y es
+ *    justo el `--host 127.0.0.1` explícito lo que evita el diálogo del
+ *    Firewall. Decir "aquí no se abre ningún puerto" era falso y peligroso:
+ *    invitaba a quitar ese `--host` por innecesario, y entonces Windows
+ *    preguntaría en el primer arranque, el cliente cancelaría, y la app se
+ *    quedaría rota para siempre sin explicar por qué.
  */
 
 'use strict'
@@ -129,7 +132,7 @@ ipcMain.handle('diagnostico:backend', async () => {
 
   // Se le pasan los núcleos FÍSICOS del perfil: sin ese dato la heurística
   // calcula sobre los lógicos y sobresuscribe, que es lo que pasó en el HP.
-  const tr = new Transcriber({ binario, modelo, nucleosFisicos: perfil?.cpu?.nucleosFisicos })
+  const tr = new Transcriber({ binario, modelo })
   try {
     await tr.start()
     await translator.cargar()

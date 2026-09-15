@@ -66,7 +66,10 @@ En cmd:
     set WHISPER_HILOS=6
     "Diagnostico Traductor Italiano.exe"
 
-Usa aproximadamente la mitad de los vCPU que le hayas dado a la máquina virtual.
+Usa los vCPU de la máquina virtual menos cuatro, y nunca más de 6. Con 8 vCPU,
+pon 4. No subas de ahí: está medido que pedir más hilos que núcleos disponibles
+no va "un poco peor", se cae en seco (12 hilos sobre 10 núcleos tardaron 81
+veces más que 8).
 
 
 QUÉ MIDE

@@ -116,15 +116,17 @@ function construir ({ plataforma, audio, backend, entradas }) {
     L.push(`  transcripción  p50 ${a.medidas.whisper.p50} ms · p95 ${a.medidas.whisper.p95} ms`)
     L.push(`  traducción     p50 ${a.medidas.marian.p50} ms · p95 ${a.medidas.marian.p95} ms`)
     L.push(`  ${a.medidas.vecesTiempoReal}× tiempo real · ${a.condiciones.hilosWhisper} hilos`)
-    // Pedir más hilos que núcleos físicos degrada hasta 2x: los hermanos
-    // compiten por la misma unidad de ejecución. Que lo diga el informe y no
-    // dependa de que alguien compare dos números en páginas distintas.
-    const fisicos = backend?.perfil?.cpu?.nucleosFisicos
-    if (fisicos > 0 && a.condiciones.hilosWhisper > fisicos) {
-      L.push(`  AVISO: ${a.condiciones.hilosWhisper} hilos sobre ${fisicos} núcleos físicos.`)
-      L.push('  Eso es sobresuscripción y degrada la transcripción. Es un fallo nuestro,')
-      L.push('  no del equipo: revisar Transcriber.hilosRecomendados()')
-    }
+    // Aquí había un AVISO que decía que pedir más hilos que núcleos FÍSICOS
+    // "degrada hasta 2x" y que era "un fallo nuestro". Se ha quitado porque era
+    // falso y además llegaba al cliente: en el único equipo con dos mediciones
+    // (i5-10210U, 4 físicos) la configuración "sobresuscrita" de 6 hilos dio
+    // 1.983 ms y la "correcta" de 3 dio 4.246 ms. El aviso señalaba como
+    // defecto justo la configuración que mejor medía.
+    //
+    // El límite que sí importa son los núcleos DISPONIBLES, no los físicos, y
+    // ahí `hilosRecomendados()` ya no puede pasarse por construcción: hay una
+    // prueba que lo comprueba en nueve tamaños de máquina. Un aviso sobre algo
+    // que el código no puede producir es ruido.
     if (backend.infoSistema) {
       L.push(`  Instrucciones de CPU: ${backend.infoSistema.nivel}`)
       if (backend.infoSistema.sospechoso) {
@@ -133,6 +135,20 @@ function construir ({ plataforma, audio, backend, entradas }) {
       }
     }
     if (a.condiciones.avisoSostenida) L.push(`  AVISO: ${a.condiciones.avisoSostenida}`)
+
+    // El veredicto de arriba multiplica la medida por una duración de frase
+    // SUPUESTA de 4 s, que no está medida. Si al mover ese supuesto el
+    // veredicto cambia, hay que decirlo: es la diferencia entre "local gratis"
+    // y "0,15 USD la hora", y el cliente merece saber de qué depende.
+    const distintos = (a.sensibilidad || []).filter(x => x.veredicto !== a.veredicto)
+    if (distintos.length) {
+      L.push(`  El veredicto depende de un supuesto: frases de ${a.supuestoFraseS} s (sin medir).`)
+      L.push(`  Medida cruda, sin supuestos: ${a.msPorSegundoAudio} ms por segundo de audio.`)
+      for (const x of distintos) {
+        L.push(`    · con frases de ${String(x.fraseS).replace('.', ',')} s seria "${x.veredicto}" `
+             + `(${(x.latenciaFraseMs / 1000).toFixed(1).replace('.', ',')} s por frase)`)
+      }
+    }
     if (a.condiciones.avisoEnergia) L.push(`  AVISO: ${a.condiciones.avisoEnergia}`)
   } else {
     L.push(`  NO MEDIDO — ${backend?.motivoOmision || backend?.error || 'razón desconocida'}`)

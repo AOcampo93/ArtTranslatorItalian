@@ -222,15 +222,21 @@ describe('veredicto global', () => {
   })
 })
 
-describe('la sobresuscripción de hilos se ve en el informe', () => {
-  // Del informe del HP Pavilion: 4 núcleos físicos, 8 lógicos, y la heurística
-  // pedía 6 hilos. Ponía "4 núcleos · 6 hilos" en páginas distintas y estuvo a
-  // un dedo de pasar desapercibido.
+describe('los núcleos se informan sin juzgar el número de hilos', () => {
+  // Este bloque sustituye a otro llamado "la sobresuscripción de hilos se ve en
+  // el informe", que exigía por prueba un AVISO diciéndole al cliente que 6
+  // hilos sobre 4 núcleos físicos era "un fallo nuestro". La afirmación era
+  // falsa —en ese mismo equipo, 6 hilos midieron 1.983 ms y 3 midieron 4.246—
+  // y la prueba la blindaba: arreglar el código dejaba el arnés en rojo.
+  //
+  // Lo que sí merece prueba es que el informe distinga físicos de lógicos y
+  // diga cuándo no pudo leerlos. Eso es información; el veredicto no lo era.
   const base = {
     perfil: {
       cpu: { modelo: 'Intel Core i5-10210U', nucleosFisicos: 4, nucleosLogicos: 8, hibrida: false },
       memoria: { totalGB: 15.8 },
-      energia: { fuente: 'batería' },
+      energia: { fuente: 'corriente', aBateria: false },
+      lecturas: { consultaWindows: 'ok', nucleosFisicos: 'ok', energia: 'ok' },
     },
     admision: {
       ok: true, veredicto: 'justo', consecuencia: 'unos 1,7 s por frase',
@@ -239,26 +245,20 @@ describe('la sobresuscripción de hilos se ve en el informe', () => {
     },
   }
 
-  test('avisa cuando se piden más hilos que núcleos físicos', () => {
-    const t = construir({ backend: base })
-    assert.match(t, /AVISO: 6 hilos sobre 4 núcleos físicos/)
-    assert.match(t, /fallo nuestro/, 'debe dejar claro que no es culpa del equipo')
-  })
-
-  test('no avisa cuando los hilos caben', () => {
-    const cabe = { ...base, admision: { ...base.admision, condiciones: { hilosWhisper: 3 } } }
-    assert.doesNotMatch(construir({ backend: cabe }), /sobresuscripción|hilos sobre/)
-  })
-
-  test('distingue físicos de lógicos, que es lo que lo hacía invisible', () => {
+  test('distingue físicos de lógicos', () => {
     assert.match(construir({ backend: base }), /4 núcleos físicos · 8 lógicos/)
+  })
+
+  test('dice los hilos con los que midió, sin calificarlos', () => {
+    const t = construir({ backend: base })
+    assert.match(t, /6 hilos/, 'el dato tiene que estar, para poder comparar informes')
+    assert.doesNotMatch(t, /sobresuscripci|fallo nuestro|degrada/,
+      'el informe no puede juzgar como defecto la configuración que mejor midió')
   })
 
   test('sin dato de físicos lo dice, en vez de dar un número que engaña', () => {
     const sin = { ...base, perfil: { ...base.perfil, cpu: { ...base.perfil.cpu, nucleosFisicos: null } } }
-    const t = construir({ backend: sin })
-    assert.match(t, /8 núcleos lógicos \(los físicos no se pudieron leer\)/)
-    assert.doesNotMatch(t, /hilos sobre/, 'sin el dato no se puede afirmar que sobren')
+    assert.match(construir({ backend: sin }), /8 núcleos lógicos \(los físicos no se pudieron leer\)/)
   })
 })
 
@@ -309,5 +309,55 @@ describe('una condición desconocida no se presenta como medida', () => {
     assert.match(t, /Energía: corriente — sin batería: sobremesa/)
     assert.doesNotMatch(t, /enchufado o a batería/)
     assert.doesNotMatch(t, /Consultas al sistema que fallaron/)
+  })
+})
+
+describe('el informe dice de qué supuesto depende el veredicto', () => {
+  // Reconstruye el caso del HP Pavilion, que es el que lo destapó: el veredicto
+  // "no-llega" —que le dice al cliente que pague 0,15 USD la hora— salía de
+  // multiplicar la medida por una duración de frase SUPUESTA de 4 s que nadie
+  // midió. Con 3 s el mismo equipo es "justo" y se queda en local, gratis.
+  const hp = {
+    perfil: {
+      cpu: { modelo: 'Intel Core i5-10210U', nucleosFisicos: 4, nucleosLogicos: 8, hibrida: false },
+      memoria: { totalGB: 15.8 },
+      energia: { fuente: 'corriente', aBateria: false },
+      lecturas: { consultaWindows: 'ok', nucleosFisicos: 'ok', energia: 'ok' },
+    },
+    admision: {
+      ok: true, veredicto: 'no-llega',
+      consecuencia: 'Tu equipo tardaría unos 3,7 segundos en traducir cada frase',
+      accion: 'Se usará transcripción en la nube, con un coste aproximado de 0,15 USD por hora.',
+      latenciaFraseMs: 3700, msPorSegundoAudio: 925, supuestoFraseS: 4,
+      sensibilidad: [
+        { fraseS: 3, latenciaFraseMs: 2775, veredicto: 'justo' },
+        { fraseS: 5, latenciaFraseMs: 4625, veredicto: 'no-llega' },
+      ],
+      medidas: { whisper: { p50: 4246, p95: 5141 }, marian: { p50: 707, p95: 749 }, vecesTiempoReal: 1.1 },
+      condiciones: { hilosWhisper: 4 },
+    },
+  }
+
+  test('avisa cuando el veredicto cambiaría con otro supuesto', () => {
+    const t = construir({ backend: hp })
+    assert.match(t, /El veredicto depende de un supuesto: frases de 4 s \(sin medir\)/)
+    assert.match(t, /con frases de 3 s seria "justo"/)
+  })
+
+  test('da la medida cruda, que no depende de ningún supuesto', () => {
+    assert.match(construir({ backend: hp }), /925 ms por segundo de audio/)
+  })
+
+  test('no repite los supuestos que dan el mismo veredicto', () => {
+    // 5 s también da "no-llega": añadirlo solo haría ruido.
+    const t = construir({ backend: hp })
+    assert.doesNotMatch(t, /con frases de 5 s/)
+  })
+
+  test('si el veredicto aguanta cualquier supuesto, no dice nada', () => {
+    const firme = { ...hp, admision: { ...hp.admision, veredicto: 'sobrado',
+      sensibilidad: [{ fraseS: 3, latenciaFraseMs: 900, veredicto: 'sobrado' },
+                     { fraseS: 5, latenciaFraseMs: 1400, veredicto: 'sobrado' }] } }
+    assert.doesNotMatch(construir({ backend: firme }), /depende de un supuesto/)
   })
 })

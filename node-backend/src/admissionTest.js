@@ -26,8 +26,38 @@
 
 const { Pipeline, SAMPLE_RATE } = require('./pipeline')
 
-/** Duración de frase típica en reunión, para traducir la medida a consecuencia. */
+/**
+ * Duración de frase típica en reunión, para traducir la medida a consecuencia.
+ *
+ * **Este número no está medido `[por medir]`, y el veredicto es extremadamente
+ * sensible a él.** Conviene saberlo antes de darle peso a un veredicto:
+ *
+ * Con los números reales del HP Pavilion i5-10210U:
+ *
+ * | frase supuesta | a 6 hilos      | a 3 hilos                   |
+ * |---------------:|----------------|-----------------------------|
+ * |          4,0 s | justo          | **no-llega** → nube de pago |
+ * |          3,2 s | sobrado        | justo → local, gratis       |
+ * |          3,0 s | sobrado        | justo → local, gratis       |
+ *
+ * O sea que el mismo equipo, con la misma medición, pasa de "local gratis" a
+ * "0,15 USD la hora" solo por cambiar este supuesto entre 3 y 4 segundos. Es
+ * la constante más cara del proyecto y la única que nadie comprobó.
+ *
+ * El audio de prueba dura 6,5 s y contiene dos frases, o sea unos 3,2 s por
+ * frase — pero es voz sintética de una muestra, no una reunión real, así que
+ * tampoco sirve para fijar el valor. Se mantiene 4 s por ser el supuesto
+ * conservador (empuja al veredicto pesimista, no al optimista) y el informe
+ * dice de qué depende. Lo que lo resolvería: la mediana de `segundosAudio` de
+ * los eventos 'frase' de una reunión real, que el pipeline ya emite. Ver §15.
+ */
 const FRASE_TIPICA_S = 4
+
+/**
+ * Duraciones alternativas con las que se recalcula el veredicto, para que el
+ * informe pueda decir si la conclusión aguanta o depende del supuesto.
+ */
+const FRASES_ALTERNATIVAS_S = [3, 5]
 
 /** Umbrales sobre la latencia estimada de una frase típica. */
 const UMBRAL_COMODO_MS = 1500
@@ -122,9 +152,7 @@ async function ejecutar ({ transcriber, translator, wavItaliano, perfil }, opts 
   const msPorSegundo = percentil(total, 95) / segundosAudio
   const latenciaFraseMs = Math.round(msPorSegundo * FRASE_TIPICA_S)
 
-  const veredicto = latenciaFraseMs <= UMBRAL_COMODO_MS ? 'sobrado'
-    : latenciaFraseMs <= UMBRAL_JUSTO_MS ? 'justo'
-    : 'no-llega'
+  const veredicto = clasificar(latenciaFraseMs)
 
   return {
     ok: true,
@@ -133,6 +161,17 @@ async function ejecutar ({ transcriber, translator, wavItaliano, perfil }, opts 
     consecuencia: frase(veredicto, latenciaFraseMs),
     accion: accion(veredicto),
     latenciaFraseMs,
+    // La medida cruda, que no depende de ningún supuesto: cuántos ms cuesta
+    // cada segundo de audio. Todo lo de arriba se deriva de esto multiplicado
+    // por FRASE_TIPICA_S, que NO está medido.
+    msPorSegundoAudio: Math.round(msPorSegundo),
+    supuestoFraseS: FRASE_TIPICA_S,
+    // Si el veredicto cambia al mover el supuesto, el informe tiene que
+    // decirlo: es la diferencia entre "local gratis" y "0,15 USD la hora".
+    sensibilidad: FRASES_ALTERNATIVAS_S.map(s => {
+      const ms = Math.round(msPorSegundo * s)
+      return { fraseS: s, latenciaFraseMs: ms, veredicto: clasificar(ms) }
+    }),
     medidas: {
       segundosAudio: +segundosAudio.toFixed(2),
       muestras: total.length,
@@ -162,6 +201,11 @@ async function ejecutar ({ transcriber, translator, wavItaliano, perfil }, opts 
     memoriaLibreGB: perfil?.memoria?.libreGB ?? null,
     },
   }
+}
+
+/** Un solo sitio donde viven los umbrales. */
+function clasificar (ms) {
+  return ms <= UMBRAL_COMODO_MS ? 'sobrado' : ms <= UMBRAL_JUSTO_MS ? 'justo' : 'no-llega'
 }
 
 /** La consecuencia en el idioma del usuario, que es lo único que percibe. */
@@ -217,4 +261,4 @@ function informe (r, perfil) {
 }
 
 module.exports = { ejecutar, informe, UMBRAL_COMODO_MS, UMBRAL_JUSTO_MS, FRASE_TIPICA_S }
-module.exports._internos = { percentil, muestrasDeWav, frase, accion }
+module.exports._internos = { percentil, muestrasDeWav, frase, accion, clasificar, FRASES_ALTERNATIVAS_S }

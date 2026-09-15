@@ -36,21 +36,33 @@ const ES_WINDOWS = process.platform === 'win32'
 /**
  * Códigos de salida de Windows que significan algo concreto.
  *
- * Verificado en una VM de Windows real: sin el runtime de MSVC,
- * `whisper-server.exe` muere con 0xC0000135 antes de imprimir nada. Sin esta
- * traducción, el usuario solo ve "terminó con código 3221225781", que no le
- * dice qué hacer.  [medido]
+ * Solo el primero está observado: en una VM de Windows real, sin el runtime de
+ * MSVC, `whisper-server.exe` murió con 0xC0000135 antes de imprimir nada
+ * `[verificado]`. Sin esta traducción el usuario solo ve "terminó con código
+ * 3221225781", que no le dice qué hacer.
+ *
+ * Los otros tres NO se han observado nunca aquí: son la conversión de la
+ * constante NTSTATUS documentada `[por medir]`. La cabecera de esta tabla
+ * llevaba antes un `[medido]` que los cubría a todos, y con él se colaron dos
+ * errores: `3221225595` estaba etiquetado como 0xC0000139 cuando en realidad es
+ * **0xC000007B**, y el 0xC0000139 de verdad —3221225785— no estaba en la tabla,
+ * así que ese fallo nunca se habría traducido. La prueba que recorría la tabla
+ * solo comprobaba que los textos no estuvieran vacíos, nunca la aritmética.
  */
 const CODIGOS_WINDOWS = {
-  3221225781: {                                   // 0xC0000135 STATUS_DLL_NOT_FOUND
-    causa: 'falta una DLL del sistema',
-    arreglo: 'ejecuta vc_redist.x64.exe, que viene en la carpeta del programa, y reinténtalo',
+  3221225781: {                                   // 0xC0000135 STATUS_DLL_NOT_FOUND  [verificado]
+    causa: 'falta una DLL junto al ejecutable',
+    arreglo: 'comprueba la carpeta con: node herramientas/dependencias-windows.js <carpeta bin>, y envía este informe',
   },
-  3221225595: {                                   // 0xC0000139 ENTRYPOINT_NOT_FOUND
+  3221225785: {                                   // 0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND  [por medir]
     causa: 'una DLL está presente pero es de otra versión',
-    arreglo: 'reinstala el runtime de Microsoft con vc_redist.x64.exe',
+    arreglo: 'hay una DLL del sistema tapando a la que trae el programa; envía este informe',
   },
-  3221225477: {                                   // 0xC0000005 ACCESS_VIOLATION
+  3221225595: {                                   // 0xC000007B STATUS_INVALID_IMAGE_FORMAT  [por medir]
+    causa: 'un binario es de otra arquitectura o está corrupto',
+    arreglo: 'la descarga puede haberse dañado; vuelve a descargar el programa',
+  },
+  3221225477: {                                   // 0xC0000005 STATUS_ACCESS_VIOLATION  [por medir]
     causa: 'el proceso falló por violación de acceso',
     arreglo: 'suele indicar incompatibilidad de CPU; envía este informe',
   },
@@ -85,6 +97,15 @@ function explicarCodigo (code) {
 
 // Contexto de audio recortado: el gran ahorro frente a decodificar los 30 s
 // completos. La ganancia real está [por medir] en el equipo del cliente.
+/**
+ * Topes de hilos. Ninguno es un óptimo demostrado: son los límites hasta donde
+ * llega la medición, y están puestos para errar por lo bajo a propósito.
+ * Ver `hilosRecomendados()` para las cifras y el porqué.
+ */
+const HILOS_MIN = 2
+const HILOS_MAX = 6              // no hay medición por encima de 6  [por medir]
+const RESERVA_VIDEOLLAMADA = 4   // núcleos que se le dejan a Teams   [por medir]
+
 const AUDIO_CTX = 512
 
 /** Pide al sistema un puerto libre. Nunca fijamos uno: chocaría con otra app. */
@@ -108,10 +129,10 @@ class Transcriber {
    * @param {string} opts.modelo   ruta al modelo ggml multilingüe
    * @param {number} [opts.hilos]  hilos de cómputo
    */
-  constructor ({ binario, modelo, hilos, nucleosFisicos }) {
+  constructor ({ binario, modelo, hilos }) {
     this.binario = binario
     this.modelo = modelo
-    this.hilos = hilos || Transcriber.hilosRecomendados(nucleosFisicos)
+    this.hilos = hilos || Transcriber.hilosRecomendados()
     this.proc = null
     this.puerto = null
     this._limpiadores = []
@@ -123,46 +144,84 @@ class Transcriber {
   }
 
   /**
-   * Hilos a usar, consciente de núcleos híbridos.
+   * Hilos de cómputo para whisper.
    *
-   * No es "núcleos − 2": en un i9-13900HX (8 P + 16 E) eso daría 22 hilos y
-   * rendiría PEOR que usar solo los 8 P-cores, porque whisper.cpp reparte el
-   * trabajo por igual y los núcleos rápidos acabarían esperando a los lentos.
-   * Distinguir P de E no se puede leer desde Node sin un addon nativo, así que
-   * la heurística es conservadora y el test de admisión la validará.  [por medir]
+   * ## Lo que se midió, y por qué contradice lo que este comentario decía antes
+   *
+   * Aquí decía que pasarse de los núcleos físicos "degrada hasta 2x", con marca
+   * `[medido]`. **Nadie lo había medido**, y las tres afirmaciones que sostenían
+   * la fórmula anterior eran falsas. Estas son las mediciones reales:
+   *
+   * Apple M5, 10 núcleos (4P + 6E), sin hyperthreading, GPU apagada para que
+   * mida la CPU como el build de Windows, audio de 6,5 s:  `[medido]`
+   *
+   * |  hilos | en reposo | con 4 de 10 núcleos ocupados |
+   * |-------:|----------:|-----------------------------:|
+   * |      2 |         — |                     2.775 ms |
+   * |      3 |  1.435 ms |                     1.892 ms |
+   * |      4 |  1.203 ms |                     1.632 ms |
+   * |      6 |  1.006 ms |                 **1.500 ms** |
+   * |      8 |  **909 ms** |                   2.158 ms |
+   * |     10 |  1.360 ms |                     4.465 ms |
+   * |     12 | **73.652 ms** |                        — |
+   *
+   * HP Pavilion i5-10210U, 4 físicos / 8 lógicos, 15 W, en reposo:  `[medido]`
+   * 6 hilos → whisper p50 1.983 ms · 3 hilos → 4.246 ms
+   *
+   * ## Las tres cosas que esas cifras establecen
+   *
+   * 1. **El óptimo se mueve según la carga.** En reposo gana 8; con cuatro
+   *    núcleos ocupados gana 6, y 8 pasa a ser 1,4x peor. La app **nunca** corre
+   *    en reposo: corre con la videollamada que la hizo necesaria. Un óptimo
+   *    medido con la máquina quieta mide el escenario equivocado, y por eso
+   *    aquí no hay barrido en el arranque.
+   * 2. **El óptimo es aproximadamente el número de núcleos LIBRES**, no de
+   *    núcleos físicos: con 4 de 10 ocupados, el mejor fue exactamente 6.
+   * 3. **El error es asimétrico, y por eso la regla yerra por lo bajo.**
+   *    Quedarse corto cuesta entre un 10% y un 30%. Pasarse cuesta 1,4x y luego
+   *    se cae por un precipicio: 12 hilos sobre 10 núcleos dieron **81 veces**
+   *    más tiempo. La causa está en el código de ggml y no es una anomalía: la
+   *    barrera entre hilos es **espera activa** (`ggml_thread_cpu_relax`, que es
+   *    `_mm_pause` en x86 y `yield` en ARM). Un hilo que espera no se duerme:
+   *    quema el núcleo que otro hilo necesita para avanzar.
+   *
+   * whisper.cpp usa por defecto `min(4, hardware_concurrency)` — el `--help` del
+   * binario que empaquetamos imprime `[4]` en una máquina de 10 núcleos
+   * `[verificado]`. Upstream no consulta núcleos físicos en ningún sitio: esa
+   * distinción viene del dominio del álgebra densa, donde sí importa, y aquí se
+   * dio por buena sin comprobarla.
+   *
+   * ## Lo que sigue sin medirse
+   *
+   * Las dos constantes salen de una sola máquina. Cuántos núcleos reserva de
+   * verdad una videollamada de Teams, y dónde está el óptimo en el i9-13900HX
+   * y en el Ryzen 7 del cliente, está **`[por medir]`**. Para eso existe
+   * `WHISPER_HILOS`, y el informe dice siempre con qué valor se midió.
    */
-  static hilosRecomendados (nucleosFisicos) {
-    // Anulación manual. Existe por dos motivos reales:
-    //  · En una máquina virtual la heurística se queda corta: está calibrada
-    //    sobre los núcleos lógicos de una CPU híbrida real (32 en el i9 del
-    //    cliente), y con 8 vCPU daría 2 hilos y una medición falsamente mala.
-    //  · El test de admisión debe poder probar varios valores y quedarse con
-    //    el mejor, en vez de confiar en una deducción que no se puede verificar.
+  static hilosRecomendados ({ logicos } = {}) {
     const forzado = parseInt(process.env.WHISPER_HILOS || '', 10)
     if (Number.isFinite(forzado) && forzado > 0) return forzado
 
-    const cpus = require('os').cpus()
-    const logicos = cpus.length
-    const limpio = (cpus[0]?.model || '').replace(/\((?:r|tm|c)\)/gi, ' ')
-    // Intel de 12ª en adelante es híbrido; Apple Silicon también tiene E-cores.
-    const esHibrido = /\b1[2-9]th\b|core\s*ultra|apple\s+m\d/i.test(limpio)
+    // availableParallelism() respeta límites de cgroup y de afinidad; cpus()
+    // no. En un contenedor o una VM con la CPU limitada, cpus() cuenta los del
+    // anfitrión y nos llevaría directos al precipicio.
+    const n = Number.isFinite(logicos) ? logicos : Transcriber.logicosDisponibles()
+    if (!Number.isFinite(n) || n < 1) return HILOS_MIN   // os.cpus() vacío: pasa en contenedores
 
-    // Nunca más hilos que núcleos FÍSICOS.
-    //
-    // Medido en un HP Pavilion con i5-10210U (4 físicos, 8 lógicos): la versión
-    // anterior calculaba sobre los lógicos y pedía 6 hilos, o sea un 50% de
-    // sobresuscripción. Está medido que pasarse de los físicos degrada hasta 2x,
-    // porque los hilos hermanos compiten por la misma unidad de ejecución.  [medido]
-    const tope = nucleosFisicos > 0 ? nucleosFisicos : Math.ceil(logicos / 2)
+    // El suelo no puede pasarse de los núcleos que hay: en una máquina de 1
+    // vCPU, pedir 2 hilos ya es sobresuscripción, y el precipicio está medido.
+    return Math.max(
+      Math.min(HILOS_MIN, n),
+      Math.min(HILOS_MAX, n - RESERVA_VIDEOLLAMADA)
+    )
+  }
 
-    if (esHibrido) {
-      // En híbrida el objetivo son los P-cores, que no se pueden contar desde
-      // Node. Un tercio de los lógicos se aproxima bien: 32 lógicos → 8, que es
-      // exactamente el número de P del i9-13900HX.
-      return Math.max(2, Math.min(8, tope, Math.floor(logicos / 3)))
-    }
-    // Uno menos que los físicos, para dejar sitio a la videollamada.
-    return Math.max(2, Math.min(tope - 1, tope))
+  /** Núcleos que el proceso puede usar de verdad. */
+  static logicosDisponibles () {
+    const os = require('os')
+    return typeof os.availableParallelism === 'function'
+      ? os.availableParallelism()
+      : os.cpus().length
   }
 
   /** Arranca el servidor y espera a que responda. Idempotente. */
