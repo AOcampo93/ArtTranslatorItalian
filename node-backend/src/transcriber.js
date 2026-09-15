@@ -33,6 +33,36 @@ const fs = require('fs')
 
 const ES_WINDOWS = process.platform === 'win32'
 
+/**
+ * Códigos de salida de Windows que significan algo concreto.
+ *
+ * Verificado en una VM de Windows real: sin el runtime de MSVC,
+ * `whisper-server.exe` muere con 0xC0000135 antes de imprimir nada. Sin esta
+ * traducción, el usuario solo ve "terminó con código 3221225781", que no le
+ * dice qué hacer.  [medido]
+ */
+const CODIGOS_WINDOWS = {
+  3221225781: {                                   // 0xC0000135 STATUS_DLL_NOT_FOUND
+    causa: 'falta una DLL del sistema',
+    arreglo: 'ejecuta vc_redist.x64.exe, que viene en la carpeta del programa, y reinténtalo',
+  },
+  3221225595: {                                   // 0xC0000139 ENTRYPOINT_NOT_FOUND
+    causa: 'una DLL está presente pero es de otra versión',
+    arreglo: 'reinstala el runtime de Microsoft con vc_redist.x64.exe',
+  },
+  3221225477: {                                   // 0xC0000005 ACCESS_VIOLATION
+    causa: 'el proceso falló por violación de acceso',
+    arreglo: 'suele indicar incompatibilidad de CPU; envía este informe',
+  },
+}
+
+/** Traduce un código de salida a algo que el usuario pueda accionar. */
+function explicarCodigo (code) {
+  const m = CODIGOS_WINDOWS[code]
+  if (!m) return `terminó con código ${code}`
+  return `${m.causa} (0x${(code >>> 0).toString(16).toUpperCase()}). ${m.arreglo}`
+}
+
 // Contexto de audio recortado: el gran ahorro frente a decodificar los 30 s
 // completos. La ganancia real está [por medir] en el equipo del cliente.
 const AUDIO_CTX = 512
@@ -65,6 +95,7 @@ class Transcriber {
     this.proc = null
     this.puerto = null
     this._limpiadores = []
+    this._ultimoError = null
   }
 
   /**
@@ -127,7 +158,10 @@ class Transcriber {
       if (s) console.log('[whisper]', s.split('\n')[0])
     })
     this.proc.on('exit', (code) => {
-      if (code) console.warn(`[whisper] el servidor terminó con código ${code}`)
+      if (code) {
+        this._ultimoError = explicarCodigo(code)
+        console.warn(`[whisper] ${this._ultimoError}`)
+      }
       this.proc = null
     })
 
@@ -151,7 +185,11 @@ class Transcriber {
   async _esperarListo (maxMs = 60000) {
     const t0 = Date.now()
     while (Date.now() - t0 < maxMs) {
-      if (!this.proc) throw new Error('whisper-server murió durante el arranque')
+      if (!this.proc) {
+        throw new Error(this._ultimoError
+          ? `whisper-server no arrancó: ${this._ultimoError}`
+          : 'whisper-server murió durante el arranque')
+      }
       try {
         const r = await fetch(`http://127.0.0.1:${this.puerto}/`, {
           signal: AbortSignal.timeout(1000),
@@ -229,4 +267,4 @@ function limpiar (texto) {
 }
 
 module.exports = { Transcriber, AUDIO_CTX }
-module.exports._internos = { limpiar, puertoLibre }
+module.exports._internos = { limpiar, puertoLibre, explicarCodigo, CODIGOS_WINDOWS }

@@ -39,7 +39,7 @@ se discute y se cambia el documento; no se salta.
 | 8 | Job Object con `KILL_ON_JOB_CLOSE` para los procesos hijo | `whisper-server` huérfano comiendo 700 MB y ocupando el puerto |
 | 9 | Hilos **conscientes de núcleos híbridos**, nunca `núcleos − 2` | En el i9-13900HX serían 22 hilos y rendiría **peor** que usando 8 |
 | 10 | **VAD + `-ac 512` + paso adaptativo**, siempre | La ventana de 30 s del encoder hunde los dos equipos |
-| 11 | Leer `audioContext.sampleRate`, **nunca asumir 48 kHz** | Remuestreo erróneo: todo "funciona" y el WER se dispara sin que nadie lo note |
+| 11 | Leer `audioContext.sampleRate`, **nunca asumir 48 kHz** | Remuestreo erróneo: todo "funciona" y el WER se dispara sin que nadie lo note. **Confirmado en Windows real: el equipo de prueba entregó 44100 Hz** `[medido]` |
 | 12 | Ventana de silencio de **20-30 s**, aviso no modal en el medidor | Falsos positivos cada pocos minutos; el usuario aprende a ignorar el aviso |
 | 13 | Llamadas de red con el módulo **`net` de Electron**, no el `https` de Node | Un proxy corporativo con inspección TLS rompe la app de forma indepurable a distancia |
 | 14 | API keys por **`safeStorage`**, jamás en `.env` ni en `electron-store` en claro | Las credenciales del cliente en texto plano en su disco |
@@ -952,7 +952,7 @@ no hacer falta.
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
 | **No tenemos su entorno**: ni Windows nativo, ni GPU NVIDIA, ni un driver con Mezcla estéreo | **alto** | La build de diagnóstico (§14) mide en sus equipos antes de construir. La ruta GPU sale de la v1 por no poder ejecutarla |
-| El `loopback` no capta la app de videollamada concreta del cliente, y **falla en silencio** | **alto** | La ruta B con selector de origen se construye en la fase 2, no se deja como contingencia (§6). El medidor de nivel detecta el fallo a los 5 s y la app ofrece B con un clic; la elección se recuerda |
+| El `loopback` no capta la app de videollamada concreta del cliente, y **falla en silencio** | ~~alto~~ **medio** — probado en Windows: capta el tono `[medido]`. Queda por ver con una videollamada real | La ruta B con selector de origen se construye en la fase 2, no se deja como contingencia (§6). El medidor de nivel detecta el fallo a los 5 s y la app ofrece B con un clic; la elección se recuerda |
 | Falta el VC++ Redistributable y el binario no arranca | **alto** | Encadenar el redist en el instalador; embarcar las 4 DLL como respaldo |
 | El salto de Electron 28 → 43 rompe cosas del original | medio | Es la fase 0 a propósito: que falle al principio y no al final |
 | El despacho de DLL falla en silencio por el empaquetado | medio | Loguear la variante cargada al arrancar como health check |

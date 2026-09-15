@@ -34,7 +34,15 @@ necesitan y no viene con Windows.
 Ejecuta "vc_redist.x64.exe", que está en esta misma carpeta, acepta la
 instalación, y vuelve a intentarlo.
 
-Si aun así no abre, ejecútala desde la terminal para ver el error:
+Si aun así no abre, ejecútala desde la terminal para ver el error.
+
+En PowerShell (la ventana azul), hace falta el símbolo & delante, o solo
+imprimirá el nombre sin ejecutar nada:
+
+    $env:DIAG_AUTO = "1"
+    & ".\Diagnostico Traductor Italiano.exe"
+
+En Símbolo del sistema (la ventana negra, cmd):
 
     set DIAG_AUTO=1
     "Diagnostico Traductor Italiano.exe"
@@ -50,6 +58,13 @@ queda corta: el cálculo está pensado para un procesador físico completo. Para
 que la medición sea representativa, fuerza el número de hilos antes de abrirla.
 
 Desde la terminal, en la carpeta del programa:
+
+En PowerShell:
+
+    $env:WHISPER_HILOS = "6"
+    & ".\Diagnostico Traductor Italiano.exe"
+
+En cmd:
 
     set WHISPER_HILOS=6
     "Diagnostico Traductor Italiano.exe"

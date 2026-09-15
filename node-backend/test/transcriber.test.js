@@ -37,6 +37,31 @@ describe('limpieza de artefactos de whisper', () => {
   })
 })
 
+describe('códigos de salida de Windows', () => {
+  // Medido en una VM real: sin el runtime de MSVC, whisper-server muere con
+  // 0xC0000135 antes de imprimir nada. Un número suelto no le dice al usuario
+  // qué hacer; el mensaje sí.
+  test('0xC0000135 se traduce a "falta una DLL" con su arreglo', () => {
+    const m = _internos.explicarCodigo(3221225781)
+    assert.match(m, /falta una DLL/i)
+    assert.match(m, /vc_redist/i, 'debe decir qué ejecutar')
+    assert.match(m, /C0000135/, 'debe mostrar el código en hexadecimal')
+  })
+
+  test('un código desconocido no se inventa una causa', () => {
+    const m = _internos.explicarCodigo(42)
+    assert.match(m, /terminó con código 42/)
+    assert.doesNotMatch(m, /vc_redist/)
+  })
+
+  test('los códigos conocidos traen causa y arreglo', () => {
+    for (const [code, info] of Object.entries(_internos.CODIGOS_WINDOWS)) {
+      assert.ok(info.causa, `${code} sin causa`)
+      assert.ok(info.arreglo, `${code} sin arreglo accionable`)
+    }
+  })
+})
+
 describe('elección de hilos', () => {
   test('nunca devuelve menos de 2 ni más que los núcleos lógicos', () => {
     const n = Transcriber.hilosRecomendados()
