@@ -77,6 +77,15 @@ class Transcriber {
    * la heurística es conservadora y el test de admisión la validará.  [por medir]
    */
   static hilosRecomendados () {
+    // Anulación manual. Existe por dos motivos reales:
+    //  · En una máquina virtual la heurística se queda corta: está calibrada
+    //    sobre los núcleos lógicos de una CPU híbrida real (32 en el i9 del
+    //    cliente), y con 8 vCPU daría 2 hilos y una medición falsamente mala.
+    //  · El test de admisión debe poder probar varios valores y quedarse con
+    //    el mejor, en vez de confiar en una deducción que no se puede verificar.
+    const forzado = parseInt(process.env.WHISPER_HILOS || '', 10)
+    if (Number.isFinite(forzado) && forzado > 0) return forzado
+
     const cpus = require('os').cpus()
     const logicos = cpus.length
     const nombre = (cpus[0]?.model || '').toLowerCase()

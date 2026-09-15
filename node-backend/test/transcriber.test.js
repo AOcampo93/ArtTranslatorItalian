@@ -44,6 +44,21 @@ describe('elección de hilos', () => {
     assert.ok(n <= require('os').cpus().length, `devolvió ${n}`)
   })
 
+  test('WHISPER_HILOS anula la heurística', () => {
+    // Necesario en máquina virtual: la heurística está calibrada sobre los
+    // núcleos lógicos de una CPU híbrida real y con pocos vCPU se queda corta.
+    const previo = process.env.WHISPER_HILOS
+    try {
+      process.env.WHISPER_HILOS = '6'
+      assert.strictEqual(Transcriber.hilosRecomendados(), 6)
+      process.env.WHISPER_HILOS = 'nada'
+      assert.ok(Transcriber.hilosRecomendados() >= 2, 'un valor inválido cae a la heurística')
+    } finally {
+      if (previo === undefined) delete process.env.WHISPER_HILOS
+      else process.env.WHISPER_HILOS = previo
+    }
+  })
+
   test('en CPU híbrida no usa todos los núcleos', () => {
     // El fallo que esto previene: en un i9-13900HX (8 P + 16 E) usar 22 hilos
     // rinde PEOR que usar 8, porque los P-cores esperan a los E-cores.

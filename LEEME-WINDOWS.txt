@@ -42,6 +42,21 @@ Si aun así no abre, ejecútala desde la terminal para ver el error:
 Eso hace todo automáticamente y escribe el informe sin usar la ventana.
 
 
+SI ESTO CORRE EN UNA MÁQUINA VIRTUAL
+------------------------------------
+
+La aplicación decide sola cuántos núcleos usar, y en una máquina virtual se
+queda corta: el cálculo está pensado para un procesador físico completo. Para
+que la medición sea representativa, fuerza el número de hilos antes de abrirla.
+
+Desde la terminal, en la carpeta del programa:
+
+    set WHISPER_HILOS=6
+    "Diagnostico Traductor Italiano.exe"
+
+Usa aproximadamente la mitad de los vCPU que le hayas dado a la máquina virtual.
+
+
 QUÉ MIDE
 --------
 
