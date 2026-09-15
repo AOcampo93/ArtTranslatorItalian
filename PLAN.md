@@ -39,7 +39,7 @@ se discute y se cambia el documento; no se salta.
 | 8 | Job Object con `KILL_ON_JOB_CLOSE` para los procesos hijo | `whisper-server` huérfano comiendo 700 MB y ocupando el puerto |
 | 9 | Hilos **conscientes de núcleos híbridos**, nunca `núcleos − 2` | En el i9-13900HX serían 22 hilos y rendiría **peor** que usando 8 |
 | 10 | **VAD + `-ac 512` + paso adaptativo**, siempre | La ventana de 30 s del encoder hunde los dos equipos |
-| 11 | Leer `audioContext.sampleRate`, **nunca asumir 48 kHz** | Remuestreo erróneo: todo "funciona" y el WER se dispara sin que nadie lo note. **Confirmado en Windows real: el equipo de prueba entregó 44100 Hz** `[medido]` |
+| 11 | Leer `audioContext.sampleRate`, **nunca asumir 48 kHz** | Remuestreo erróneo: todo "funciona" y el WER se dispara sin que nadie lo note. **Confirmado en DOS máquinas Windows con valores DISTINTOS: 44100 Hz en una y 48000 Hz en otra** `[medido]`. Fijar cualquiera de los dos habría roto la otra en silencio |
 | 12 | Ventana de silencio de **20-30 s**, aviso no modal en el medidor | Falsos positivos cada pocos minutos; el usuario aprende a ignorar el aviso |
 | 13 | Llamadas de red con el módulo **`net` de Electron**, no el `https` de Node | Un proxy corporativo con inspección TLS rompe la app de forma indepurable a distancia |
 | 14 | API keys por **`safeStorage`**, jamás en `.env` ni en `electron-store` en claro | Las credenciales del cliente en texto plano en su disco |
@@ -227,7 +227,19 @@ audio del sistema  ──loopback──►  48→16 kHz mono Float32
                refina término · detecta pregunta
 ```
 
-Marian: **p50 67 ms, rango 56-139 ms, 101 MB quantizado, BLEU 61.2 it→es** `[medido]`.
+Marian: **101 MB quantizado, BLEU 61.2 it→es**, pero la latencia **depende mucho
+de la máquina** y presentarla como un solo número sería engañoso `[medido]`:
+
+| Máquina | Whisper p50 | Marian p50 | Frase típica |
+|---|---|---|---|
+| Apple M5 (desarrollo) | 185 ms | 67 ms | ~0,3 s |
+| HP Pavilion i5-10210U, 15 W | **1.983 ms** | **578 ms** | **~1,7 s** |
+
+El HP es un ultraportátil de 2019 con 4 núcleos a 1,6 GHz, y está cerca del
+mínimo declarado en §3: es el suelo, no el caso típico. El i9-13900HX del
+cliente tiene 8 P-cores a 5,4 GHz y debería quedar mucho más cerca del primero
+que del segundo — **pero eso sigue `[por medir]` hasta que ejecute el
+diagnóstico en su equipo.**
 El rango tiene dos extremos por un motivo: 120-139 ms fue la primera medición con
 carga en frío y frases largas; 56-74 ms es lo que da ya integrado, con el modelo
 caliente y reutilizado entre llamadas — que es como funcionará en producción.
@@ -363,8 +375,9 @@ cuando el selector del sistema está disponible, **nuestro handler no se invoca*
 `[verificado]` — perderíamos `audio: 'loopback'` justo en el camino A. B se construye con
 selector propio.
 
-**Mezcla estéreo tiene una reserva honesta:** depende del driver. Realtek suele traerla,
-muchos drivers Intel SST y USB no `[por medir]`. Los dos equipos del cliente son PC gamer,
+**Mezcla estéreo confirmada como ausente en portátil moderno** `[medido]`: un HP Pavilion
+con audio Realtek expone tres dispositivos de entrada y **ninguno es Mezcla estéreo**. La
+suposición de que "Realtek suele traerla" era falsa para portátiles. Los dos equipos del cliente son PC gamer,
 así que es probable que esté, pero la app tiene que **detectar si existe antes de
 ofrecerla** en lugar de prometerla.
 
@@ -952,7 +965,7 @@ no hacer falta.
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
 | **No tenemos su entorno**: ni Windows nativo, ni GPU NVIDIA, ni un driver con Mezcla estéreo | **alto** | La build de diagnóstico (§14) mide en sus equipos antes de construir. La ruta GPU sale de la v1 por no poder ejecutarla |
-| El `loopback` no capta la app de videollamada concreta del cliente, y **falla en silencio** | ~~alto~~ **medio** — probado en Windows: capta el tono `[medido]`. Queda por ver con una videollamada real | La ruta B con selector de origen se construye en la fase 2, no se deja como contingencia (§6). El medidor de nivel detecta el fallo a los 5 s y la app ofrece B con un clic; la elección se recuerda |
+| El `loopback` no capta la app de videollamada concreta del cliente, y **falla en silencio** | ~~alto~~ **medio** — confirmado en **dos** máquinas Windows distintas, VM y portátil real `[medido]`. Queda por ver con una videollamada real | La ruta B con selector de origen se construye en la fase 2, no se deja como contingencia (§6). El medidor de nivel detecta el fallo a los 5 s y la app ofrece B con un clic; la elección se recuerda |
 | Falta el VC++ Redistributable y el binario no arranca | **alto** | Encadenar el redist en el instalador; embarcar las 4 DLL como respaldo |
 | El salto de Electron 28 → 43 rompe cosas del original | medio | Es la fase 0 a propósito: que falle al principio y no al final |
 | El despacho de DLL falla en silencio por el empaquetado | medio | Loguear la variante cargada al arrancar como health check |

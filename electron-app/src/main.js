@@ -127,7 +127,9 @@ ipcMain.handle('diagnostico:backend', async () => {
   const translator = require(path.join(backend, 'translator'))
   const admision = require(path.join(backend, 'admissionTest'))
 
-  const tr = new Transcriber({ binario, modelo })
+  // Se le pasan los núcleos FÍSICOS del perfil: sin ese dato la heurística
+  // calcula sobre los lógicos y sobresuscribe, que es lo que pasó en el HP.
+  const tr = new Transcriber({ binario, modelo, nucleosFisicos: perfil?.cpu?.nucleosFisicos })
   try {
     await tr.start()
     await translator.cargar()

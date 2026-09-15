@@ -69,6 +69,24 @@ describe('elección de hilos', () => {
     assert.ok(n <= require('os').cpus().length, `devolvió ${n}`)
   })
 
+  test('NUNCA pide más hilos que núcleos físicos', () => {
+    // El fallo medido en el HP Pavilion: i5-10210U con 4 físicos y 8 lógicos,
+    // la heurística calculaba sobre los lógicos y pedía 6. Está medido que
+    // pasarse de los físicos degrada hasta 2x.
+    for (const fisicos of [2, 4, 6, 8, 12, 24]) {
+      const n = Transcriber.hilosRecomendados(fisicos)
+      assert.ok(n <= fisicos, `con ${fisicos} físicos pidió ${n} hilos`)
+      assert.ok(n >= 2, `con ${fisicos} físicos pidió solo ${n}`)
+    }
+  })
+
+  test('sin dato de físicos, asume la mitad de los lógicos', () => {
+    // Es lo correcto en cualquier CPU con hyperthreading o SMT.
+    const n = Transcriber.hilosRecomendados()
+    assert.ok(n <= Math.ceil(require('os').cpus().length / 2),
+      'sin el dato debe ser conservador, no optimista')
+  })
+
   test('WHISPER_HILOS anula la heurística', () => {
     // Necesario en máquina virtual: la heurística está calibrada sobre los
     // núcleos lógicos de una CPU híbrida real y con pocos vCPU se queda corta.

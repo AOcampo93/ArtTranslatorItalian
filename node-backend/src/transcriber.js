@@ -108,10 +108,10 @@ class Transcriber {
    * @param {string} opts.modelo   ruta al modelo ggml multilingüe
    * @param {number} [opts.hilos]  hilos de cómputo
    */
-  constructor ({ binario, modelo, hilos }) {
+  constructor ({ binario, modelo, hilos, nucleosFisicos }) {
     this.binario = binario
     this.modelo = modelo
-    this.hilos = hilos || Transcriber.hilosRecomendados()
+    this.hilos = hilos || Transcriber.hilosRecomendados(nucleosFisicos)
     this.proc = null
     this.puerto = null
     this._limpiadores = []
@@ -131,7 +131,7 @@ class Transcriber {
    * Distinguir P de E no se puede leer desde Node sin un addon nativo, así que
    * la heurística es conservadora y el test de admisión la validará.  [por medir]
    */
-  static hilosRecomendados () {
+  static hilosRecomendados (nucleosFisicos) {
     // Anulación manual. Existe por dos motivos reales:
     //  · En una máquina virtual la heurística se queda corta: está calibrada
     //    sobre los núcleos lógicos de una CPU híbrida real (32 en el i9 del
@@ -143,11 +143,26 @@ class Transcriber {
 
     const cpus = require('os').cpus()
     const logicos = cpus.length
-    const nombre = (cpus[0]?.model || '').toLowerCase()
+    const limpio = (cpus[0]?.model || '').replace(/\((?:r|tm|c)\)/gi, ' ')
     // Intel de 12ª en adelante es híbrido; Apple Silicon también tiene E-cores.
-    const esHibrido = /12th|13th|14th|15th|core ultra|apple m/.test(nombre)
-    if (esHibrido) return Math.max(2, Math.min(8, Math.floor(logicos / 3)))
-    return Math.max(2, logicos - 2)
+    const esHibrido = /\b1[2-9]th\b|core\s*ultra|apple\s+m\d/i.test(limpio)
+
+    // Nunca más hilos que núcleos FÍSICOS.
+    //
+    // Medido en un HP Pavilion con i5-10210U (4 físicos, 8 lógicos): la versión
+    // anterior calculaba sobre los lógicos y pedía 6 hilos, o sea un 50% de
+    // sobresuscripción. Está medido que pasarse de los físicos degrada hasta 2x,
+    // porque los hilos hermanos compiten por la misma unidad de ejecución.  [medido]
+    const tope = nucleosFisicos > 0 ? nucleosFisicos : Math.ceil(logicos / 2)
+
+    if (esHibrido) {
+      // En híbrida el objetivo son los P-cores, que no se pueden contar desde
+      // Node. Un tercio de los lógicos se aproxima bien: 32 lógicos → 8, que es
+      // exactamente el número de P del i9-13900HX.
+      return Math.max(2, Math.min(8, tope, Math.floor(logicos / 3)))
+    }
+    // Uno menos que los físicos, para dejar sitio a la videollamada.
+    return Math.max(2, Math.min(tope - 1, tope))
   }
 
   /** Arranca el servidor y espera a que responda. Idempotente. */
