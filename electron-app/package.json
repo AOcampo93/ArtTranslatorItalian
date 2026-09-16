@@ -47,6 +47,13 @@
         ]
       },
       {
+        "from": "../shared",
+        "to": "shared",
+        "filter": [
+          "**/*.js"
+        ]
+      },
+      {
         "from": "../LEEME-WINDOWS.txt",
         "to": "LEEME.txt"
       }

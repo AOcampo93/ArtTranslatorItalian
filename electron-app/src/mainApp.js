@@ -39,6 +39,8 @@ const traductor = require(path.join(BACK, 'translator'))
 const contexto = require(path.join(BACK, 'contexto'))
 const db = require(path.join(BACK, 'db'))
 const { Autosave } = require(path.join(BACK, 'autosave'))
+const { MotorRespuestas, MotorResumen } = require(path.join(BACK, 'respuestas'))
+const { crearLlamador } = require(path.join(BACK, 'llm'))
 
 let ventana = null
 let sesion = null          // { transcriptor, traductor, autosave, inicio, ... }
@@ -114,6 +116,62 @@ const aRenderer = (canal, datos) => {
   if (ventana && !ventana.isDestroyed()) ventana.webContents.send(canal, datos)
 }
 
+// ── Preguntas, respuestas y contexto general ──────────────────────────
+/**
+ * Monta los dos motores que hablan con el LLM y los engancha a la interfaz.
+ *
+ * **Si no hay clave de LLM, la reunión sigue.** Las burbujas de traducción son
+ * el producto; las respuestas sugeridas son el extra. Lo que no puede pasar es
+ * que el panel se quede mudo sin decir por qué: se manda el motivo y ahí queda
+ * escrito mientras dure la reunión.
+ *
+ * El proveedor sale del prefijo de la clave (ver `node-backend/src/llm.js`):
+ * el usuario pega una sola clave en Ajustes y no elige nada más.
+ */
+function montarMotores ({ perfil, ctx, claveLlm }) {
+  let llamar = null
+  let motivo = 'Para ver aquí respuestas sugeridas, añade una clave en Ajustes.'
+
+  if (claveLlm) {
+    try {
+      llamar = crearLlamador({ clave: claveLlm })
+    } catch (err) {
+      motivo = err.message
+    }
+  }
+  if (!llamar) {
+    aRenderer('app:avisoPreguntas', motivo)
+    return { motor: null, resumen: null }
+  }
+
+  // El bloque se construye UNA vez y con el perfil y el contexto explícitos.
+  // Sin pasarlos, `buildContextBlock()` leería el perfil ACTIVO de la base de
+  // datos, y `crearPerfil` inserta con activo = 0: los prompts se quedarían sin
+  // saber quién es el usuario justo en la parte donde más pesa.
+  let bloque = ''
+  try {
+    bloque = contexto.buildContextBlock({ perfil, contexto: ctx }).bloque
+  } catch (err) {
+    console.error('[contexto] no se pudo construir el bloque:', err.message)
+  }
+  const bloqueContexto = () => bloque
+
+  // Se limpia el aviso: si el usuario acaba de pegar la clave y ha vuelto a
+  // empezar, el cartel de la reunión anterior ya no dice la verdad.
+  aRenderer('app:avisoPreguntas', '')
+
+  const motor = new MotorRespuestas({ llamar, bloqueContexto })
+  motor.on('pregunta', p => aRenderer('app:pregunta', { id: p.id, it: p.it, es: p.es }))
+  // La respuesta puede venir con `texto: null` y un error: se reenvía tal cual
+  // para que la tarjeta lo diga en vez de quedarse en «Preparando…».
+  motor.on('respuesta', r => aRenderer('app:respuesta', r))
+
+  const resumen = new MotorResumen({ llamar, bloqueContexto })
+  resumen.on('contexto', c => aRenderer('app:contexto', c.texto))
+
+  return { motor, resumen }
+}
+
 // ── La reunión ────────────────────────────────────────────────────────
 async function empezarSesion ({ perfil, contexto: ctx }) {
   if (sesion) return { ok: true, yaCorriendo: true }
@@ -150,7 +208,8 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   })
   autosave.abrir()
 
-  sesion = { transcriptor, autosave, idSesion, inicio: Date.now(), frases: 0 }
+  const { motor, resumen } = montarMotores({ perfil, ctx, claveLlm: claves.llm })
+  sesion = { transcriptor, autosave, idSesion, motor, resumen, inicio: Date.now(), frases: 0 }
 
   transcriptor.on('parcial', p => aRenderer('app:parcial', p.texto))
 
@@ -168,6 +227,14 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
       // frase ya está a salvo.
       autosave.escribir(frase)
       aRenderer('app:frase', frase)
+
+      // Y después de pintar, nunca antes: el triaje y el LLM no pueden
+      // retrasar la burbuja, que es lo que el usuario está leyendo.
+      // `considerar` no se espera a propósito —dentro decide si merece la
+      // llamada y emite por su cuenta—, así que aquí solo se recoge el fallo.
+      sesion.motor?.considerar(texto, tr.es)
+        .catch(e => console.error('[preguntas]', e.message))
+      sesion.resumen?.registrar(texto, tr.es)
     } catch (err) {
       aRenderer('app:estado', { clase: 'aviso', texto: `no se pudo traducir: ${err.message}` })
     }
@@ -223,6 +290,22 @@ ipcMain.handle('app:parar', () => pararSesion())
 /** El audio llega en bloques de 100 ms desde el renderer. */
 ipcMain.on('app:audio', (_e, muestras) => {
   sesion?.transcriptor.alimentar(muestras)
+})
+
+/**
+ * El botón «Otra» de una tarjeta de pregunta.
+ *
+ * Al pulsarlo el renderer ya ha puesto «Preparando…», así que **siempre tiene
+ * que llegar algo de vuelta**. Cuando no hay motor —sin clave, o la reunión ya
+ * terminó— se contesta por este mismo canal en vez de dejar la tarjeta colgada;
+ * cuando sí lo hay, el propio motor emite la respuesta o el fallo.
+ */
+ipcMain.handle('app:otraRespuesta', (_e, id) => {
+  if (!sesion?.motor) {
+    aRenderer('app:respuesta', { id, texto: null, error: 'no hay reunión en marcha' })
+    return { ok: false }
+  }
+  return { ok: sesion.motor.reintentar(id) }
 })
 
 ipcMain.handle('app:guardarClaves', (_e, claves) => {

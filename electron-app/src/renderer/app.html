@@ -112,7 +112,11 @@
   #listaPreguntas { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 
   .pregunta { background: var(--sup2); border-radius: 10px; padding: 10px 12px; border-left: 2px solid var(--aviso); }
-  .pregunta .q { font-size: 13px; margin-bottom: 8px; }
+  /* La PREGUNTA sí lleva las dos lenguas: el usuario necesita saber qué le han
+     preguntado, y esa traducción ya la hizo Marian gratis para la burbuja. */
+  .pregunta .q { font-size: 12px; color: var(--tx3); }
+  .pregunta .qes { font-size: 13px; margin-bottom: 8px; }
+  .pregunta .q:last-of-type { margin-bottom: 8px; }
   /* La respuesta va SOLO en italiano, sin glosa al español: confirmado con el
      cliente. Es para decirla en voz alta, no para entenderla. */
   .respuesta {
@@ -120,6 +124,17 @@
     padding: 9px 12px; font-size: 13.5px; line-height: 1.45;
   }
   .respuesta.cargando { color: var(--tx3); font-style: italic; }
+  /* Un fallo del modelo SE DICE. Si no, la tarjeta se queda en «Preparando…»
+     el resto de la reunión y parece que aún está pensando. */
+  .respuesta.mal {
+    background: transparent; border: 1px dashed var(--mal);
+    color: var(--tx2); font-size: 12.5px;
+  }
+  #avisoPreguntas {
+    margin: 12px; padding: 11px 13px; border-radius: 8px;
+    background: rgba(227,179,65,.07); border: 1px solid rgba(227,179,65,.3);
+    font-size: 12.5px; color: var(--tx2); line-height: 1.45;
+  }
   .acciones { display: flex; gap: 6px; margin-top: 7px; }
   .acciones button { font-size: 11px; padding: 4px 9px; }
 
@@ -289,6 +304,7 @@
 
   <aside id="preguntas">
     <div class="titulo">Preguntas para ti <span class="cuenta" id="cuentaP">0</span></div>
+    <div id="avisoPreguntas" class="oculto"></div>
     <div id="listaPreguntas"></div>
   </aside>
 </main>
@@ -409,18 +425,23 @@ function abajo () {
 // ── Preguntas ─────────────────────────────────────────────────────────
 let nPreguntas = 0
 
-function pintarPregunta ({ id, it }) {
+function pintarPregunta ({ id, it, es }) {
   nPreguntas++
   $('#cuentaP').textContent = nPreguntas
 
   const p = crear('div', 'pregunta')
   p.dataset.id = id
+  // El italiano es lo que se oyó; el español, para saber qué le han preguntado.
   const q = crear('div', 'q'); q.textContent = it
+  const qes = crear('div', 'qes'); qes.textContent = es || ''
+  if (!es) qes.classList.add('oculto')
   const r = crear('div', 'respuesta cargando'); r.textContent = 'Preparando respuesta…'
   const acc = crear('div', 'acciones')
 
   const copiar = crear('button', 'sec'); copiar.textContent = 'Copiar'
   copiar.onclick = () => {
+    // Nunca se copia un aviso de fallo: se iría al chat de la reunión.
+    if (r.classList.contains('mal') || r.classList.contains('cargando')) return
     navigator.clipboard?.writeText(r.textContent)
     copiar.textContent = 'Copiado'
     setTimeout(() => { copiar.textContent = 'Copiar' }, 1400)
@@ -429,16 +450,34 @@ function pintarPregunta ({ id, it }) {
   otra.onclick = () => { r.className = 'respuesta cargando'; r.textContent = 'Preparando…'; api?.otraRespuesta(id) }
 
   acc.append(copiar, otra)
-  p.append(q, r, acc)
+  p.append(q, qes, r, acc)
   $('#listaPreguntas').prepend(p)
 }
 
-function pintarRespuesta ({ id, texto }) {
+/**
+ * `texto` puede venir a null con un `error`: el modelo falló, se quedó sin
+ * cupo o tardó demasiado. Eso hay que pintarlo — dejar «Preparando…» es el
+ * peor final posible, porque parece que aún está en camino y el usuario espera
+ * una respuesta que no va a llegar. El botón «Otra» sigue sirviendo.
+ */
+function pintarRespuesta ({ id, texto, error }) {
   const p = $(`.pregunta[data-id="${id}"]`)
   if (!p) return
   const r = p.querySelector('.respuesta')
+  if (!texto) {
+    r.className = 'respuesta mal'
+    r.textContent = `Sin respuesta: ${error || 'el modelo no contestó'}. Pulsa «Otra» para reintentar.`
+    return
+  }
   r.className = 'respuesta'
   r.textContent = texto          // SOLO italiano, sin glosa: así lo pidió el cliente
+}
+
+/** Por qué este panel no va a dar respuestas. Se queda puesto: es un ajuste. */
+function pintarAvisoPreguntas (texto) {
+  const a = $('#avisoPreguntas')
+  a.textContent = texto
+  a.classList.toggle('oculto', !texto)
 }
 
 // ── Contexto general ──────────────────────────────────────────────────
@@ -634,6 +673,7 @@ if (api) {
   api.alFrase(pintarFrase)
   api.alPregunta(pintarPregunta)
   api.alRespuesta(pintarRespuesta)
+  api.alAvisoPreguntas(pintarAvisoPreguntas)
   api.alContexto(pintarContexto)
   api.alEstado(({ clase, texto }) => estado(clase, texto))
 }
@@ -647,10 +687,12 @@ function demo () {
     { it: "Dobbiamo rivedere i tempi con l'integrazione con il gestionale.",
       es: 'Tenemos que revisar los plazos con la integración con el ERP.', ms: 455 },
     { pregunta: 'Quanto tempo ci vuole per completare il lavoro?',
+      es: '¿Cuánto tiempo hace falta para terminar el trabajo?',
       respuesta: 'Direi due settimane per la parte tecnica, più qualche giorno per i test. '
                + 'Ti confermo la data esatta domani mattina.' },
     { it: 'Il budget copre anche la manutenzione.', es: 'El presupuesto cubre también el mantenimiento.', ms: 401 },
     { pregunta: 'Hai già parlato con il team di sviluppo?',
+      es: '¿Ya has hablado con el equipo de desarrollo?',
       respuesta: 'Sì, ne ho parlato ieri. Sono allineati sui tempi e non vedono blocchi tecnici.' },
   ]
   let i = 0, idQ = 0
@@ -663,7 +705,7 @@ function demo () {
     const p = guion[i++]
     if (p.pregunta) {
       const id = 'q' + (++idQ)
-      pintarPregunta({ id, it: p.pregunta })
+      pintarPregunta({ id, it: p.pregunta, es: p.es })
       setTimeout(() => pintarRespuesta({ id, texto: p.respuesta }), 1100)
     } else {
       const palabras = p.it.split(' ')

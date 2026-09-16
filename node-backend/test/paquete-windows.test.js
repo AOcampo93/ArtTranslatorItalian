@@ -68,3 +68,42 @@ describe('el lector de PE', () => {
     assert.ok(!dep.esDelSistema('whisper.dll'))
   })
 })
+
+/**
+ * El mismo fallo de arriba, pero con módulos de JavaScript en vez de DLL: el
+ * paquete no puede cargar lo que no lleva.
+ *
+ * `electron-builder` copia `node-backend/` a `resources/node-backend/`, así que
+ * un `require('../../shared/prompts')` desde `src/` apunta a `resources/shared/`.
+ * Si esa carpeta no está en `extraResources`, en la máquina de desarrollo todo
+ * funciona —ahí sí existe— y en Windows la app muere al arrancar con
+ * «Cannot find module». Es exactamente la forma del fallo de `0xC0000135`:
+ * verde en local, muerto en el cliente.
+ */
+describe('el paquete lleva los módulos que el backend carga', () => {
+  const RAIZ = path.join(__dirname, '..', '..')
+  const SRC = path.join(__dirname, '..', 'src')
+  const pkg = JSON.parse(fs.readFileSync(path.join(RAIZ, 'electron-app', 'package.json'), 'utf8'))
+  const enviadas = new Set(pkg.build.extraResources.map(r => r.to.split('/')[0]))
+
+  test('ningún módulo sale a una carpeta que el paquete no copia', () => {
+    const fallos = []
+    for (const archivo of fs.readdirSync(SRC).filter(n => n.endsWith('.js'))) {
+      const codigo = fs.readFileSync(path.join(SRC, archivo), 'utf8')
+      for (const m of codigo.matchAll(/require\(['"]\.\.\/\.\.\/([^'"/]+)\/([^'"]+)['"]\)/g)) {
+        const [, carpeta, resto] = m
+        if (!enviadas.has(carpeta)) fallos.push(`${archivo} pide ../../${carpeta}/${resto}`)
+        else if (!fs.existsSync(path.join(RAIZ, carpeta, `${resto}.js`))) {
+          fallos.push(`${archivo} pide ../../${carpeta}/${resto}, que no existe`)
+        }
+      }
+    }
+    assert.deepStrictEqual(fallos, [],
+      'añade la carpeta a extraResources en electron-app/package.json:\n' + fallos.join('\n'))
+  })
+
+  test('shared/ viaja con el paquete: respuestas.js carga los prompts de ahí', () => {
+    assert.ok(enviadas.has('shared'))
+    assert.match(fs.readFileSync(path.join(SRC, 'respuestas.js'), 'utf8'), /require\('\.\.\/\.\.\/shared\/prompts'\)/)
+  })
+})

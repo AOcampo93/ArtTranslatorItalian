@@ -58,6 +58,8 @@ contextBridge.exposeInMainWorld('app', {
   alFrase: fn => escuchar('app:frase', fn),
   alPregunta: fn => escuchar('app:pregunta', fn),
   alRespuesta: fn => escuchar('app:respuesta', fn),
+  /** Por qué el panel de preguntas no va a dar respuestas (p. ej. falta la clave). */
+  alAvisoPreguntas: fn => escuchar('app:avisoPreguntas', fn),
   alContexto: fn => escuchar('app:contexto', fn),
   alEstado: fn => escuchar('app:estado', fn),
 })

@@ -738,6 +738,28 @@ Sin glosa. Son para decirlas en voz alta: 2-3 frases, máximo 500 caracteres, ge
 transcripción. Las fórmulas sociales (`come stai`, `mi sentite`) se marcan en gris y no
 gastan llamada.
 
+> **Corregido en §12:** sí se pregeneran, porque el LLM es de nube y no gasta CPU local;
+> el usuario no puede esperar 3-5 s con la conversación ya pasada. Implementado así en
+> `node-backend/src/respuestas.js` (F020). **El "presupuesto por sesión" que pide §12
+> sigue sin implementarse**: hoy el único tope es el triaje local.
+
+### El panel de contexto general: un resumen cada 120 s
+
+Decidido al implementar F020, porque el plan describía el panel (§11) pero no cada cuánto
+se rellena, y eso es una llamada al LLM que la tabla de coste de §10 no contaba.
+
+**120 s, el triple que el escáner de preguntas.** Es el panel menos importante de los tres
+—va colapsado— y sin tope sería el que más gastara: a 40 s serían 90 llamadas en una
+reunión de una hora; a 120 s, 30. Y un párrafo que se reescribe cada 40 s no se puede leer
+mientras cambia, justo cuando el usuario está leyendo los otros dos paneles.
+
+Dos topes más, por la misma razón: hace falta un **mínimo de 6 frases nuevas** (si no, una
+reunión callada pediría resúmenes del silencio) y **no hay temporizador** — el reloj se
+mira cuando llega una frase, así que una reunión terminada no gasta nada.
+
+El número es un punto de partida razonado, **no medido contra reuniones reales**, y su
+coste por hora no está en la tabla de §10. `[por medir]`
+
 ---
 
 ## 10. Instalación, claves y coste visible
