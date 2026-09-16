@@ -53,7 +53,8 @@
   .chip.nube { border-color: #1E4D6B; color: #7FC4E8; }
 
   /* El retardo en vivo: el cliente lo pidió para poder comparar con la
-     versión local cuando exista. */
+     versión local cuando exista. Es la cadena entera —oír + traducir—, no
+     una sola pierna. */
   .retardo { font-family: var(--mono); font-size: 11.5px; color: var(--tx2); }
   .retardo b { color: var(--tx); font-weight: 600; }
   .retardo.lento b { color: var(--aviso); }
@@ -366,6 +367,9 @@ function estado (clase, texto) {
   $('#txtEstado').textContent = texto
 }
 
+// El p50 del rótulo de arriba. Lo que entra aquí tiene que ser la CADENA
+// entera —oír + traducir—: si entrara una sola pierna, el rótulo diría
+// «retardo» midiendo media cosa, que es lo que pasaba hasta ahora.
 const retardos = []
 function apuntarRetardo (ms) {
   retardos.push(ms)
@@ -376,6 +380,55 @@ function apuntarRetardo (ms) {
   el.classList.remove('oculto')
   el.classList.toggle('lento', p50 > 1500)
   el.innerHTML = `retardo <b>${p50} ms</b>`
+}
+
+/**
+ * Cuántas burbujas han llegado marcadas como troceadas.
+ *
+ * Hace falta contarlas aparte porque `stats.turnosForzados` cuenta lo que se le
+ * PIDIÓ al servidor y esto cuenta lo que el servidor APLICÓ. La diferencia es
+ * exactamente el criterio de la próxima prueba en Windows: si se pidieron
+ * cortes y ninguna frase llegó marcada, el servidor ignoró el `ForceEndpoint`.
+ * Eso tiene que poder leerse en la barra, no sacándolo del `.jsonl` a mano.
+ */
+let frasesCortadas = 0
+
+/**
+ * Al empezar una reunión nueva, las medidas de la anterior no valen.
+ *
+ * Sin esto, la segunda reunión de la misma ventana enseñaría al detenerse los
+ * troceos de la primera, y el p50 del rótulo mezclaría dos reuniones.
+ */
+function reiniciarMedidas () {
+  retardos.length = 0
+  frasesCortadas = 0
+}
+
+/**
+ * El texto que queda en la barra al detener.
+ *
+ * Vive aquí y no dentro del `onclick` para que se pueda probar con el bloque
+ * real del HTML: es la única manera de que el número del criterio quede
+ * comprobado por una prueba y no por una mirada.
+ *
+ * Se dice «sin troceos» en voz alta en vez de callar, porque la ausencia de un
+ * número es ambigua: no se sabría si no hizo falta trocear o si el vigilante no
+ * llegó a dispararse nunca. Y se distingue «pedidos» de «aplicados» porque son
+ * dos fallos distintos con el mismo síntoma en pantalla.
+ */
+function resumenAlDetener (r) {
+  // Sin coste no hubo sesión de verdad (el modo de ejemplo, o un arranque que
+  // falló): no se inventa un resumen de algo que no pasó.
+  if (r?.costeUsd == null) return 'Detenido'
+
+  const pedidos = r.stats?.turnosForzados || 0
+  const troceo = pedidos === 0
+    ? 'sin troceos'
+    : frasesCortadas > 0
+      ? `${frasesCortadas} troceadas`
+      : `${pedidos} troceos pedidos, NINGUNO aplicado`
+
+  return `Detenido · ${r.frases} frases · ${troceo} · $${r.costeUsd}`
 }
 
 // ── Burbujas ──────────────────────────────────────────────────────────
@@ -392,7 +445,7 @@ function pintarParcial (texto) {
   abajo()
 }
 
-function pintarFrase ({ it, es, ms, msTranscribir, msTraducir }) {
+function pintarFrase ({ it, es, ms, msTranscribir, msTraducir, forzado }) {
   $('#vacio')?.classList.add('oculto')
   burbujaParcial?.remove()
   burbujaParcial = null
@@ -400,18 +453,35 @@ function pintarFrase ({ it, es, ms, msTranscribir, msTraducir }) {
   const b = crear('div', 'burbuja')
   const eIt = crear('div', 'it'); eIt.textContent = it
   const eEs = crear('div', 'es'); eEs.textContent = es
+
+  // El total se SUMA aquí a partir de las dos piernas en vez de creerse el
+  // `ms` que llegue. En la primera prueba real ese campo traía sólo la
+  // traducción y el rótulo seguía diciendo «retardo»: una cifra etiquetada
+  // como una cosa midiendo otra, y además por lo bajo.
+  const total = (msTranscribir != null && msTraducir != null)
+    ? msTranscribir + msTraducir
+    : ms
+  if (forzado) frasesCortadas++
+
   const pie = crear('div', 'pie')
   // El desglose importa: con él se ve si el retardo viene de la red o del
   // equipo, que es lo que habrá que comparar cuando exista el modo local.
+  //
+  // Y «cortada» se dice AQUÍ, en la burbuja, porque es donde se nota: esta
+  // frase la cortamos nosotros por larga, así que puede acabar a media frase y
+  // seguir en la siguiente. Va en el pie, en el mismo gris pequeño que los
+  // milisegundos y sin animación: el usuario está leyendo una reunión, y un
+  // aviso que llame la atención le costaría más de lo que le informa.
   pie.textContent = [
-    `${ms} ms`,
+    `${total} ms`,
     msTranscribir != null ? `oír ${msTranscribir}` : null,
     msTraducir != null ? `traducir ${msTraducir}` : null,
+    forzado ? 'cortada' : null,
   ].filter(Boolean).join(' · ')
 
   b.append(eIt, eEs, pie)
   $('#conversacion').appendChild(b)
-  apuntarRetardo(ms)
+  apuntarRetardo(total)
   abajo()
 }
 
@@ -601,6 +671,8 @@ async function comprobarDemo () {
 let captura = null
 
 $('#btnEscuchar').onclick = async () => {
+  // Reunión nueva, medidas nuevas: ver `reiniciarMedidas()`.
+  reiniciarMedidas()
   if (!api) {
     $('#preparar').classList.add('oculto')
     $('#envivo').classList.remove('oculto')
@@ -654,7 +726,7 @@ $('#btnParar').onclick = async () => {
   captura?.detener()
   captura = null
   const r = api ? await api.parar() : {}
-  estado('', r?.costeUsd != null ? `Detenido · ${r.frases} frases · $${r.costeUsd}` : 'Detenido')
+  estado('', resumenAlDetener(r))
   $('#btnParar').classList.add('oculto')
   $('#btnParar').disabled = false
 }
@@ -684,8 +756,11 @@ function demo () {
     { it: 'Buongiorno a tutti, iniziamo la riunione.', es: 'Buenos días a todos, empecemos la reunión.', ms: 372 },
     { it: 'Il cliente ha chiesto di anticipare la consegna alla prossima settimana.',
       es: 'El cliente ha pedido adelantar la entrega a la próxima semana.', ms: 418 },
+    // Una troceada, para poder ver de qué tamaño queda el aviso «cortada» sin
+    // tener que provocar un monólogo de ocho segundos con audio real.
     { it: "Dobbiamo rivedere i tempi con l'integrazione con il gestionale.",
-      es: 'Tenemos que revisar los plazos con la integración con el ERP.', ms: 455 },
+      es: 'Tenemos que revisar los plazos con la integración con el ERP.', ms: 455,
+      forzado: true },
     { pregunta: 'Quanto tempo ci vuole per completare il lavoro?',
       es: '¿Cuánto tiempo hace falta para terminar el trabajo?',
       respuesta: 'Direi due settimane per la parte tecnica, più qualche giorno per i test. '

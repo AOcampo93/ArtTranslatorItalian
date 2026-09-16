@@ -344,6 +344,298 @@ describe('caída de red', () => {
   })
 })
 
+describe('troceo de monólogos — que la pantalla no se quede en blanco', () => {
+  // Medido en la primera prueba real (21 frases, 3,1 min): el hueco entre
+  // frases fue 4,8 s de mediana, pero dos veces llegó a 33,6 s y a 65,6 s,
+  // porque AssemblyAI cierra el turno por SILENCIO y quien narra sin pausas no
+  // calla nunca. Una traductora en vivo que se queda un minuto en blanco no
+  // sirve: cuando por fin escribe, la conversación ya pasó.
+
+  test('un turno que se pasa del tope se corta con ForceEndpoint', async () => {
+    const { t, sockets } = montar({ topeTurnoMs: 200 })
+    const troceos = []
+    t.on('troceo', x => troceos.push(x))
+    await t.start()
+    const s = sockets[0]
+
+    t.alimentar(trozo())
+    s.parcial('Perché se non riesce')
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [], 'un turno recién abierto no se toca')
+
+    await esperar(260)
+    s.parcial('Perché se non riesce ad aprire')   // el texto crece: sigue hablando
+    t.alimentar(trozo())
+
+    assert.deepStrictEqual(s.textos, [{ type: 'ForceEndpoint' }])
+    assert.strictEqual(t.stats.turnosForzados, 1)
+    assert.ok(troceos[0].msAbierto >= 200, `abierto ${troceos[0].msAbierto} ms`)
+
+    // Y la frase que sale de un turno cortado lo dice, porque puede venir
+    // partida y hay que poder contarlas en la reunión real.
+    const frases = []
+    t.on('frase', f => frases.push(f))
+    s.final('Perché se non riesce ad aprire devo chiamare i pompieri')
+    assert.strictEqual(frases[0].forzado, true)
+    await t.stop()
+  })
+
+  test('NO se corta el turno que ya iba a cerrarse solo por silencio', async () => {
+    // El servidor cierra el turno 201-257 ms después del silencio [medido].
+    // Si el texto lleva más de ese rato sin crecer, el definitivo ya viene de
+    // camino: forzar ahí no adelanta nada y parte la frase por gusto.
+    const { t, sockets } = montar({ topeTurnoMs: 200, margenSilencioMs: 100 })
+    await t.start()
+    const s = sockets[0]
+
+    t.alimentar(trozo())
+    s.parcial('E la porta si è aperta')
+    await esperar(300)
+    t.alimentar(trozo())
+
+    assert.deepStrictEqual(s.textos, [], 'el hablante ya había callado')
+    assert.strictEqual(t.stats.turnosForzados, 0)
+
+    // Y la contraprueba, para que esto no pase por no funcionar nunca: con el
+    // MISMO turno pasado de tope, en cuanto el texto vuelve a crecer sí corta.
+    s.parcial('E la porta si è aperta, finalmente')
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [{ type: 'ForceEndpoint' }])
+    await t.stop()
+  })
+
+  test('un parcial repetido no cuenta como señal de que se sigue hablando', async () => {
+    // El servidor puede reenviar el mismo parcial mientras nadie habla. Si eso
+    // contara como vida, el vigilante trocearía silencios.
+    const { t, sockets } = montar({ topeTurnoMs: 200, margenSilencioMs: 150 })
+    await t.start()
+    const s = sockets[0]
+
+    t.alimentar(trozo())
+    s.parcial('Allora')
+    await esperar(250)
+    s.parcial('Allora')                 // el mismo texto: nada nuevo se ha dicho
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [], 'se troceó un silencio')
+
+    s.parcial('Allora io mi son detta') // ahora sí crece
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [{ type: 'ForceEndpoint' }])
+    await t.stop()
+  })
+
+  test('sin turno abierto no se fuerza nada', async () => {
+    const { t, sockets } = montar({ topeTurnoMs: 100 })
+    await t.start()
+    const s = sockets[0]
+
+    t.alimentar(trozo())
+    s.parcial('Brava')
+    s.final('Brava!')
+    await esperar(250)
+    t.alimentar(trozo())
+
+    assert.deepStrictEqual(s.textos, [], 'el turno ya estaba cerrado')
+    await t.stop()
+  })
+
+  test('un fin de turno SIN TEXTO también suelta el turno', async () => {
+    // El camino del texto vacío es el único que no pasa por ninguna otra
+    // prueba, y es el que sostiene el orden de `this._turno = null` antes del
+    // `if (!texto) return`. Si se invierten esas dos líneas, el turno muerto
+    // sigue contando: el siguiente se corta al nacer y además hereda
+    // `ultimoIntentoEn`, o sea que saldría marcado `forzado: true` sin que
+    // nadie lo haya cortado — contaminando justo el dato con el que vamos a
+    // contar, en la próxima reunión real, cuántas frases parte el troceo.
+    const { t, sockets } = montar({ topeTurnoMs: 300, margenSilencioMs: 1000 })
+    const frases = []
+    t.on('frase', f => frases.push(f))
+    await t.start()
+    const s = sockets[0]
+
+    t.alimentar(trozo())
+    s.parcial('Allora io mi son detta')
+    await esperar(350)
+    s.final('   ')                    // llega el fin de turno, pero sin texto
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [], 'se cortó un turno que ya estaba cerrado')
+
+    // Y el siguiente turno empieza limpio: ni reloj heredado ni marca heredada.
+    s.parcial('E la porta')
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [], 'el turno nuevo apenas lleva unos ms')
+    s.final('E la porta si è aperta.')
+    assert.strictEqual(frases.length, 1, 'el final vacío no produce burbuja')
+    assert.strictEqual(frases[0].forzado, false,
+      'una frase que nadie cortó no puede salir marcada como troceada')
+    await t.stop()
+  })
+
+  test('el reloj del turno empieza de cero en cada turno', async () => {
+    // Si el reloj se arrastrara de un turno al siguiente, el segundo se
+    // cortaría nada más empezar y las frases saldrían partidas en dos.
+    const { t, sockets } = montar({ topeTurnoMs: 200, margenSilencioMs: 1000 })
+    await t.start()
+    const s = sockets[0]
+
+    t.alimentar(trozo())
+    s.parcial('Allora io mi son detta')
+    await esperar(150)
+    s.final('Allora io mi son detta, cosa facciamo?')
+    s.parcial('Perché se non riesce')       // turno nuevo
+    await esperar(100)
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [], 'el turno nuevo sólo lleva 100 ms')
+
+    await esperar(150)
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [{ type: 'ForceEndpoint' }])
+    await t.stop()
+  })
+
+  test('si el servidor ignora el corte, se vuelve a pedir', async () => {
+    // Sin reintento, un ForceEndpoint perdido devuelve la pantalla en blanco
+    // de 66 s y nadie se entera de por qué.
+    const { t, sockets } = montar({ topeTurnoMs: 200, margenSilencioMs: 1000 })
+    await t.start()
+    const s = sockets[0]
+
+    t.alimentar(trozo())
+    s.parcial('uno')
+    await esperar(260)
+    t.alimentar(trozo())
+    assert.strictEqual(s.textos.length, 1, 'primer intento')
+
+    t.alimentar(trozo())
+    assert.strictEqual(s.textos.length, 1, 'no se repite diez veces por segundo')
+
+    await esperar(260)
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [{ type: 'ForceEndpoint' }, { type: 'ForceEndpoint' }])
+    await t.stop()
+  })
+
+  test('cortar el turno NO recorta el audio', async () => {
+    // El tope es del turno, no del micrófono: si el audio se cortara, se
+    // perdería justo lo que el hablante dice en el corte.
+    const { t, sockets } = montar({ topeTurnoMs: 200 })
+    await t.start()
+    const s = sockets[0]
+
+    t.alimentar(trozo())
+    s.parcial('uno')
+    await esperar(260)
+    s.parcial('uno due')
+    for (let i = 0; i < 4; i++) t.alimentar(trozo())
+
+    assert.strictEqual(s.textos.length, 1, 'se cortó el turno')
+    assert.strictEqual(s.binarios.length, 5, 'los cinco trozos de audio salieron igual')
+    await t.stop()
+  })
+
+  test('con el tope apagado no se trocea nunca', async () => {
+    const { t, sockets } = montar({ topeTurnoMs: 0 })
+    await t.start()
+    const s = sockets[0]
+    t.alimentar(trozo())
+    s.parcial('uno')
+    await esperar(300)
+    s.parcial('uno due')
+    t.alimentar(trozo())
+    assert.deepStrictEqual(s.textos, [])
+    assert.strictEqual(t.stats.turnosForzados, 0)
+    await t.stop()
+  })
+
+  test('el tope por defecto es de 8 s', () => {
+    // Elegido sobre la sesión real: p50 del hueco 4,8 s y p75 9,1 s, así que
+    // deja en paz los turnos normales; y con el primer parcial (881-980 ms
+    // [medido]) y el cierre (201-257 ms [medido]) la pantalla en blanco se
+    // queda por debajo de 10 s.
+    assert.strictEqual(_internos.TOPE_TURNO_MS, 8000)
+    const { t } = montar()
+    assert.strictEqual(t._topeTurnoMs, 8000)
+  })
+})
+
+describe('el retardo de OÍR, sellado en la frase', () => {
+  // Antes el cronómetro arrancaba cuando el texto YA había llegado, así que el
+  // número que el usuario leía como «retardo» era sólo la traducción y
+  // subestimaba lo que se percibe, que es la dirección peligrosa.
+
+  test('la frase dice cuánto se tardó en oírla, medido desde el audio', async () => {
+    // Aquí el audio NO se para mientras se espera el texto, porque en la
+    // reunión tampoco se para: el audio del sistema sigue entrando a diez
+    // bloques por segundo, también durante el silencio. Si el sello se tomara
+    // del último trozo enviado, mediría siempre ~100 ms y diría que oír es
+    // gratis; hay que medir desde el último audio que LLEGÓ al texto.
+    const { t, sockets } = montar()
+    const frases = []
+    t.on('frase', f => frases.push(f))
+    await t.start()
+
+    t.alimentar(trozo())
+    sockets[0].parcial('Avevo la febbre')        // este audio sí llegó al texto
+    const t0 = Date.now()
+    while (Date.now() - t0 < 250) { t.alimentar(trozo(0)); await esperar(10) }
+    const esperado = Date.now() - t0
+    sockets[0].final('Avevo la febbre a 39, stavo proprio male.')
+
+    assert.strictEqual(frases.length, 1)
+    assert.strictEqual(frases[0].forzado, false, 'este turno se cerró solo')
+    assert.ok(frases[0].msTranscribir >= esperado - 30,
+      `midió ${frases[0].msTranscribir} ms cuando se esperó ${esperado}`)
+    assert.ok(frases[0].msTranscribir < esperado + 300,
+      `midió de más: ${frases[0].msTranscribir} ms de ${esperado}`)
+    await t.stop()
+  })
+
+  test('el sello no se hereda del turno anterior', async () => {
+    // Si se heredara, la segunda frase cargaría con la espera de la primera y
+    // el retardo que se enseña sería el de otra cosa.
+    const { t, sockets } = montar()
+    const frases = []
+    t.on('frase', f => frases.push(f))
+    await t.start()
+
+    const correrAudio = async ms => {
+      const t0 = Date.now()
+      while (Date.now() - t0 < ms) { t.alimentar(trozo(0)); await esperar(10) }
+      return Date.now() - t0
+    }
+
+    t.alimentar(trozo())
+    sockets[0].parcial('Avevo la febbre')
+    await correrAudio(300)
+    sockets[0].final('Avevo la febbre a 39.')
+
+    t.alimentar(trozo())
+    sockets[0].parcial('E la porta')
+    const segundaEspera = await correrAudio(70)
+    sockets[0].final('E la porta si è aperta.')
+
+    assert.ok(frases[1].msTranscribir < 250,
+      `la segunda frase heredó ${frases[1].msTranscribir} ms de la primera`)
+    assert.ok(frases[1].msTranscribir >= segundaEspera - 30,
+      `no midió su propia espera: ${frases[1].msTranscribir} ms de ${segundaEspera}`)
+    await t.stop()
+  })
+
+  test('el sello es siempre un número: nunca null', async () => {
+    // El .jsonl escribía msTranscribir: null en las 21 frases de la prueba
+    // real. Un hueco en el dato es un hueco en la medición.
+    const { t, sockets } = montar()
+    const frases = []
+    t.on('frase', f => frases.push(f))
+    await t.start()
+    sockets[0].final('Brava!')            // sin audio previo y sin parciales
+    assert.strictEqual(typeof frases[0].msTranscribir, 'number')
+    assert.ok(Number.isFinite(frases[0].msTranscribir))
+    assert.ok(frases[0].msTranscribir >= 0)
+    await t.stop()
+  })
+})
+
 describe('contrato', () => {
   test('sin clave ni socket inyectado, se niega a construirse', () => {
     assert.throws(() => new AssemblyLiveTranscriber({}), /API key/)

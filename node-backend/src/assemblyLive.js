@@ -37,6 +37,22 @@
  *  3. **Nunca más de cuatro conexiones nuevas por minuto.** El límite del plan
  *     gratuito son cinco; se deja una de margen. Sin este freno, una racha de
  *     reconexiones deja al usuario sin servicio justo cuando más lo necesita.
+ *
+ * ## El turno no puede durar lo que quiera el hablante
+ *
+ * AssemblyAI cierra el turno por **silencio**, no por longitud. Quien narra
+ * sin pausas lo mantiene abierto indefinidamente, y hasta que no se cierra no
+ * hay texto definitivo que traducir: la pantalla se queda en blanco.
+ *
+ * Medido en la primera prueba real (HP Pavilion, 21 frases, 3,1 min): el hueco
+ * entre frases fue de 4,8 s de mediana, pero **dos veces llegó a 33,6 s y a
+ * 65,6 s**, y después cayeron 436 y 892 caracteres de golpe.  [medido]
+ *
+ * Por eso este módulo vigila el turno y lo corta él con `ForceEndpoint`
+ * (`_quizaForzarFin`). El efecto de arrastre es igual de importante: el tiempo
+ * de Marian crece con la longitud —sobre esas mismas 21 frases, 6,34 ms por
+ * carácter con R² 0,994 [medido]—, así que trocear el turno también mata la
+ * cola de latencia de la traducción. Un arreglo, dos problemas.
  */
 
 'use strict'
@@ -72,6 +88,60 @@ const ESPERAS_MS = [1500, 6000, 20000, 40000]
 
 /** Conexiones nuevas permitidas en una ventana móvil de 60 s. El plan da 5. */
 const MAX_CONEXIONES_MIN = 4
+
+/**
+ * Tope de duración de un turno antes de trocearlo con `ForceEndpoint`.
+ *
+ * De dónde salen los 8 s. Todo lo de abajo está simulado sobre la sesión real
+ * de 21 frases, traduciendo de verdad con Marian los trozos que saldrían:
+ *
+ *  · **No muerde a los turnos normales.** Los turnos de esa sesión duraron
+ *    4,5 s de mediana, y ninguno de los que no era monólogo pasó de 10,6 s
+ *    [medido]. Con 8 s se trocearían 6 de los 21: los tres monólogos (47,7 s,
+ *    30,7 s y 60,4 s) y tres turnos de 9-10,6 s.
+ *  · **Es el tope más alto que aún cabe por debajo de 10 s, y cabe por 0,1 s.**
+ *    Lo que el usuario espera por una frase es el tope MÁS el primer parcial
+ *    (881–980 ms [medido]), MÁS el cierre del turno (201–257 ms [medido]), MÁS
+ *    la traducción del trozo. Cronometrado con el Marian del propio HP —y no
+ *    con el de la máquina de desarrollo, que da medio segundo de regalo—:
+ *    **9,5 s** de hueco máximo frente a los 65,6 s medidos, y **9,9 s** hasta
+ *    la primera burbuja frente a 51,5 s [simulado]. Con 10 s ya no cabe (11,6 s
+ *    y 12,1 s); con 6 s sobra sitio (7,4 s y 7,8 s) pero se parte el doble de
+ *    frases. No es una elección holgada: es la última que entra.
+ *  · **Los trozos le caen a Marian del tamaño que sabe llevar.** A la
+ *    velocidad medida en ese audio (11,9 caracteres/s [medido]), 8 s son 88
+ *    caracteres de mediana y 156 como mucho [simulado]; el p95 de traducción
+ *    pasaría de los 3.628 ms medidos a unos 962 ms, estimados con la regresión
+ *    del propio equipo (ms = 56 + 6,34·caracteres, R² 0,994 [medido]).
+ *
+ * Y el precio, que también está medido: con 8 s, 14 de los 38 trozos acabarían
+ * en mitad de una frase, y en 5 de ellos Marian cerró la frase por su cuenta
+ * inventándose el final [simulado]. Bajar el tope a 6 s dobla ese daño (22
+ * cortes) para ganar 2,1 s de hueco; subirlo a 12 s lo reduce a 9 cortes y
+ * cuesta 4,3 s. El rendimiento marginal cae de 3,8 cortes por segundo (6→8) a
+ * 1,4 (8→10): los 8 s son el codo de esa curva.
+ *
+ * Que 10 s sea el techo tolerable para quien lee es un juicio de producto, no
+ * una medida.  [por medir]
+ *
+ * Se puede cambiar por sesión (`topeTurnoMs`); con 0 se apaga el troceo.
+ */
+const TOPE_TURNO_MS = 8000
+
+/**
+ * No se fuerza el fin de un turno cuyo texto lleve este rato sin crecer.
+ *
+ * Si el hablante ya calló, el turno se cierra solo: medido, el texto
+ * definitivo llega 201–257 ms después del silencio [medido]. Por tanto 700 ms
+ * sin texto nuevo y sin que haya llegado el definitivo significa que el
+ * hablante SIGUE hablando y quien va con retraso es el decodificador. Forzar
+ * un turno que ya se estaba cerrando no adelantaría nada y partiría la frase
+ * por gusto.
+ *
+ * El ritmo real al que llegan los parciales mientras alguien habla no está
+ * medido contra el servicio.  [por medir]
+ */
+const MARGEN_SILENCIO_MS = 700
 
 /** Tras `Terminate`, el acuse tardó 1.067–1.224 ms medidos. Se espera de sobra. */
 const ESPERA_TERMINATION_MS = 4000
@@ -135,12 +205,17 @@ class AssemblyLiveTranscriber extends EventEmitter {
    * @param {string} [opts.contexto]   descripción de la reunión, en italiano
    * @param {Function} [opts.crearSocket] inyectable, para probar sin red
    */
-  constructor ({ apiKey, idioma = 'it', glosario = [], contexto = '', modo = 'balanced', crearSocket } = {}) {
+  constructor ({
+    apiKey, idioma = 'it', glosario = [], contexto = '', modo = 'balanced', crearSocket,
+    topeTurnoMs = TOPE_TURNO_MS, margenSilencioMs = MARGEN_SILENCIO_MS,
+  } = {}) {
     super()
     if (!apiKey && !crearSocket) throw new Error('hace falta una API key de AssemblyAI')
     this.apiKey = apiKey
     this.opciones = { idioma, glosario, contexto, modo }
     this._crearSocket = crearSocket
+    this._topeTurnoMs = topeTurnoMs
+    this._margenSilencioMs = margenSilencioMs
 
     this._ws = null
     this._corriendo = false
@@ -153,10 +228,12 @@ class AssemblyLiveTranscriber extends EventEmitter {
     this._avisadoDelHueco = false
     this._conexiones = []        // marcas de tiempo, para el freno de ritmo
     this._quitarSalidas = null
+    this._turno = null           // turno en curso; ver _apuntarParcial()
+    this._ultimoAudioEn = null   // cuándo se le dio al socket el último audio
 
     this.stats = {
       frases: 0, reconexiones: 0, segundosAudio: 0,
-      segundosSesion: 0, sesiones: 0, relevos: 0,
+      segundosSesion: 0, sesiones: 0, relevos: 0, turnosForzados: 0,
     }
   }
 
@@ -209,6 +286,9 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
     this._ws = ws
     this._abiertaEn = Date.now()
+    // Sesión nueva, turnos nuevos: arrastrar el turno de la anterior forzaría
+    // el primero del relevo nada más abrir.
+    this._turno = null
     this._vaciarPendiente()
   }
 
@@ -223,11 +303,26 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
       case 'Turn': {
         const texto = (m.transcript || '').trim()
-        if (!texto) return
+        const ahora = Date.now()
         if (m.end_of_turn) {
+          // El turno se cierra pase lo que pase con el texto: si no se soltara
+          // aquí, el vigilante seguiría contando sobre un turno que ya murió y
+          // forzaría el siguiente antes de tiempo.
+          const msTranscribir = this._msTranscribir(ahora)
+          // Si este turno lo cortamos nosotros, la frase puede venir partida
+          // por la mitad. Va dicho en la frase para poder CONTARLAS en la
+          // próxima reunión de verdad: es el precio del troceo, y hasta ahora
+          // sólo está medido en simulación.
+          const forzado = Boolean(this._turno?.ultimoIntentoEn)
+          this._turno = null
+          if (!texto) return
           this.stats.frases++
-          this.emit('frase', { texto, orden: m.turn_order, palabras: m.words })
+          this.emit('frase', {
+            texto, orden: m.turn_order, palabras: m.words, msTranscribir, forzado,
+          })
         } else {
+          if (!texto) return
+          this._apuntarParcial(texto, ahora)
           this.emit('parcial', { texto })
         }
         return
@@ -283,6 +378,88 @@ class AssemblyLiveTranscriber extends EventEmitter {
       'no se pudo reconectar. La transcripción está parada; el audio de este rato se ha perdido.'))
   }
 
+  // ── El turno: cuánto lleva abierto y desde cuándo se espera ─────────
+  /**
+   * Apunta un parcial del turno en curso, y abre el turno si es el primero.
+   *
+   * Lo que se guarda no es «ha llegado un parcial», es **el texto ha
+   * crecido**: el servidor puede repetir el mismo parcial mientras nadie
+   * habla, y si eso contara como señal de vida el vigilante trocearía
+   * silencios.
+   */
+  _apuntarParcial (texto, ahora) {
+    if (!this._turno) {
+      this._turno = {
+        abiertoEn: ahora,
+        ultimoCrecimientoEn: ahora,
+        audioDelUltimoCrecimiento: this._ultimoAudioEn,
+        ultimoTexto: texto,
+        ultimoIntentoEn: null,
+      }
+      return
+    }
+    const t = this._turno
+    if (texto === t.ultimoTexto) return
+    t.ultimoTexto = texto
+    t.ultimoCrecimientoEn = ahora
+    t.audioDelUltimoCrecimiento = this._ultimoAudioEn
+  }
+
+  /**
+   * Cuánto se tardó en OÍR esta frase: desde que se le entregó al socket el
+   * último audio que llegó a verse en el texto, hasta que llegó el definitivo.
+   *
+   * Por qué ese punto de partida y no «el último audio enviado»: el audio del
+   * sistema fluye sin parar, también durante el silencio, así que el último
+   * trozo enviado es siempre de hace 100 ms y mediría cero. El último trozo
+   * que hizo CRECER el texto es lo último que sabemos que el servidor oyó.
+   *
+   * Qué se queda fuera, y en qué dirección: la latencia del propio parcial
+   * (lo que tardó en llegar el texto que usamos como marca). Por tanto esta
+   * cifra es un **suelo**, no un techo. Cuánto vale ese hueco sólo se puede
+   * medir contra el servicio real.  [por medir]
+   */
+  _msTranscribir (ahora) {
+    const desde = this._turno?.audioDelUltimoCrecimiento ?? this._ultimoAudioEn
+    if (!desde) return 0            // aún no se le había dado audio: no se sabe
+    return Math.max(0, ahora - desde)
+  }
+
+  /**
+   * Trocea el monólogo: si el turno lleva demasiado abierto y el hablante
+   * sigue, se le pide al servidor que lo cierre ya.
+   *
+   * Se corta el TURNO, no el audio: el audio sigue saliendo sin un hueco, y
+   * las palabras que vengan después entran en el turno siguiente. Recortar el
+   * audio en vez de esto perdería lo que se dijera en el corte.
+   *
+   * Dos condiciones, y las dos importan:
+   *
+   *  · Que lleve abierto más que el tope. Se cuenta desde el primer parcial,
+   *    que llega 881–980 ms después de que empiece a hablar [medido], así que
+   *    el turno real es algo más largo que lo que se mide aquí.
+   *  · Que el texto siga creciendo. Si lleva parado más de `margenSilencio`,
+   *    el turno ya se está cerrando solo y forzarlo sólo partiría la frase.
+   *
+   * Si el servidor ignorara el mensaje, el turno volvería a pasarse del tope
+   * y se reintentaría: `ultimoIntentoEn` es lo que evita mandarlo diez veces
+   * por segundo mientras tanto.
+   */
+  _quizaForzarFin () {
+    const t = this._turno
+    if (!t || !this._topeTurnoMs) return
+    if (this._ws?.readyState !== 1) return
+
+    const ahora = Date.now()
+    if (ahora - (t.ultimoIntentoEn ?? t.abiertoEn) < this._topeTurnoMs) return
+    if (ahora - t.ultimoCrecimientoEn > this._margenSilencioMs) return
+
+    t.ultimoIntentoEn = ahora
+    this.stats.turnosForzados++
+    this._ws.send(JSON.stringify({ type: 'ForceEndpoint' }))
+    this.emit('troceo', { msAbierto: ahora - t.abiertoEn, caracteres: t.ultimoTexto.length })
+  }
+
   // ── Audio ───────────────────────────────────────────────────────────
   /**
    * @param {Float32Array|number[]} muestras  16 kHz mono, rango [-1,1]
@@ -295,11 +472,15 @@ class AssemblyLiveTranscriber extends EventEmitter {
     while (this._resto.length >= MUESTRAS_TROZO) {
       this._enviar(aPcm16(this._resto.splice(0, MUESTRAS_TROZO)))
     }
+    // El audio llega en bloques de 100 ms, así que el vigilante mira diez
+    // veces por segundo sin necesidad de un temporizador propio: uno más que
+    // habría que acordarse de apagar al cerrar.
+    this._quizaForzarFin()
     this._quizaRelevar()
   }
 
   _enviar (pcm) {
-    if (this._ws?.readyState === 1) { this._ws.send(pcm); return }
+    if (this._ws?.readyState === 1) { this._ws.send(pcm); this._ultimoAudioEn = Date.now(); return }
     this._pendiente.push(pcm)
     const tope = MAX_BUFFER_S * 1000 / MS_TROZO
     while (this._pendiente.length > tope) {
@@ -337,6 +518,7 @@ class AssemblyLiveTranscriber extends EventEmitter {
         return
       }
       this._ws.send(cola[i++])
+      this._ultimoAudioEn = Date.now()
       setTimeout(siguiente, MS_TROZO)
     }
     siguiente()
@@ -398,6 +580,7 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
   async stop () {
     this._corriendo = false
+    this._turno = null
     if (this._resto.length) {
       // El resto puede ser el final de la última frase.
       this._enviar(aPcm16(this._resto))
@@ -444,4 +627,5 @@ module.exports = { AssemblyLiveTranscriber, SAMPLE_RATE, MODELO, CIERRES }
 module.exports._internos = {
   aPcm16, construirUrl, MUESTRAS_TROZO, MS_TROZO, MS_TROZO_MIN, MS_TROZO_MAX,
   MAX_CONEXIONES_MIN, ESPERAS_MS, MAX_BUFFER_S, RELEVAR_A_LOS_MS, TOPE_SESION_MS,
+  TOPE_TURNO_MS, MARGEN_SILENCIO_MS,
 }

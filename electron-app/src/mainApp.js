@@ -213,14 +213,28 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
 
   transcriptor.on('parcial', p => aRenderer('app:parcial', p.texto))
 
-  transcriptor.on('frase', async ({ texto }) => {
+  // `msTranscribir` lo sella el transcriptor: es la pierna de OÍR, y sin ella
+  // el cronómetro arrancaba con el texto YA en la mano, o sea que medía sólo
+  // la traducción. Las 21 frases de la primera prueba real salieron con `ms`
+  // idéntico a `msTraducir` y `msTranscribir: null` [medido]: lo que el usuario
+  // leía como «retardo» era media cadena, y por tanto SUBESTIMABA lo que
+  // sentía, que es la dirección peligrosa de equivocarse.
+  transcriptor.on('frase', async ({ texto, msTranscribir, forzado }) => {
     const t0 = Date.now()
     try {
       const tr = await traductor.traducir(texto)
-      const ms = Date.now() - t0
+      // Reloj de pared y no `tr.ms`: si una frase larga tiene ocupado a Marian,
+      // la siguiente espera su turno, y esa espera la sufre el usuario aunque
+      // el modelo no la cuente como suya.
+      const msTraducir = Date.now() - t0
       const frase = {
         it: texto, es: tr.es,
-        ms, msTranscribir: null, msTraducir: tr.ms,
+        ms: msTranscribir + msTraducir,   // el retardo es la cadena, no una pierna
+        msTranscribir, msTraducir,
+        // `forzado` dice que el turno lo cortamos nosotros por largo, así que
+        // esta frase puede estar partida. Queda en el archivo para poder
+        // contar en la próxima reunión real cuántas se parten de verdad.
+        forzado: Boolean(forzado),
       }
       sesion.frases++
       // §0.3 — al disco ANTES de pintar: si la app muere en el repintado, la
@@ -364,13 +378,16 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
 
     await traductor.cargar()
 
-    let italiano = null, tFinAudio = null, msExtremo = null
-    t.once('frase', async ({ texto }) => {
+    // Las dos piernas salen de la misma fuente que en la reunión de verdad:
+    // el transcriptor sella lo que costó oír y el traductor lo que costó
+    // traducir. Antes se cronometraba aquí desde que se acababa de mandar el
+    // audio, y si la frase llegaba antes de esa marca la comprobación acababa
+    // diciendo «sin traducción» con la cadena funcionando.
+    let italiano = null, msExtremo = null
+    t.once('frase', async ({ texto, msTranscribir }) => {
       italiano = texto
-      if (msExtremo == null && tFinAudio) {
-        const tr = await traductor.traducir(texto)
-        msExtremo = Date.now() - tFinAudio + tr.ms
-      }
+      const tr = await traductor.traducir(texto)
+      msExtremo = msTranscribir + tr.ms
     })
 
     const POR_BLOQUE = 1600
@@ -378,7 +395,6 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
       t.alimentar(muestras.subarray(i, i + POR_BLOQUE))
       await new Promise(x => setTimeout(x, 100))
     }
-    tFinAudio = Date.now()
 
     for (let i = 0; i < 40 && msExtremo == null; i++) await new Promise(x => setTimeout(x, 100))
     await t.stop()

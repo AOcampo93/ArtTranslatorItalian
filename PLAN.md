@@ -494,6 +494,69 @@ sigue diciendo que todo va bien y el evento de cierre nunca llega. Sin
 vigilante, el audio se acumularía en memoria para siempre sin que nadie
 reconecte. Es el fallo del minuto 50.
 
+### El turno no puede durar lo que quiera el hablante
+
+AssemblyAI cierra el turno **por silencio, no por longitud**, así que un monólogo lo
+mantiene abierto indefinidamente y la pantalla se queda en blanco. Medido en la primera
+prueba real (HP Pavilion, 21 frases, 3,1 min) `[medido]`:
+
+| | |
+|---|---|
+| hueco mediano entre burbujas | 4,8 s |
+| hueco p95 | 33,6 s |
+| **hueco máximo** | **65,6 s** |
+| espera hasta la primera burbuja | 51,5 s |
+
+Sesenta y seis segundos sin ver nada y después 892 caracteres de golpe. Para una
+traductora en vivo eso es inservible: cuando por fin escribe, la conversación ya pasó.
+
+**Y arrastra un segundo problema.** El tiempo de Marian escala con el largo —medido en
+ese equipo, `ms = 56 + 6,34·caracteres`, R² 0,994 `[medido]`—, así que los 5.601 ms del
+peor caso **no son culpa del modelo, son culpa del bloque de 892 caracteres**. Un arreglo
+resuelve los dos.
+
+Se corta el turno desde el cliente con `{"type":"ForceEndpoint"}` a los **8 s**
+(configurable), contados desde el primer parcial y sólo si el texto sigue creciendo —si
+lleva 700 ms sin crecer, quien va con retraso es el decodificador y no el hablante, porque
+el texto definitivo llega 201-257 ms después de que alguien calle `[medido]`.
+
+Simulado sobre esa misma sesión, traduciendo de verdad los trozos resultantes
+`[simulado]`:
+
+Las dos columnas van con **el reloj del HP**, que es donde se midió el antes. La primera
+versión de esta tabla cronometraba el «después» en el Mac de desarrollo y daba 9,1 s: eso
+comparaba peras con manzanas justo en la fila que da el titular, y se equivocaba a favor
+del cambio.
+
+| | antes | con tope de 8 s |
+|---|---|---|
+| hueco máximo | **65,6 s** `[medido]` | **9,5 s** `[simulado, reloj del HP]` |
+| espera hasta la 1ª burbuja | 51,5 s | 9,9 s |
+| traducir p95 | 3.628 ms `[medido]` | ~962 ms |
+| traducir p50 | 497 ms `[medido]` | ~614 ms — **empeora** |
+
+**El precio, y hay que conocerlo:** 14 de 38 trozos acaban a media frase, y en 5 de ellos
+Marian cierra la frase por su cuenta —dos se la inventan con todas las letras—. Se cambian
+117 ms de mediana por 2,7 s de p95, que es el cambio que se quiere, pero no es gratis.
+
+Por qué 8 s y no otro: por debajo, a 6 s, se dobla el daño (22 cortes en vez de 14) para
+ganar 1,9 s; por encima, a 12 s, se ahorran 5 cortes y cuesta 4,1 s de pantalla en blanco.
+Que **10 s sea el techo tolerable** de pantalla vacía es un juicio de producto, no una
+medida `[por medir]`; si el cliente dice otra cosa, el tope es un parámetro.
+
+Y con el reloj correcto ese argumento queda **al filo**: 9,9 s contra un techo de 10 s es
+un margen de **0,1 s, no de 0,6**. O sea que 8 s es el tope más alto que aún cabe, no una
+elección holgada — y si el hueco real en Windows sale peor que lo simulado, hay que bajarlo.
+
+El vídeo de la prueba es el peor caso posible: una narración sin pausas. Una reunión
+dialogada, con los turnos de 4,5 s que se midieron, casi no se trocea — y la marca
+`forzado` que ahora lleva cada frase del `.jsonl` está puesta para contestarlo con datos
+en la próxima prueba en vez de suponerlo.
+
+**Sin verificar:** que el servidor acepte `ForceEndpoint` y que el turno siguiente empiece
+limpio con las palabras que quedaban. Está implementado según su protocolo y probado sin
+red, pero no ejercitado contra el servicio `[por verificar]`.
+
 ### El coste
 
 $0,005/min de entrada más $0,004/min de salida, o sea **~$0,54 la hora**
