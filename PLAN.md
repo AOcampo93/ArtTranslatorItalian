@@ -37,6 +37,7 @@ se discute y se cambia el documento; no se salta.
 | 6 | Las nueve DLL `ggml-cpu-*` junto a `ggml-base.dll`, **y loguear cuál se cargó** | El despacho cae a la peor variante **sin dar error** |
 | 7 | Anclar el tag **`b5130`** con su hash, nunca "latest release" | El release `v1.9.4` **no tiene assets**: el instalador no descarga nada |
 | 8 | Job Object con `KILL_ON_JOB_CLOSE` para los procesos hijo | `whisper-server` huérfano comiendo 700 MB y ocupando el puerto |
+| 9b | **El relevo de sesión de transcripción va en silencio, y la sucesora no oye nada hasta el relevo** | Las sesiones duran ~10 min y las reuniones pasan de 60: son 6-9 costuras. Medido: relevar por reloj perdió 5 de 12 frases y la pérdida crecía; relevar en silencio pero con la sucesora oyendo desde que abre produjo 14 transcripciones para 12 frases `[medido]` |
 | 9 | Hilos **por debajo de los núcleos disponibles**, reservando para la videollamada, y **nunca un barrido en el arranque** | Pasarse no degrada un poco: **81x** medido (12 hilos sobre 10 núcleos). La barrera de ggml es espera activa, así que el hilo que espera quema un núcleo. Y el óptimo en reposo (8) es 1,4x peor que el óptimo con la CPU ocupada (6), que es el escenario real `[medido]` |
 | 10 | **VAD + `-ac 512` + paso adaptativo**, siempre | La ventana de 30 s del encoder hunde los dos equipos |
 | 11 | Leer `audioContext.sampleRate`, **nunca asumir 48 kHz** | Remuestreo erróneo: todo "funciona" y el WER se dispara sin que nadie lo note. **Confirmado en DOS máquinas Windows con valores DISTINTOS: 44100 Hz en una y 48000 Hz en otra** `[medido]`. Fijar cualquiera de los dos habría roto la otra en silencio |
@@ -419,6 +420,91 @@ pregunta a cada una su `ggml_backend_score` y se queda con la mejor. **El score 
 features de CPUID, no por fabricante** `[verificado]`: el i9 Raptor Lake carga `alderlake`
 y el Ryzen carga `haswell` o mejor. El pilar de la instalación trivial se sostiene y no
 hay que preguntar nada al usuario.
+
+## 7bis. La versión 1 va por la nube
+
+**Decidido con el cliente:** la v1 transcribe en la nube y lo local queda en
+gris, para la v2. Se cae de la v1 todo el motor de whisper.cpp, y con él la
+clase entera de problema que costó la primera jornada: el modelo de 465 MB, el
+runtime de MSVC, las nueve DLL de microarquitectura, el número de hilos y el
+veredicto de CPU que podía equivocarse y mandar al cliente a pagar sin motivo.
+
+| Pieza | v1 | v2 |
+|---|---|---|
+| Transcripción IT | **Gemini 3.5 Transcribe Live** (WebSocket) | local opcional |
+| Traducción IT→ES | **Marian local** (gratis, ya construido) | igual |
+| Preguntas y respuestas | LLM con la clave del cliente | igual |
+| Captura de audio | loopback de Electron en Windows | igual |
+
+**Por qué Marian se queda en local:** Gemini Live **transcribe pero no
+traduce** `[verificado]` — es un canal de reconocimiento de voz, y el producto
+de traducción que ofrece es voz a voz, que no sirve para pintar burbujas. Y el
+texto en italiano hace falta de todos modos, porque el detector de preguntas
+trabaja sobre italiano y las respuestas sugeridas van en italiano.
+
+### Medido contra el audio de prueba `[medido]`
+
+| | |
+|---|---|
+| WER | **0,0%** sobre 17 palabras |
+| Primer parcial | 1.478 ms de empezar a hablar |
+| **Texto final tras callar** | **298 ms** |
+
+Los 298 ms son la latencia que el usuario percibe. En el HP Pavilion, whisper
+local daba 1.983 ms: **la nube es 7x más rápida en un equipo flojo**.
+
+El 0,0% es con voz sintética limpia y **no es la expectativa para una reunión
+real**, que sigue `[por medir]` con los 20-30 minutos de audio de §15.
+
+Formato exigido: PCM 16 bits, 16 kHz, mono, little-endian, en trozos de 100 ms
+`[verificado]` — exactamente lo que el pipeline ya produce.
+
+### El relevo de sesión, que es el riesgo nº 1
+
+Las sesiones duran unos 10 minutos y las reuniones del cliente pasan de 60. El
+diseño sale de tres intentos **medidos**, no de razonar:
+
+1. **Rotar por reloj pierde audio.** De doce frases llegaron truncadas cinco, y
+   la pérdida crecía en cada relevo hasta quedarse en *«la consegna alla
+   prossima settimana»*. El relevo caía a mitad de frase.
+2. **Rotar en silencio ya no pierde, pero duplica.** Doce frases dieron catorce
+   transcripciones: la sucesora se abría mientras alguien hablaba, oía media
+   frase y emitía ese pedazo.
+3. **Lo que funciona:** abrir el socket de la sucesora por adelantado pero **no
+   darle audio hasta el relevo**, y relevar en un silencio de verdad. Medido:
+   doce frases, doce transcripciones, cinco rotaciones, nada perdido y nada
+   duplicado.
+
+El silencio no hay que detectarlo: Gemini emite `voiceActivity` con
+`ACTIVITY_START` y `ACTIVITY_END`. Hay que seguir **las dos** transiciones —
+encender la bandera en el final y no apagarla al volver a hablar la deja
+encendida de un silencio viejo, y ahí volvió a fallar el primer intento.
+
+Y una defensa que salió de una prueba, no de la medición: un socket puede
+quedarse **medio abierto** —TCP vivo y servidor mudo—, y entonces `readyState`
+sigue diciendo que todo va bien y el evento de cierre nunca llega. Sin
+vigilante, el audio se acumularía en memoria para siempre sin que nadie
+reconecte. Es el fallo del minuto 50.
+
+### El coste
+
+$0,005/min de entrada más $0,004/min de salida, o sea **~$0,54 la hora**
+continua, y del orden de $0,25-0,35 con corte por silencio `[verificado]`. Una
+reunión de 90 minutos le cuesta al cliente entre 30 y 80 centavos. Hay nivel
+gratuito para desarrollo.
+
+**Si el relevo resulta frágil, la salida es AssemblyAI**, cuyas sesiones de
+streaming se cierran **a las 3 horas** en lugar de a los 10 minutos
+`[verificado]`, o sea una sola conexión por reunión. Su soporte de italiano en
+streaming está `[por medir]`. Por eso el transcriptor va detrás de una
+interfaz: cambiar de proveedor es un archivo, no una reescritura.
+
+## 7ter. Whisper local (v2)
+
+Lo que sigue es el motor local. **No viaja en la v1**: el código se queda en el
+repositorio, probado, y el modelo deja de empaquetarse. En la v2 la app
+comprueba el equipo, **informa** de si lo local es viable, y **el usuario
+decide** — nunca se decide solo, que es lo que se equivocó dos veces.
 
 ### Cuatro cosas que lo rompen, y ninguna es el despacho
 
