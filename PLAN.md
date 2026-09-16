@@ -475,6 +475,14 @@ diseño sale de tres intentos **medidos**, no de razonar:
    doce frases, doce transcripciones, cinco rotaciones, nada perdido y nada
    duplicado.
 
+**El tope real, medido:** el servidor cerró a los **9,84 minutos** con código
+1008 y el motivo *«failed to close the connection after receiving a GoAway
+signal»* `[medido]`. O sea que **avisa antes de cerrar**, con un mensaje
+`goAway` que trae el tiempo restante. Ese aviso se escucha y manda sobre
+nuestro reloj: si el tope cambiara, `goAway` lo refleja y una constante nuestra
+no. El reloj (sucesora a los 7 min, forzoso a los 9) se queda como respaldo por
+si el aviso no llegara.
+
 El silencio no hay que detectarlo: Gemini emite `voiceActivity` con
 `ACTIVITY_START` y `ACTIVITY_END`. Hay que seguir **las dos** transiciones —
 encender la bandera en el final y no apagarla al volver a hablar la deja

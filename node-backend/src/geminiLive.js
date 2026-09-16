@@ -94,6 +94,24 @@ const RELEVO_FORZOSO_MS = 9 * 60 * 1000
  */
 const SIN_ENVIAR_MS = 5000
 
+/**
+ * Margen antes del cierre anunciado por el servidor en el que el relevo deja
+ * de esperar un silencio y se hace de todos modos.
+ *
+ * Medido: el servidor cerró a los 9,84 min con código 1008 y el motivo
+ * «failed to close the connection after receiving a GoAway signal». O sea que
+ * **avisa antes de cerrar**, y el aviso es un dato mucho mejor que nuestro
+ * reloj: si el tope cambia, `goAway` lo refleja y la constante de aquí no.
+ */
+const MARGEN_GOAWAY_MS = 20000
+
+/** Duraciones del protocolo vienen como '540s' o '1.5s'. */
+function duracionAMs (d) {
+  if (typeof d === 'number') return d * 1000
+  const m = String(d || '').match(/^([\d.]+)s?$/)
+  return m ? Math.round(parseFloat(m[1]) * 1000) : null
+}
+
 /** Reintentos de conexión, con espera creciente. */
 const ESPERAS_RECONEXION_MS = [500, 1000, 2000, 4000, 8000]
 
@@ -181,6 +199,14 @@ class Sesion extends EventEmitter {
 
     if (m.setupComplete !== undefined) { this.lista = true; this.emit('lista'); return }
 
+    // El servidor avisa de que va a cerrar. Es la señal autoritativa: no hay
+    // que adivinar el tope por reloj.
+    if (m.goAway) {
+      const ms = duracionAMs(m.goAway.timeLeft)
+      this.emit('goAway', ms)
+      return
+    }
+
     const cont = m.serverContent || {}
     const parcial = m.interimInputTranscription?.text ?? cont.interimInputTranscription?.text
     const final = m.inputTranscription?.text ?? cont.inputTranscription?.text
@@ -247,6 +273,7 @@ class GeminiLiveTranscriber extends EventEmitter {
     this._descartadasS = 0
     this._avisadoDelHueco = false
     this._ultimoEnvioOk = 0
+    this._cierreAnunciadoEn = null
 
     this.stats = { frases: 0, rotaciones: 0, reconexiones: 0, segundosAudio: 0 }
   }
@@ -277,6 +304,7 @@ class GeminiLiveTranscriber extends EventEmitter {
       this.emit('frase', { texto: t, ms: Date.now(), sesion: s.id })
     })
     s.on('voz', () => this._quizaRelevar())
+    s.on('goAway', ms => this._avisoDeCierre(s, ms))
     s.on('cerrada', e => this._sesionCerrada(s, e))
     s.on('fallo', err => this.emit('error', err))
     await s.abrir()
@@ -348,10 +376,22 @@ class GeminiLiveTranscriber extends EventEmitter {
     }
   }
 
+  /**
+   * El servidor anuncia que cerrará. Se apunta el instante y se prepara la
+   * sucesora ya, sin esperar al reloj propio.
+   */
+  _avisoDeCierre (s, ms) {
+    if (s !== this._activa) return
+    this._cierreAnunciadoEn = Number.isFinite(ms) ? Date.now() + ms : Date.now() + MARGEN_GOAWAY_MS
+    this.emit('estado', 'escuchando')
+    this._quizaAbrirSucesora(true)
+  }
+
   /** Abre la sucesora por adelantado, pero SIN darle audio. */
-  async _quizaAbrirSucesora () {
+  async _quizaAbrirSucesora (yaMismo = false) {
     if (!this._corriendo || this._sucesora || this._rotando) return
-    if (!this._activa || this._activa.edadMs < ABRIR_SUCESORA_MS) return
+    if (!yaMismo && (!this._activa || this._activa.edadMs < ABRIR_SUCESORA_MS)) return
+    if (!this._activa) return
     this._rotando = true
     try {
       const s = await this._nuevaSesion()
@@ -372,17 +412,25 @@ class GeminiLiveTranscriber extends EventEmitter {
   _quizaRelevar () {
     if (!this._sucesora || !this._activa) return
     const callado = !this._activa.hablando
-    const forzoso = this._activa.edadMs > RELEVO_FORZOSO_MS
+    // El cierre anunciado manda sobre el reloj propio: si queda menos que el
+    // margen, se releva hablando o no. Perder media frase es mucho mejor que
+    // dejar que el servidor corte y perderla entera.
+    const seCierraYa = this._cierreAnunciadoEn
+      && this._cierreAnunciadoEn - Date.now() < MARGEN_GOAWAY_MS
+    const forzoso = seCierraYa || this._activa.edadMs > RELEVO_FORZOSO_MS
     if (!callado && !forzoso) return
 
     const vieja = this._activa
     this._activa = this._sucesora
     this._sucesora = null
     this._activa.recibeAudio = true
+    this._cierreAnunciadoEn = null
     this.stats.rotaciones++
     this.emit('rotacion', {
       de: vieja.id, a: this._activa.id,
-      motivo: callado ? 'silencio' : 'tope de sesión sin silencio',
+      motivo: callado ? 'silencio'
+        : seCierraYa ? 'el servidor anunció el cierre'
+        : 'tope de sesión sin silencio',
     })
     this._vaciarPendiente()
     // Se cierra con retraso: si quedaba un final en vuelo, que llegue.
@@ -435,5 +483,5 @@ class GeminiLiveTranscriber extends EventEmitter {
 module.exports = { GeminiLiveTranscriber, SAMPLE_RATE, MODELO }
 module.exports._internos = {
   Sesion, aPcm16, ABRIR_SUCESORA_MS, RELEVO_FORZOSO_MS, MAX_BUFFER_S,
-  MUESTRAS_TROZO, SIN_ENVIAR_MS,
+  MUESTRAS_TROZO, SIN_ENVIAR_MS, MARGEN_GOAWAY_MS, duracionAMs,
 }

@@ -62,6 +62,7 @@ class SesionFalsa extends EventEmitter {
   diceFinal (t) { this.emit('final', t) }
   dicePartial (t) { this.emit('parcial', t) }
   seCae (code = 1011) { this.lista = false; this.emit('cerrada', { code, reason: 'prueba' }) }
+  anunciaCierre (ms) { this.emit('goAway', ms) }
 }
 
 /** Transcriptor con sesiones falsas, y la lista de las creadas. */
@@ -210,6 +211,79 @@ describe('el relevo de sesión — el riesgo nº 1', () => {
     assert.strictEqual(creadas[0].cerrada, false, 'no puede cerrarse en el mismo instante')
     await new Promise(r => setTimeout(r, 1200))
     assert.strictEqual(creadas[0].cerrada, true, 'pero sí poco después')
+  })
+})
+
+describe('el aviso de cierre del servidor manda sobre nuestro reloj', () => {
+  // Medido: el servidor cerró a los 9,84 min con código 1008 y el motivo
+  // «failed to close the connection after receiving a GoAway signal». O sea que
+  // avisa antes. Ese aviso es mejor dato que nuestra constante: si el tope
+  // cambia, goAway lo refleja y la constante no.
+
+  test('convierte las duraciones del protocolo', () => {
+    assert.strictEqual(_internos.duracionAMs('540s'), 540000)
+    assert.strictEqual(_internos.duracionAMs('1.5s'), 1500)
+    assert.strictEqual(_internos.duracionAMs('basura'), null)
+  })
+
+  test('con el aviso, prepara la sucesora sin esperar al reloj', async () => {
+    const { t, creadas } = montar()
+    await t.start()
+    assert.strictEqual(creadas.length, 1)
+
+    creadas[0].anunciaCierre(60000)             // aún queda un minuto
+    await new Promise(r => setTimeout(r, 20))
+    assert.strictEqual(creadas.length, 2,
+      'el aviso debe disparar la preparación aunque la sesión sea joven')
+    assert.strictEqual(creadas[1].recibeAudio, false, 'y seguir muda hasta el relevo')
+  })
+
+  test('con tiempo de sobra, sigue esperando el silencio', async () => {
+    const { t, creadas } = montar()
+    await t.start()
+    creadas[0].anunciaCierre(60000)
+    await new Promise(r => setTimeout(r, 20))
+    creadas[0].habla()
+    assert.strictEqual(t._activa.id, 1,
+      'queda un minuto: no hay prisa por cortar la frase')
+  })
+
+  test('si el cierre es inminente, releva aunque esté hablando', async () => {
+    const { t, creadas } = montar()
+    const rotaciones = []
+    t.on('rotacion', r => rotaciones.push(r))
+    await t.start()
+    creadas[0].anunciaCierre(_internos.MARGEN_GOAWAY_MS - 5000)
+    await new Promise(r => setTimeout(r, 20))
+    creadas[0].habla()
+
+    assert.strictEqual(t._activa.id, 2,
+      'perder media frase es mejor que dejar que el servidor corte y perderla entera')
+    assert.match(rotaciones[0].motivo, /el servidor anunció el cierre/)
+  })
+
+  test('un aviso sin tiempo legible no se ignora', async () => {
+    // Si el campo viniera raro, tratarlo como "queda el margen justo" es lo
+    // seguro: preparar el relevo. Ignorarlo dejaría que el servidor cortara.
+    const { t, creadas } = montar()
+    await t.start()
+    creadas[0].anunciaCierre(null)
+    await new Promise(r => setTimeout(r, 20))
+    assert.strictEqual(creadas.length, 2, 'debe preparar la sucesora igual')
+  })
+
+  test('el aviso de una sesión que ya no es la activa se ignora', async () => {
+    const { t, creadas } = montar()
+    await t.start()
+    creadas[0].edadMs = _internos.ABRIR_SUCESORA_MS + 1
+    t.alimentar(trozo())
+    await new Promise(r => setTimeout(r, 20))
+    creadas[0].calla()                          // relevo a la 2
+
+    const antes = t._activa.id
+    creadas[0].anunciaCierre(1000)              // la vieja avisa, ya da igual
+    creadas[0].habla()
+    assert.strictEqual(t._activa.id, antes, 'la sesión relevada ya no decide nada')
   })
 })
 
