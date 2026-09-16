@@ -31,6 +31,14 @@ chk "modelo de Marian embebido (npm ci NO lo trae: hay que traducir una vez ante
    'M="'"$D"'/resources/node-backend/node_modules/@huggingface/transformers/.cache/Xenova/opus-mt-it-es/onnx";
     [ -f "$M/encoder_model_quantized.onnx" ] && [ -f "$M/decoder_model_merged_quantized.onnx" ] &&
     [ $(cat "$M/encoder_model_quantized.onnx" "$M/decoder_model_merged_quantized.onnx" | wc -c) -gt 50000000 ]'
+# Lo que hay en node_modules/.cache es lo que había en la máquina de compilación,
+# así que ahí se cuela cualquier cosa. Pasó: una medición del líder comparando el
+# modelo de precisión completa contra el cuantizado dejó 402 MB en la caché y el
+# paquete se los llevó, aunque la app sólo carga el cuantizado (dtype: 'q8').
+# Comprobar que el modelo está no basta: hay que comprobar que NO está lo que no
+# se usa.
+chk "sin variantes del modelo que la app no carga (402 MB de lastre)" \
+   '! ls "'"$D"'"/resources/node-backend/node_modules/@huggingface/transformers/.cache/Xenova/opus-mt-it-es/onnx/*.onnx 2>/dev/null | grep -qv quantized'
 chk "ws, que es el WebSocket de la transcripción en vivo" \
    '[ -d "'"$D"'/resources/node-backend/node_modules/ws" ]'
 chk "audio italiano de prueba" \
