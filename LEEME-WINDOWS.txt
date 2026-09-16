@@ -31,8 +31,15 @@ No hace falta instalar nada más.
 ANTES DE LA PRIMERA REUNIÓN
 ---------------------------
 
-1. Abre Ajustes, arriba a la derecha (el engranaje) y pega tu clave de
-   transcripción. Se guarda cifrada en esta computadora y no sale de aquí.
+1. Abre Ajustes, arriba a la derecha (el engranaje). Hay dos campos:
+
+   - **Transcripción** (obligatoria). Es la clave de AssemblyAI. Sin ella la
+     aplicación no puede oír la reunión.
+   - **Respuestas y preguntas** (opcional). Una clave de Gemini, ChatGPT o
+     Claude. Sin ella la aplicación sigue traduciendo con normalidad; sólo
+     se queda sin detectar preguntas ni sugerirte qué contestar.
+
+   Las dos se guardan cifradas en esta computadora y no salen de aquí.
 
 2. Rellena tu perfil. Se queda guardado.
 
@@ -70,6 +77,11 @@ LO QUE CUESTA
 La transcripción la cobra el servicio con tu propia clave, por tiempo de
 conexión: alrededor de 0,45 dólares por hora de reunión. Una llamada de noventa
 minutos son unos 68 centavos.
+
+Las respuestas sugeridas cuestan aparte, con tu clave del modelo de lenguaje,
+pero muy poco: la aplicación sólo llama cuando de verdad te han hecho una
+pregunta. De cientos de frases en una reunión, unas pocas. Los saludos y las
+fórmulas de cortesía se descartan sin gastar nada.
 
 La traducción al español no cuesta nada: se hace dentro de tu computadora.
 
