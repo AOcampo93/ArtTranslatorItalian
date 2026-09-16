@@ -1,91 +1,117 @@
-DIAGNÓSTICO — Traductor Italiano
-================================
-
-Esta herramienta NO traduce ni graba nada. Solo mide tu computadora y escribe
-un archivo de texto que tú decides si compartir.
+TRADUCTOR ITALIANO → ESPAÑOL
+Versión de prueba
+==============================================
 
 
-CÓMO USARLA
------------
-
-1. Abre "Diagnostico Traductor Italiano.exe".
-2. Pulsa "Comenzar".
-3. Cuando termine, pulsa "Guardar informe". Se guarda en tu Escritorio.
-4. Envía ese archivo.
-
-Tarda menos de un minuto.
-
-
-PARA QUE LA MEDICIÓN SIRVA
---------------------------
-
-Ábrela con una videollamada en marcha, o al menos con lo que sueles tener
-abierto durante una reunión. La aplicación real competirá por el procesador con
-Teams o Zoom, así que medir con la computadora vacía daría un número optimista
-que luego no se cumple.
-
-
-SI NO ARRANCA
--------------
-
-No hace falta instalar nada aparte: la aplicación ya lleva dentro todo lo
-que necesita, incluido el runtime de Microsoft.
-
-Si no abre, ejecútala desde la terminal para ver el error.
-
-En PowerShell (la ventana azul), hace falta el símbolo & delante, o solo
-imprimirá el nombre sin ejecutar nada:
-
-    $env:DIAG_AUTO = "1"
-    & ".\Diagnostico Traductor Italiano.exe"
-
-En Símbolo del sistema (la ventana negra, cmd):
-
-    set DIAG_AUTO=1
-    "Diagnostico Traductor Italiano.exe"
-
-Eso hace todo automáticamente y escribe el informe sin usar la ventana.
-
-
-SI ESTO CORRE EN UNA MÁQUINA VIRTUAL
-------------------------------------
-
-La aplicación decide sola cuántos núcleos usar, y en una máquina virtual se
-queda corta: el cálculo está pensado para un procesador físico completo. Para
-que la medición sea representativa, fuerza el número de hilos antes de abrirla.
-
-Desde la terminal, en la carpeta del programa:
-
-En PowerShell:
-
-    $env:WHISPER_HILOS = "6"
-    & ".\Diagnostico Traductor Italiano.exe"
-
-En cmd:
-
-    set WHISPER_HILOS=6
-    "Diagnostico Traductor Italiano.exe"
-
-Usa los vCPU de la máquina virtual menos cuatro, y nunca más de 6. Con 8 vCPU,
-pon 4. No subas de ahí: está medido que pedir más hilos que núcleos disponibles
-no va "un poco peor", se cae en seco (12 hilos sobre 10 núcleos tardaron 81
-veces más que 8).
-
-
-QUÉ MIDE
+QUÉ HACE
 --------
 
-  · Tu procesador, memoria y tarjeta gráfica.
-  · Si puede oír el sonido de tu computadora.
-  · Cuánto tarda en entender italiano hablado.
-  · Cuánto tarda en traducirlo a español.
+Escucha el audio de tu computadora durante una videollamada, transcribe lo que
+se dice en italiano, y lo traduce al español en pantalla mientras hablan.
 
-El informe dice también, de forma explícita, qué cosas NO pudo comprobar. Eso
-es tan importante como lo que sí midió.
+Además detecta las preguntas que te hacen a ti y te sugiere una respuesta
+**en italiano**, para que puedas decirla en voz alta.
 
 
-PRIVACIDAD
-----------
+CÓMO INSTALARLA
+---------------
 
-No graba audio. No envía nada por internet. El único archivo que sale de tu
-computadora es el informe de texto, y lo mandas tú a mano.
+1. Extrae esta carpeta en el disco local. No la ejecutes desde dentro del ZIP
+   y no la dejes en una unidad de red: en los dos casos va lenta.
+
+2. Abre "Traductor Italiano.exe".
+
+3. Windows puede avisar de que no reconoce el programa. Es normal: la
+   aplicación no está firmada todavía. Elige "Más información" y luego
+   "Ejecutar de todas formas".
+
+No hace falta instalar nada más.
+
+
+ANTES DE LA PRIMERA REUNIÓN
+---------------------------
+
+1. Abre Ajustes, arriba a la derecha (el engranaje) y pega tu clave de
+   transcripción. Se guarda cifrada en esta computadora y no sale de aquí.
+
+2. Rellena tu perfil. Se queda guardado.
+
+3. Rellena el contexto de la reunión. **Esto cámbialo en cada llamada**: es lo
+   que más mejora la traducción de nombres propios y términos del proyecto.
+   El glosario importa especialmente — pon ahí las siglas, los nombres de
+   empresa y el vocabulario que vayan a usar.
+
+4. Pulsa "Comprobar". Mide tres cosas: si oye el audio de tu computadora, qué
+   tan rápido responde el servicio desde tu conexión, y cuánto tarda la cadena
+   completa con una frase de prueba.
+
+
+DURANTE LA REUNIÓN
+------------------
+
+1. Entra a tu videollamada como siempre.
+
+2. En el traductor, pulsa "Escuchar".
+
+3. Windows te preguntará qué compartir. **Elige la pantalla completa** y
+   asegúrate de marcar la casilla de compartir el audio. Si eliges una ventana
+   suelta, en muchos casos Windows no entrega el sonido.
+
+4. Ya está. La traducción aparece a la izquierda y las preguntas a la derecha.
+
+Al terminar, pulsa "Detener". **Es importante:** mientras está escuchando, el
+servicio de transcripción cobra por tiempo conectado, no por lo que se hable.
+Si dejas la aplicación escuchando y te vas, sigue contando.
+
+
+LO QUE CUESTA
+-------------
+
+La transcripción la cobra el servicio con tu propia clave, por tiempo de
+conexión: alrededor de 0,45 dólares por hora de reunión. Una llamada de noventa
+minutos son unos 68 centavos.
+
+La traducción al español no cuesta nada: se hace dentro de tu computadora.
+
+
+SOBRE LA PRIVACIDAD
+-------------------
+
+El audio de la reunión se envía a un servicio de inteligencia artificial para
+transcribirlo. La conversación sale de tu computadora. No se guarda audio en
+ningún servidor nuestro, y la traducción se hace en local, pero conviene que lo
+sepas y lo tengas en cuenta según de qué se hable.
+
+
+SI ALGO NO VA
+-------------
+
+**No oye nada.** Casi siempre es que se compartió una ventana en vez de la
+pantalla completa, o que no se marcó la casilla del audio. Pulsa "Detener",
+vuelve a "Escuchar" y elige pantalla completa.
+
+**Dice "demasiadas sesiones".** Quedó una sesión anterior sin cerrar. Espera un
+minuto y vuelve a intentarlo.
+
+**Va lenta o se corta.** Depende de tu conexión a internet, no de la potencia
+de la computadora. La pantalla muestra arriba a la derecha el retardo real en
+milisegundos.
+
+**No abre.** Ejecútala desde la terminal para ver el error. En PowerShell hace
+falta el símbolo & delante, o sólo imprimirá el nombre sin ejecutar nada:
+
+    & ".\Traductor Italiano.exe"
+
+En Símbolo del sistema (cmd):
+
+    "Traductor Italiano.exe"
+
+Manda lo que salga y con eso se puede saber qué pasó.
+
+
+QUÉ FALTA EN ESTA VERSIÓN
+-------------------------
+
+  · El modo local, que transcribiría sin internet y sin coste por hora, está
+    en gris. Se evaluará después de probar esta versión.
+  · La aplicación no está firmada, de ahí el aviso de Windows al abrirla.

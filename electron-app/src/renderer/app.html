@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'">
+<title>Traductor Italiano</title>
+<style>
+  /*
+   * Tres zonas, como pidió el cliente: traducción, preguntas y contexto
+   * general colapsable. La de traducción manda; las otras dos no pueden
+   * robarle sitio, porque leer la traducción es lo único que el usuario hace
+   * mientras alguien le habla.
+   */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0B0F14; --sup: #11161D; --sup2: #161C25; --linea: #222A35;
+    --tx: #E6EDF3; --tx2: #8B949E; --tx3: #565F6B;
+    --ok: #00D4AA; --mal: #F85149; --aviso: #E3B341;
+    --burbuja: #1C2532; --mia: #0E3A33;
+    --sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    --mono: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--tx);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ── Barra superior ─────────────────────────────────────────────── */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border-bottom: 1px solid var(--linea);
+    background: var(--sup); flex: none; -webkit-app-region: drag;
+  }
+  header button, header select { -webkit-app-region: no-drag; }
+  .marca { font-weight: 600; font-size: 13px; letter-spacing: -.01em; }
+  .estado { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx2); }
+  .punto { width: 8px; height: 8px; border-radius: 50%; background: var(--tx3); flex: none; }
+  .punto.vivo { background: var(--ok); animation: latir 1.6s ease-in-out infinite; }
+  .punto.mal  { background: var(--mal); }
+  .punto.aviso { background: var(--aviso); }
+  @keyframes latir { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .hueco { flex: 1; }
+
+  .chip {
+    font-size: 11px; padding: 3px 8px; border-radius: 999px;
+    border: 1px solid var(--linea); color: var(--tx2); background: var(--sup2);
+    white-space: nowrap;
+  }
+  .chip.nube { border-color: #1E4D6B; color: #7FC4E8; }
+
+  /* El retardo en vivo: el cliente lo pidió para poder comparar con la
+     versión local cuando exista. */
+  .retardo { font-family: var(--mono); font-size: 11.5px; color: var(--tx2); }
+  .retardo b { color: var(--tx); font-weight: 600; }
+  .retardo.lento b { color: var(--aviso); }
+
+  button {
+    font-family: var(--sans); font-size: 13px; font-weight: 600;
+    padding: 8px 16px; border: none; border-radius: 7px;
+    background: var(--ok); color: #05231D; cursor: pointer;
+  }
+  button:disabled { background: var(--sup2); color: var(--tx3); cursor: default; }
+  button.sec { background: transparent; border: 1px solid var(--linea); color: var(--tx2); font-weight: 500; }
+  button.sec:hover:not(:disabled) { border-color: var(--tx3); color: var(--tx); }
+  button.parar { background: var(--mal); color: #2B0907; }
+  button.icono { background: none; border: none; color: var(--tx2); font-size: 17px; padding: 4px 8px; }
+  button.icono:hover { color: var(--tx); }
+
+  /* ── Zona principal ─────────────────────────────────────────────── */
+  main { flex: 1; display: flex; min-height: 0; }
+
+  #conversacion {
+    flex: 1; overflow-y: auto; padding: 16px 14px 20px;
+    display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  }
+
+  /* ── Burbujas ───────────────────────────────────────────────────── */
+  .burbuja {
+    max-width: 78%; align-self: flex-start;
+    background: var(--burbuja); border-radius: 14px 14px 14px 4px;
+    padding: 9px 13px; animation: entrar .18s ease-out;
+  }
+  @keyframes entrar { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+
+  /* El italiano va pequeño y apagado: está para comprobar, no para leer. Lo
+     que el usuario lee es el español. */
+  .it { font-size: 12px; color: var(--tx3); margin-bottom: 3px; }
+  .es { font-size: 14.5px; line-height: 1.45; }
+  .pie { display: flex; gap: 8px; margin-top: 5px; font-family: var(--mono); font-size: 10.5px; color: var(--tx3); }
+
+  .burbuja.parcial { opacity: .6; border-style: dashed; border: 1px dashed var(--linea); background: transparent; }
+  .burbuja.parcial .es { color: var(--tx2); font-style: italic; }
+
+  .vacio { margin: auto; text-align: center; color: var(--tx3); font-size: 13px; max-width: 320px; }
+  .vacio b { display: block; color: var(--tx2); font-size: 14px; margin-bottom: 6px; font-weight: 600; }
+
+  /* ── Zona de preguntas ──────────────────────────────────────────── */
+  #preguntas {
+    width: 330px; flex: none; border-left: 1px solid var(--linea);
+    background: var(--sup); display: flex; flex-direction: column; min-height: 0;
+  }
+  .titulo {
+    padding: 9px 13px; font-size: 11px; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--tx3); border-bottom: 1px solid var(--linea);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .cuenta { background: var(--sup2); border-radius: 999px; padding: 1px 7px; font-size: 10px; }
+  #listaPreguntas { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+
+  .pregunta { background: var(--sup2); border-radius: 10px; padding: 10px 12px; border-left: 2px solid var(--aviso); }
+  .pregunta .q { font-size: 13px; margin-bottom: 8px; }
+  /* La respuesta va SOLO en italiano, sin glosa al español: confirmado con el
+     cliente. Es para decirla en voz alta, no para entenderla. */
+  .respuesta {
+    background: var(--mia); border-radius: 10px 10px 4px 10px;
+    padding: 9px 12px; font-size: 13.5px; line-height: 1.45;
+  }
+  .respuesta.cargando { color: var(--tx3); font-style: italic; }
+  .acciones { display: flex; gap: 6px; margin-top: 7px; }
+  .acciones button { font-size: 11px; padding: 4px 9px; }
+
+  /* ── Contexto general, colapsado por defecto ────────────────────── */
+  #contexto { border-top: 1px solid var(--linea); background: var(--sup); flex: none; }
+  #contexto summary {
+    padding: 8px 14px; cursor: pointer; font-size: 11px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--tx3);
+    list-style: none; display: flex; align-items: center; gap: 8px;
+  }
+  #contexto summary::-webkit-details-marker { display: none; }
+  #contexto summary::before { content: '▸'; font-size: 10px; transition: transform .15s; }
+  #contexto[open] summary::before { transform: rotate(90deg); }
+  #contexto .cuerpo { padding: 0 14px 12px; font-size: 13px; color: var(--tx2); max-height: 130px; overflow-y: auto; }
+
+  /* ── Pantalla de preparación ────────────────────────────────────── */
+  #preparar { flex: 1; overflow-y: auto; padding: 22px; }
+  .env { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
+  .sub { color: var(--tx2); font-size: 13px; margin-top: 5px; }
+
+  .tarjeta { background: var(--sup); border: 1px solid var(--linea); border-radius: 10px; padding: 15px; margin-top: 14px; }
+  .tarjeta h2 { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .tarjeta h2 .n {
+    width: 19px; height: 19px; border-radius: 50%; background: var(--sup2);
+    color: var(--tx2); font-size: 11px; display: grid; place-items: center; flex: none;
+  }
+  .tarjeta h2 .n.hecho { background: var(--ok); color: #05231D; }
+  .ayuda { color: var(--tx3); font-size: 12px; margin: 5px 0 11px 27px; }
+
+  .rejilla { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  label { display: block; font-size: 11.5px; color: var(--tx2); margin-bottom: 4px; }
+  input, textarea, select {
+    width: 100%; background: var(--bg); border: 1px solid var(--linea); border-radius: 6px;
+    color: var(--tx); font-family: var(--sans); font-size: 13px; padding: 7px 9px;
+  }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--tx3); }
+  textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
+  .ancho { grid-column: 1 / -1; }
+
+  .paso { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: baseline; padding: 8px 0; }
+  .paso + .paso { border-top: 1px solid var(--linea); }
+  .pt { font-size: 13px; }
+  .pd { display: block; color: var(--tx3); font-size: 11.5px; margin-top: 2px; }
+  .pv { font-family: var(--mono); font-size: 11px; color: var(--tx2); white-space: nowrap; }
+
+  .fila { display: flex; gap: 9px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  .aviso-caja {
+    background: rgba(227,179,65,.07); border: 1px solid rgba(227,179,65,.3);
+    border-radius: 8px; padding: 11px 13px; font-size: 12.5px; color: var(--tx2); margin-top: 14px;
+  }
+  .aviso-caja b { color: var(--tx); }
+
+  .oculto { display: none !important; }
+
+  /* ── Ajustes ────────────────────────────────────────────────────── */
+  #ajustes {
+    position: fixed; inset: 0; background: rgba(0,0,0,.65);
+    display: grid; place-items: center; padding: 22px; z-index: 50;
+  }
+  #ajustes .panel {
+    background: var(--sup); border: 1px solid var(--linea); border-radius: 12px;
+    padding: 20px; width: min(560px, 100%); max-height: 88vh; overflow-y: auto;
+  }
+  .modo { display: flex; gap: 9px; margin-top: 9px; }
+  .modo .op {
+    flex: 1; border: 1px solid var(--linea); border-radius: 8px; padding: 11px;
+    cursor: pointer; background: var(--bg);
+  }
+  .modo .op.sel { border-color: var(--ok); background: rgba(0,212,170,.06); }
+  .modo .op.no { opacity: .45; cursor: not-allowed; }
+  .modo .op b { display: block; font-size: 13px; margin-bottom: 3px; }
+  .modo .op span { font-size: 11.5px; color: var(--tx3); }
+
+  @media (max-width: 820px) {
+    main { flex-direction: column; }
+    #preguntas { width: auto; border-left: none; border-top: 1px solid var(--linea); max-height: 45%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="marca">Traductor IT → ES</span>
+  <span class="chip nube" id="chipModo">Nube</span>
+  <div class="estado"><span class="punto" id="punto"></span><span id="txtEstado">Sin iniciar</span></div>
+  <span class="hueco"></span>
+  <span class="retardo oculto" id="retardo">retardo <b>—</b></span>
+  <button class="sec oculto" id="btnParar">Detener</button>
+  <button class="icono" id="btnAjustes" title="Ajustes">⚙</button>
+</header>
+
+<!-- ══ Preparación ══════════════════════════════════════════════════ -->
+<div id="preparar">
+  <div class="env">
+    <h1>Preparar la reunión</h1>
+    <p class="sub">Tres pasos. El perfil se queda guardado; el contexto cámbialo en cada llamada.</p>
+
+    <section class="tarjeta">
+      <h2><span class="n" id="n1">1</span> Tu perfil</h2>
+      <p class="ayuda">Quién eres. Sirve para que las respuestas sugeridas suenen a ti.</p>
+      <div class="rejilla">
+        <div><label>Nombre</label><input id="pNombre" placeholder="Omar Avila"></div>
+        <div><label>Edad</label><input id="pEdad" type="number" min="16" max="99" placeholder="34"></div>
+        <div class="ancho"><label>Ocupación</label><input id="pOcupacion" placeholder="Responsable técnico"></div>
+        <div class="ancho">
+          <label>Contexto personal</label>
+          <textarea id="pContexto" placeholder="No hablo italiano; entiendo algo escrito. Decido sobre plazos y alcance."></textarea>
+        </div>
+      </div>
+    </section>
+
+    <section class="tarjeta">
+      <h2><span class="n" id="n2">2</span> Contexto de esta reunión</h2>
+      <p class="ayuda">De qué va la llamada de hoy. Es lo que más mejora la traducción de términos y nombres propios.</p>
+      <div class="rejilla">
+        <div class="ancho"><label>Nombre</label><input id="cNombre" placeholder="Rossi Logistica — fase 2"></div>
+        <div><label>Tipo de reunión</label>
+          <select id="cTipoReunion">
+            <option>negociación</option><option>seguimiento</option><option>técnica</option>
+            <option>presentación</option><option>entrevista</option><option>otra</option>
+          </select>
+        </div>
+        <div><label>Tipo de proyecto</label><input id="cTipoProyecto" placeholder="ERP de logística"></div>
+        <div class="ancho"><label>De qué se va a hablar</label>
+          <textarea id="cContexto" placeholder="Se discute el alcance de la fase 2 y quién asume las horas extra."></textarea>
+        </div>
+        <div class="ancho">
+          <label>Glosario — nombres, siglas y términos del proyecto</label>
+          <input id="cGlosario" placeholder="SAP, ERP, WMS, Rossi Logistica, fase 2">
+        </div>
+      </div>
+    </section>
+
+    <section class="tarjeta">
+      <h2><span class="n" id="n3">3</span> Comprobación</h2>
+      <p class="ayuda">Comprueba que la app está lista y a qué velocidad va a responder en este equipo.</p>
+      <div id="pasos"></div>
+      <div class="fila">
+        <button id="btnProbar">Comprobar</button>
+        <button class="sec" id="btnSaltar">Saltar</button>
+      </div>
+    </section>
+
+    <div class="aviso-caja">
+      <b>Sobre la privacidad.</b> El audio de la reunión se envía a un servicio de
+      inteligencia artificial para transcribirlo. No se guarda audio en ningún
+      servidor nuestro, pero la conversación sí sale de este equipo. Se usan tus
+      propias claves y el gasto corre por tu cuenta.
+    </div>
+
+    <div class="fila">
+      <button id="btnEscuchar" disabled>Escuchar</button>
+      <span class="sub" id="pistaEscuchar">Rellena el perfil y el contexto para empezar.</span>
+    </div>
+  </div>
+</div>
+
+<!-- ══ En vivo ══════════════════════════════════════════════════════ -->
+<main class="oculto" id="envivo">
+  <div id="conversacion">
+    <div class="vacio" id="vacio">
+      <b>Escuchando el audio de tu computadora</b>
+      Cuando alguien hable en italiano, la traducción aparecerá aquí.
+    </div>
+  </div>
+
+  <aside id="preguntas">
+    <div class="titulo">Preguntas para ti <span class="cuenta" id="cuentaP">0</span></div>
+    <div id="listaPreguntas"></div>
+  </aside>
+</main>
+
+<details id="contexto" class="oculto">
+  <summary>De qué se está hablando</summary>
+  <div class="cuerpo" id="cuerpoContexto">Todavía no hay suficiente conversación.</div>
+</details>
+
+<!-- ══ Ajustes ══════════════════════════════════════════════════════ -->
+<div id="ajustes" class="oculto">
+  <div class="panel">
+    <h1>Ajustes</h1>
+
+    <section class="tarjeta">
+      <h2>Modo de transcripción</h2>
+      <div class="modo">
+        <div class="op sel"><b>Nube</b><span>Rápido en cualquier equipo. Se paga por hora de reunión.</span></div>
+        <div class="op no" title="Disponible en una versión futura">
+          <b>Local</b><span>No disponible en esta versión.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="tarjeta">
+      <h2>Tus claves</h2>
+      <p class="ayuda">Se guardan cifradas en este equipo y no salen de él. El gasto corre por tu cuenta.</p>
+      <div class="rejilla">
+        <div class="ancho"><label>Transcripción</label><input id="kSTT" type="password" placeholder="•••"></div>
+        <div class="ancho"><label>Respuestas y preguntas</label><input id="kLLM" type="password" placeholder="•••"></div>
+      </div>
+    </section>
+
+    <div class="fila">
+      <button id="btnGuardarAjustes">Guardar</button>
+      <button class="sec" id="btnCerrarAjustes">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<script src="audio.js"></script>
+<script>
+'use strict'
+
+const $ = s => document.querySelector(s)
+const crear = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e }
+
+/**
+ * Puente con el proceso principal. Si no existe —porque el archivo se abrió
+ * en un navegador— la interfaz corre con datos de ejemplo, que es lo que
+ * permite verla y ajustarla sin audio ni claves.
+ */
+const api = window.app || null
+const DEMO = !api
+
+// ── Estado de pantalla ────────────────────────────────────────────────
+function estado (clase, texto) {
+  $('#punto').className = 'punto' + (clase ? ' ' + clase : '')
+  $('#txtEstado').textContent = texto
+}
+
+const retardos = []
+function apuntarRetardo (ms) {
+  retardos.push(ms)
+  if (retardos.length > 20) retardos.shift()
+  const orden = [...retardos].sort((a, b) => a - b)
+  const p50 = orden[Math.floor(orden.length / 2)]
+  const el = $('#retardo')
+  el.classList.remove('oculto')
+  el.classList.toggle('lento', p50 > 1500)
+  el.innerHTML = `retardo <b>${p50} ms</b>`
+}
+
+// ── Burbujas ──────────────────────────────────────────────────────────
+let burbujaParcial = null
+
+function pintarParcial (texto) {
+  $('#vacio')?.classList.add('oculto')
+  if (!burbujaParcial) {
+    burbujaParcial = crear('div', 'burbuja parcial')
+    burbujaParcial.innerHTML = '<div class="es"></div>'
+    $('#conversacion').appendChild(burbujaParcial)
+  }
+  burbujaParcial.querySelector('.es').textContent = texto
+  abajo()
+}
+
+function pintarFrase ({ it, es, ms, msTranscribir, msTraducir }) {
+  $('#vacio')?.classList.add('oculto')
+  burbujaParcial?.remove()
+  burbujaParcial = null
+
+  const b = crear('div', 'burbuja')
+  const eIt = crear('div', 'it'); eIt.textContent = it
+  const eEs = crear('div', 'es'); eEs.textContent = es
+  const pie = crear('div', 'pie')
+  // El desglose importa: con él se ve si el retardo viene de la red o del
+  // equipo, que es lo que habrá que comparar cuando exista el modo local.
+  pie.textContent = [
+    `${ms} ms`,
+    msTranscribir != null ? `oír ${msTranscribir}` : null,
+    msTraducir != null ? `traducir ${msTraducir}` : null,
+  ].filter(Boolean).join(' · ')
+
+  b.append(eIt, eEs, pie)
+  $('#conversacion').appendChild(b)
+  apuntarRetardo(ms)
+  abajo()
+}
+
+function abajo () {
+  const c = $('#conversacion')
+  // Sólo se sigue el final si el usuario ya estaba abajo: si ha subido a
+  // releer algo, arrastrarle la vista es peor que no seguir.
+  if (c.scrollHeight - c.scrollTop - c.clientHeight < 120) c.scrollTop = c.scrollHeight
+}
+
+// ── Preguntas ─────────────────────────────────────────────────────────
+let nPreguntas = 0
+
+function pintarPregunta ({ id, it }) {
+  nPreguntas++
+  $('#cuentaP').textContent = nPreguntas
+
+  const p = crear('div', 'pregunta')
+  p.dataset.id = id
+  const q = crear('div', 'q'); q.textContent = it
+  const r = crear('div', 'respuesta cargando'); r.textContent = 'Preparando respuesta…'
+  const acc = crear('div', 'acciones')
+
+  const copiar = crear('button', 'sec'); copiar.textContent = 'Copiar'
+  copiar.onclick = () => {
+    navigator.clipboard?.writeText(r.textContent)
+    copiar.textContent = 'Copiado'
+    setTimeout(() => { copiar.textContent = 'Copiar' }, 1400)
+  }
+  const otra = crear('button', 'sec'); otra.textContent = 'Otra'
+  otra.onclick = () => { r.className = 'respuesta cargando'; r.textContent = 'Preparando…'; api?.otraRespuesta(id) }
+
+  acc.append(copiar, otra)
+  p.append(q, r, acc)
+  $('#listaPreguntas').prepend(p)
+}
+
+function pintarRespuesta ({ id, texto }) {
+  const p = $(`.pregunta[data-id="${id}"]`)
+  if (!p) return
+  const r = p.querySelector('.respuesta')
+  r.className = 'respuesta'
+  r.textContent = texto          // SOLO italiano, sin glosa: así lo pidió el cliente
+}
+
+// ── Contexto general ──────────────────────────────────────────────────
+function pintarContexto (texto) {
+  $('#contexto').classList.remove('oculto')
+  $('#cuerpoContexto').textContent = texto
+}
+
+// ── Formularios ───────────────────────────────────────────────────────
+const perfil = () => ({
+  nombre: $('#pNombre').value.trim(), edad: +$('#pEdad').value || null,
+  ocupacion: $('#pOcupacion').value.trim(), contexto: $('#pContexto').value.trim(),
+})
+const contextoProyecto = () => ({
+  nombre: $('#cNombre').value.trim(), tipo_reunion: $('#cTipoReunion').value,
+  tipo_proyecto: $('#cTipoProyecto').value.trim(), contexto: $('#cContexto').value.trim(),
+  glosario: $('#cGlosario').value.trim(),
+})
+
+let comprobado = false
+
+function revisarListo () {
+  const p = perfil().nombre.length > 0
+  const c = contextoProyecto().nombre.length > 0
+  $('#n1').classList.toggle('hecho', p)
+  $('#n2').classList.toggle('hecho', c)
+  $('#n3').classList.toggle('hecho', comprobado)
+  $('#btnEscuchar').disabled = !(p && c)
+  $('#pistaEscuchar').textContent = !p ? 'Falta tu nombre.'
+    : !c ? 'Ponle un nombre a la reunión.'
+    : !comprobado ? 'Puedes empezar, aunque conviene comprobar antes.'
+    : 'Todo listo.'
+}
+document.querySelectorAll('#preparar input, #preparar textarea, #preparar select')
+  .forEach(e => e.addEventListener('input', revisarListo))
+
+// ── Comprobación ──────────────────────────────────────────────────────
+const PASOS = [
+  { id: 'audio', t: 'Audio de tu computadora', d: 'Que la app pueda oír la videollamada' },
+  { id: 'red', t: 'Conexión con el servicio', d: 'Cuánto tarda en responder desde aquí' },
+  { id: 'extremo', t: 'Frase de prueba completa', d: 'De oír a tener la traducción en pantalla' },
+  { id: 'pantalla', t: 'Protección al compartir pantalla', d: 'Que la sala no vea lo que te sugerimos' },
+]
+
+function pintarPasos () {
+  $('#pasos').innerHTML = ''
+  for (const p of PASOS) {
+    const f = crear('div', 'paso')
+    f.innerHTML = `<span class="punto" id="p-${p.id}"></span>
+      <span><span class="pt">${p.t}</span><span class="pd">${p.d}</span></span>
+      <span class="pv" id="v-${p.id}">—</span>`
+    $('#pasos').appendChild(f)
+  }
+}
+pintarPasos()
+
+function marcarPaso (id, clase, valor) {
+  const p = $(`#p-${id}`); if (p) p.className = 'punto ' + clase
+  const v = $(`#v-${id}`); if (v) v.textContent = valor
+}
+
+$('#btnProbar').onclick = async () => {
+  $('#btnProbar').disabled = true
+  $('#btnProbar').textContent = 'Comprobando…'
+  for (const p of PASOS) marcarPaso(p.id, 'vivo', '…')
+
+  // El audio lo comprueba el renderer, que es donde vive esa API; la red y la
+  // cadena completa las mide el proceso principal.
+  const [rMain, rAudio] = await Promise.all([
+    api ? api.comprobar(contextoProyecto()) : comprobarDemo(),
+    api ? comprobarAudio() : Promise.resolve(null),
+  ])
+  const r = { ...rMain, ...(rAudio ? { audio: rAudio } : {}) }
+  for (const p of PASOS) {
+    const x = r[p.id] || {}
+    marcarPaso(p.id, x.ok ? 'ok' : x.aviso ? 'aviso' : 'mal', x.valor || '—')
+  }
+  comprobado = true
+  $('#btnProbar').disabled = false
+  $('#btnProbar').textContent = 'Comprobar otra vez'
+  revisarListo()
+}
+$('#btnSaltar').onclick = () => { comprobado = true; revisarListo() }
+
+/**
+ * ¿Capta el audio del sistema, y a qué frecuencia? Es lo único que de verdad
+ * depende del equipo en la versión de nube.
+ */
+async function comprobarAudio () {
+  if (!CapturaAudio.soportado()) return { mal: true, valor: 'no disponible' }
+  const c = new CapturaAudio({ alBloque: () => {}, alError: () => {} })
+  try {
+    const info = await c.empezar()
+    // Se espera un momento a que entre audio y se mide su nivel, para
+    // distinguir "el permiso se concedió" de "de verdad se oye algo".
+    let pico = 0
+    c.alBloque = m => { pico = Math.max(pico, CapturaAudio.nivel(m)) }
+    await new Promise(r => setTimeout(r, 1800))
+    c.detener()
+    return pico > 0.002
+      ? { ok: true, valor: `${info.entradaHz} Hz` }
+      : { aviso: true, valor: `${info.entradaHz} Hz, sin sonido` }
+  } catch (err) {
+    c.detener()
+    return { mal: true, valor: err.message.slice(0, 40) }
+  }
+}
+
+async function comprobarDemo () {
+  const esperar = ms => new Promise(r => setTimeout(r, ms))
+  await esperar(900)
+  return {
+    audio: { ok: true, valor: '48000 Hz' },
+    red: { ok: true, valor: '74 ms' },
+    extremo: { ok: true, valor: '390 ms' },
+    pantalla: { aviso: true, valor: 'solo Windows' },
+  }
+}
+
+// ── Arrancar y parar ──────────────────────────────────────────────────
+let captura = null
+
+$('#btnEscuchar').onclick = async () => {
+  if (!api) {
+    $('#preparar').classList.add('oculto')
+    $('#envivo').classList.remove('oculto')
+    $('#btnParar').classList.remove('oculto')
+    estado('vivo', 'Escuchando')
+    demo()
+    return
+  }
+
+  $('#btnEscuchar').disabled = true
+  estado('aviso', 'Preparando')
+
+  // La sesión de transcripción se abre ANTES de pedir el audio, porque si la
+  // clave falta o no hay red conviene saberlo sin haber molestado al usuario
+  // con el diálogo de compartir pantalla.
+  const r = await api.empezar({ perfil: perfil(), contexto: contextoProyecto() })
+  if (!r?.ok) {
+    estado('mal', r?.motivo || 'no se pudo iniciar')
+    $('#pistaEscuchar').textContent = r?.motivo || 'no se pudo iniciar'
+    $('#btnEscuchar').disabled = false
+    return
+  }
+
+  try {
+    captura = new CapturaAudio({
+      alBloque: m => api.audio(m),
+      alError: e => estado('mal', e.message),
+    })
+    const info = await captura.empezar()
+    console.log(`[audio] ${info.entradaHz} Hz -> ${info.salidaHz} Hz · ${info.etiqueta}`)
+  } catch (err) {
+    // Si el audio falla, hay que cerrar la sesión de transcripción: está
+    // abierta y con este proveedor eso ya está facturando.
+    await api.parar()
+    estado('mal', err.message)
+    $('#pistaEscuchar').textContent = err.message
+    $('#btnEscuchar').disabled = false
+    return
+  }
+
+  $('#preparar').classList.add('oculto')
+  $('#envivo').classList.remove('oculto')
+  $('#btnParar').classList.remove('oculto')
+  estado('vivo', 'Escuchando')
+}
+
+$('#btnParar').onclick = async () => {
+  $('#btnParar').disabled = true
+  // Primero se corta el audio y después la sesión: al revés se seguiría
+  // mandando audio a un socket que ya se está cerrando.
+  captura?.detener()
+  captura = null
+  const r = api ? await api.parar() : {}
+  estado('', r?.costeUsd != null ? `Detenido · ${r.frases} frases · $${r.costeUsd}` : 'Detenido')
+  $('#btnParar').classList.add('oculto')
+  $('#btnParar').disabled = false
+}
+
+$('#btnAjustes').onclick = () => $('#ajustes').classList.remove('oculto')
+$('#btnCerrarAjustes').onclick = () => $('#ajustes').classList.add('oculto')
+$('#btnGuardarAjustes').onclick = async () => {
+  await api?.guardarClaves({ stt: $('#kSTT').value, llm: $('#kLLM').value })
+  $('#kSTT').value = $('#kLLM').value = ''
+  $('#ajustes').classList.add('oculto')
+}
+
+// ── Puente con el proceso principal ───────────────────────────────────
+if (api) {
+  api.alParcial(pintarParcial)
+  api.alFrase(pintarFrase)
+  api.alPregunta(pintarPregunta)
+  api.alRespuesta(pintarRespuesta)
+  api.alContexto(pintarContexto)
+  api.alEstado(({ clase, texto }) => estado(clase, texto))
+}
+
+// ── Datos de ejemplo, para poder ver la interfaz sin audio ni claves ──
+function demo () {
+  const guion = [
+    { it: 'Buongiorno a tutti, iniziamo la riunione.', es: 'Buenos días a todos, empecemos la reunión.', ms: 372 },
+    { it: 'Il cliente ha chiesto di anticipare la consegna alla prossima settimana.',
+      es: 'El cliente ha pedido adelantar la entrega a la próxima semana.', ms: 418 },
+    { it: "Dobbiamo rivedere i tempi con l'integrazione con il gestionale.",
+      es: 'Tenemos que revisar los plazos con la integración con el ERP.', ms: 455 },
+    { pregunta: 'Quanto tempo ci vuole per completare il lavoro?',
+      respuesta: 'Direi due settimane per la parte tecnica, più qualche giorno per i test. '
+               + 'Ti confermo la data esatta domani mattina.' },
+    { it: 'Il budget copre anche la manutenzione.', es: 'El presupuesto cubre también el mantenimiento.', ms: 401 },
+    { pregunta: 'Hai già parlato con il team di sviluppo?',
+      respuesta: 'Sì, ne ho parlato ieri. Sono allineati sui tempi e non vedono blocchi tecnici.' },
+  ]
+  let i = 0, idQ = 0
+  const siguiente = () => {
+    if (i >= guion.length) {
+      pintarContexto('Se negocia adelantar una entrega a la próxima semana. Hay dudas sobre '
+        + 'los plazos de integración con el ERP y sobre si el presupuesto cubre el mantenimiento.')
+      return
+    }
+    const p = guion[i++]
+    if (p.pregunta) {
+      const id = 'q' + (++idQ)
+      pintarPregunta({ id, it: p.pregunta })
+      setTimeout(() => pintarRespuesta({ id, texto: p.respuesta }), 1100)
+    } else {
+      const palabras = p.it.split(' ')
+      let n = 0
+      const escribiendo = setInterval(() => {
+        n += 2
+        pintarParcial(palabras.slice(0, n).join(' '))
+        if (n >= palabras.length) {
+          clearInterval(escribiendo)
+          setTimeout(() => pintarFrase({ ...p, msTranscribir: p.ms - 70, msTraducir: 70 }), 300)
+        }
+      }, 190)
+    }
+    setTimeout(siguiente, p.pregunta ? 2600 : 3800)
+  }
+  siguiente()
+}
+
+revisarListo()
+if (DEMO) estado('aviso', 'Vista de ejemplo')
+
+/**
+ * `app.html#demo` arranca directamente en la vista en vivo con una
+ * conversación de ejemplo. Sirve para enseñar la app sin configurar nada ni
+ * gastar una sola llamada, que es como se va a presentar al cliente.
+ */
+if (location.hash === '#demo') {
+  $('#pNombre').value = 'Omar Avila'
+  $('#pOcupacion').value = 'Responsable técnico'
+  $('#cNombre').value = 'Rossi Logistica — fase 2'
+  $('#cGlosario').value = 'SAP, ERP, WMS, Rossi Logistica'
+  revisarListo()
+  $('#preparar').classList.add('oculto')
+  $('#envivo').classList.remove('oculto')
+  $('#btnParar').classList.remove('oculto')
+  estado('vivo', 'Escuchando')
+  demo()
+}
+</script>
+</body>
+</html>

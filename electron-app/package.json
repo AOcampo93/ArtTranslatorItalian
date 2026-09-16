@@ -2,10 +2,11 @@
   "name": "art-translator-italian-diagnostico",
   "version": "0.1.0",
   "description": "Herramienta de diagnóstico: mide el equipo antes de instalar el traductor",
-  "main": "src/main.js",
+  "main": "src/mainApp.js",
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-builder --win dir --x64"
+    "build:win": "electron-builder --win dir --x64",
+    "diag": "electron src/main.js"
   },
   "devDependencies": {
     "electron": "^43.4.0",
@@ -13,7 +14,7 @@
   },
   "build": {
     "appId": "com.arturoocampo.arttranslator.diagnostico",
-    "productName": "Diagnostico Traductor Italiano",
+    "productName": "Traductor Italiano",
     "directories": {
       "output": "dist"
     },
@@ -44,14 +45,6 @@
           "!**/*.md",
           "!**/*.map"
         ]
-      },
-      {
-        "from": "../bin-win",
-        "to": "bin"
-      },
-      {
-        "from": "../models/ggml-small.bin",
-        "to": "models/ggml-small.bin"
       },
       {
         "from": "../LEEME-WINDOWS.txt",

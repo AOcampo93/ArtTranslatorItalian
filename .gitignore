@@ -19,7 +19,10 @@ whisper-cpp/
 !.env.example
 
 # Datos de sesión y transcripciones
-data/*.db
+# Con barra, el patrón queda anclado a la raíz: `data/*.db` NO cubría
+# `node-backend/data/`, y la base de datos de una ejecución real llegó a
+# quedarse preparada para el commit.
+**/data/*.db
 *.sqlite
 *.jsonl
 

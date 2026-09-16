@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Comprueba el paquete de Windows antes de enviarlo.
+#
+# La versión 1 transcribe en la nube, así que las comprobaciones de whisper
+# local —las nueve DLL ggml-cpu, el runtime de MSVC, el modelo de 465 MB— ya
+# no aplican: eso no viaja. Lo que sí tiene que viajar es Marian, onnxruntime
+# de Windows, sharp de Windows y el audio de prueba.
 # `electron-builder` no verifica nada de esto por su cuenta, y cada punto de la
 # lista corresponde a un fallo que rompería la app en el equipo del cliente.
 set -u
@@ -11,25 +16,12 @@ chk () { if eval "$2" >/dev/null 2>&1; then echo "  ✓ $1"; ok=$((ok+1)); else 
 
 echo "Verificando $D"
 echo
-chk "las 9 DLL ggml-cpu junto a ggml-base.dll (si no, el despacho falla en silencio)" \
-   '[ -f "'"$D"'/resources/bin/ggml-base.dll" ] && [ $(ls "'"$D"'"/resources/bin/ggml-cpu-*.dll | wc -l) -eq 9 ]'
 chk "onnxruntime de win32/x64 (si no, Marian no arranca)" \
    'find "'"$D"'/resources" -path "*win32/x64*" -name onnxruntime_binding.node | grep -q .'
 chk "sharp de win32-x64 (transformers lo carga aunque no usemos imágenes)" \
    '[ -d "'"$D"'/resources/node-backend/node_modules/@img/sharp-win32-x64" ]'
 chk "sin binarios de macOS sobrantes" \
    '[ ! -d "'"$D"'/resources/node-backend/node_modules/@img/sharp-darwin-arm64" ]'
-chk "modelo multilingüe embebido, no descargado al arrancar" \
-   '[ $(stat -f%z "'"$D"'/resources/models/ggml-small.bin" 2>/dev/null || stat -c%s "'"$D"'/resources/models/ggml-small.bin") -gt 400000000 ]'
-# Esta es la comprobación que importa, y sustituye a una que daba verde en falso:
-# la anterior miraba que `vc_redist.x64.exe` estuviera INCLUIDO en el paquete,
-# pero incluir un instalador no instala nada. Nadie lo ejecutó y whisper-server
-# murió con 0xC0000135 en la máquina virtual, con la lista entera en verde.
-# Ahora se lee la tabla de importaciones de cada PE y se compara con lo que hay
-# al lado, que es la pregunta de verdad.
-chk "ninguna DLL sin resolver (lee la tabla de importaciones de cada binario)" \
-   'node herramientas/dependencias-windows.js "'"$D"'/resources/bin"'
-chk "whisper-server.exe" '[ -f "'"$D"'/resources/bin/whisper-server.exe" ]'
 # El modelo de Marian viaja dentro de node_modules/.cache, que solo existe si
 # alguien tradujo algo en la máquina de compilación: `npm ci` en un clon limpio
 # NO lo trae. Sin esta comprobación, una máquina de compilación nueva produciría
@@ -39,6 +31,8 @@ chk "modelo de Marian embebido (npm ci NO lo trae: hay que traducir una vez ante
    'M="'"$D"'/resources/node-backend/node_modules/@huggingface/transformers/.cache/Xenova/opus-mt-it-es/onnx";
     [ -f "$M/encoder_model_quantized.onnx" ] && [ -f "$M/decoder_model_merged_quantized.onnx" ] &&
     [ $(cat "$M/encoder_model_quantized.onnx" "$M/decoder_model_merged_quantized.onnx" | wc -c) -gt 50000000 ]'
+chk "ws, que es el WebSocket de la transcripción en vivo" \
+   '[ -d "'"$D"'/resources/node-backend/node_modules/ws" ]'
 chk "audio italiano de prueba" \
    '[ -f "'"$D"'/resources/node-backend/test/fixtures/italiano.wav" ]'
 chk "instrucciones para el cliente" '[ -f "'"$D"'/resources/LEEME.txt" ]'
