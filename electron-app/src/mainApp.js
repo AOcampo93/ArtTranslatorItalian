@@ -172,6 +172,56 @@ function montarMotores ({ perfil, ctx, claveLlm }) {
   return { motor, resumen }
 }
 
+/**
+ * Cuánto se espera, como MÁXIMO, a las traducciones que están en vuelo al parar.
+ *
+ * Al pulsar Detener hay dos urgencias que no pueden competir entre sí:
+ *
+ *  - La sesión de transcripción **cuesta dinero mientras está abierta** y ocupa
+ *    una de las cinco plazas de concurrencia del cliente. Se cierra YA, sin
+ *    esperar a nadie.
+ *  - Una frase ya traducida **está pagada** y tiene que acabar en disco (no
+ *    negociable §0.3). Eso se puede esperar un momento, pero no para siempre:
+ *    el usuario pulsó un botón y la app no se puede quedar colgada.
+ *
+ * De ahí el orden de `pararSesion`: primero el socket, después esta espera.
+ *
+ * **De dónde salen los 3.000 ms.** Entre las dos cifras que hay medidas de
+ * Marian en la máquina lenta del cliente (HP Pavilion i5-10210U):
+ *
+ *  - p50 de 578 ms con 6 hilos y 707 ms con 3 `[medido]` (`PLAN.md` §5).
+ *  - la peor traducción medida del proyecto, 5.601 ms, y era el bloque de 892
+ *    caracteres de una sesión SIN trocear `[medido]` (`PLAN.md` §7bis). El
+ *    tope de turno de 8 s de `assemblyLive.js` existe justo para que ese
+ *    bloque no se vuelva a formar.
+ *
+ * Tres segundos son ~4 veces el p50 de la máquina lenta y se quedan por debajo
+ * de aquel peor caso, que además ya no debería poder darse. Con varias frases
+ * encoladas la gracia puede vencer igualmente, y para eso está la otra mitad
+ * del arreglo: la frase que llega tarde se guarda igual, con la sesión ya
+ * cerrada. El valor NO se ha contrastado contra una reunión real, ni se sabe
+ * cuántas veces vence la gracia en una de verdad `[por medir]`.
+ */
+const GRACIA_EN_VUELO_MS = 3_000
+
+/**
+ * Espera a las frases que están a medio traducir, como mucho `topeMs`.
+ *
+ * Devuelve **cuántas seguían en vuelo** al vencer el tope; cero es lo normal.
+ * Se mira el conjunto una sola vez a propósito: cuando se llama, el socket ya
+ * está cerrado y no puede llegar ninguna frase nueva.
+ */
+async function esperarEnVuelo (s, topeMs = GRACIA_EN_VUELO_MS) {
+  if (s.enVuelo.size === 0) return 0
+  let reloj = null
+  const tope = new Promise(res => { reloj = setTimeout(res, topeMs) })
+  // `allSettled` y no `all`: una traducción que falla no puede impedir que se
+  // espere a las demás.
+  await Promise.race([Promise.allSettled([...s.enVuelo]), tope])
+  clearTimeout(reloj)
+  return s.enVuelo.size
+}
+
 // ── La reunión ────────────────────────────────────────────────────────
 async function empezarSesion ({ perfil, contexto: ctx }) {
   if (sesion) return { ok: true, yaCorriendo: true }
@@ -209,7 +259,20 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   autosave.abrir()
 
   const { motor, resumen } = montarMotores({ perfil, ctx, claveLlm: claves.llm })
-  sesion = { transcriptor, autosave, idSesion, motor, resumen, inicio: Date.now(), frases: 0 }
+  sesion = {
+    transcriptor, autosave, idSesion, motor, resumen, inicio: Date.now(), frases: 0,
+    // Las frases a medio traducir, para poder esperarlas al parar en vez de
+    // perderlas. Y `cerrada`, para que las que vuelvan tarde sepan que la
+    // reunión terminó: se guardan igual, pero no gastan llamadas al LLM.
+    enVuelo: new Set(),
+    cerrada: false,
+  }
+
+  // La sesión de ESTE transcriptor, capturada aquí a propósito. Los manejadores
+  // de abajo NO deben mirar la variable `sesion` del módulo: `pararSesion` la
+  // pone a null, y una frase que vuelve de traducir después de eso seguiría
+  // siendo de esta sesión y tiene que acabar en su archivo.
+  const s = sesion
 
   transcriptor.on('parcial', p => aRenderer('app:parcial', p.texto))
 
@@ -219,39 +282,110 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   // idéntico a `msTraducir` y `msTranscribir: null` [medido]: lo que el usuario
   // leía como «retardo» era media cadena, y por tanto SUBESTIMABA lo que
   // sentía, que es la dirección peligrosa de equivocarse.
-  transcriptor.on('frase', async ({ texto, msTranscribir, forzado }) => {
-    const t0 = Date.now()
-    try {
-      const tr = await traductor.traducir(texto)
-      // Reloj de pared y no `tr.ms`: si una frase larga tiene ocupado a Marian,
-      // la siguiente espera su turno, y esa espera la sufre el usuario aunque
-      // el modelo no la cuente como suya.
-      const msTraducir = Date.now() - t0
-      const frase = {
-        it: texto, es: tr.es,
-        ms: msTranscribir + msTraducir,   // el retardo es la cadena, no una pierna
-        msTranscribir, msTraducir,
-        // `forzado` dice que el turno lo cortamos nosotros por largo, así que
-        // esta frase puede estar partida. Queda en el archivo para poder
-        // contar en la próxima reunión real cuántas se parten de verdad.
-        forzado: Boolean(forzado),
+  //
+  // Aquí vivía el fallo de F022, y merece quedar escrito porque se rompe solo.
+  // El manejador leía `sesion.frases++` DESPUÉS del `await` de la traducción. Si
+  // el usuario paraba mientras esa traducción estaba en vuelo —o si la frase era
+  // la que el servidor suelta al recibir `Terminate`, que llega justo en esa
+  // ventana— `sesion` ya era null y aquello lanzaba. Caía en el mismo `catch`
+  // que la traducción y pasaban tres cosas, en orden de gravedad:
+  //
+  //  1. La frase NO llegaba al autoguardado (no negociable §0.3), que existe
+  //     justo para que un cierre no se coma nada.
+  //  2. El `.jsonl` de la sesión quedaba incompleto, y ese archivo es el
+  //     instrumento con el que se mide la prueba en Windows.
+  //  3. En pantalla salía «no se pudo traducir: Cannot read properties of
+  //     null»: un error de programación disfrazado del único fallo que el
+  //     usuario sí sabe interpretar, así que concluía que el traductor falla
+  //     cuando había funcionado.
+  //
+  // Se arregla por dos lados a la vez: la frase es de `s` —la sesión capturada
+  // arriba, que no se vuelve null— y su promesa se apunta en `s.enVuelo`, para
+  // que `pararSesion` pueda esperarla un momento en vez de perderla.
+  transcriptor.on('frase', ({ texto, msTranscribir, forzado }) => {
+    const tarea = (async () => {
+      const t0 = Date.now()
+      let frase = null
+      try {
+        const tr = await traductor.traducir(texto)
+        // Reloj de pared y no `tr.ms`: si una frase larga tiene ocupado a Marian,
+        // la siguiente espera su turno, y esa espera la sufre el usuario aunque
+        // el modelo no la cuente como suya.
+        const msTraducir = Date.now() - t0
+        frase = {
+          it: texto, es: tr.es,
+          ms: msTranscribir + msTraducir,   // el retardo es la cadena, no una pierna
+          msTranscribir, msTraducir,
+          // `forzado` dice que el turno lo cortamos nosotros por largo, así que
+          // esta frase puede estar partida. Queda en el archivo para poder
+          // contar en la próxima reunión real cuántas se parten de verdad.
+          forzado: Boolean(forzado),
+        }
+      } catch (err) {
+        // Este `catch` abraza SOLO la traducción, que es el único fallo que este
+        // texto sabe nombrar. Lo que venga después tiene su propio aviso: decir
+        // «no se pudo traducir» de otra cosa manda a investigar al sitio
+        // equivocado.
+        aRenderer('app:estado', { clase: 'aviso', texto: `no se pudo traducir: ${err.message}` })
+        return
       }
-      sesion.frases++
-      // §0.3 — al disco ANTES de pintar: si la app muere en el repintado, la
-      // frase ya está a salvo.
-      autosave.escribir(frase)
+
+      // De aquí en adelante la frase ya está traducida y PAGADA. Lo único que
+      // queda es ponerla a salvo, y eso se hace aunque la reunión ya se haya
+      // cerrado mientras se traducía.
+      // `escribir` reabre el archivo si hacía falta (se abre en modo append), así
+      // que una frase que llega tarde se guarda igual. Si lo ha reabierto ella,
+      // hay que volver a cerrarlo: nadie más va a hacerlo y un descriptor por
+      // sesión terminada se acumula.
+      //
+      // Y va en un `finally`, no después de `escribir`: `escribir` hace `abrir()`
+      // **y luego** `writeSync()`, así que un disco lleno (ENOSPC) o un EIO falla
+      // con el archivo YA reabierto. Con el cierre dentro del `try`, esa
+      // excepción se lo saltaba y dejaba el descriptor colgando para siempre.
+      const estabaAbierto = s.autosave.abierto
+      try {
+        // §0.3 — al disco ANTES de pintar y antes de contar: si la app muere en
+        // el repintado, la frase ya está a salvo.
+        s.autosave.escribir(frase)
+        // Se cuenta lo que ESTÁ en disco, no lo que se intentó escribir: este
+        // número acaba en `lineCount` de la base de datos.
+        s.frases++
+      } catch (err) {
+        // La traducción salió bien y lo que falló fue guardarla, que es justo lo
+        // que §0.3 promete. Se dice con su nombre y con la clase de fallo grave.
+        console.error('[autoguardado] no se pudo escribir la frase:', err.message)
+        aRenderer('app:estado', { clase: 'mal', texto: `no se pudo guardar la frase: ${err.message}` })
+      } finally {
+        if (!estabaAbierto) s.autosave.cerrar()
+      }
       aRenderer('app:frase', frase)
 
       // Y después de pintar, nunca antes: el triaje y el LLM no pueden
       // retrasar la burbuja, que es lo que el usuario está leyendo.
+      //
+      // Si la reunión ya terminó, aquí se para. Una respuesta sugerida que nadie
+      // va a leer cuesta una llamada al LLM, y el panel donde se pintaría ya no
+      // está en pantalla. La frase, en cambio, sí se ha guardado.
+      if (s.cerrada) return
       // `considerar` no se espera a propósito —dentro decide si merece la
       // llamada y emite por su cuenta—, así que aquí solo se recoge el fallo.
-      sesion.motor?.considerar(texto, tr.es)
+      s.motor?.considerar(texto, frase.es)
         .catch(e => console.error('[preguntas]', e.message))
-      sesion.resumen?.registrar(texto, tr.es)
-    } catch (err) {
-      aRenderer('app:estado', { clase: 'aviso', texto: `no se pudo traducir: ${err.message}` })
-    }
+      s.resumen?.registrar(texto, frase.es)
+    })()
+      // Última red: si algo de arriba lanza fuera de sus dos `try`, la promesa
+      // no puede quedar rechazada sin dueño. Node tumba el proceso por una
+      // rechazada sin manejar, y eso sería perder la reunión entera por un
+      // repintado. No se pinta nada: no es un fallo que el usuario pueda
+      // interpretar, y desde luego no es «no se pudo traducir».
+      .catch(err => console.error('[frase] fallo inesperado:', err.message))
+
+    // Apuntarla ANTES de cualquier microtarea: `pararSesion` sólo puede esperar
+    // lo que está en el conjunto.
+    s.enVuelo.add(tarea)
+    // `finally` y no `then`: una tarea que acaba mal también deja de estar en
+    // vuelo, o la gracia de `pararSesion` esperaría a un fantasma.
+    tarea.finally(() => s.enVuelo.delete(tarea))
   })
 
   transcriptor.on('estado', e => {
@@ -274,12 +408,43 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   return { ok: true }
 }
 
-async function pararSesion (motivo = 'el usuario paró') {
+/**
+ * Cierra la reunión.
+ *
+ * El orden de estas cuatro líneas es el arreglo de F022, así que va explicado:
+ *
+ *  1. `sesion = null` y `cerrada = true`. Lo que llegue tarde ya sabe que la
+ *    reunión terminó; el manejador de `frase` no mira esta variable, trabaja
+ *    sobre la sesión que capturó al empezar.
+ *  2. `stop()` **primero y sin esperar a nadie más**: mientras el socket está
+ *    abierto factura, y una sesión huérfana ocupa una plaza de concurrencia, o
+ *    sea que impide la SIGUIENTE reunión del cliente. El servidor puede soltar
+ *    aquí una última frase al recibir `Terminate` —llega 1.067–1.224 ms después
+ *    `[medido]`— y esa también entra en `enVuelo`.
+ *  3. Con el dinero ya cortado, un momento —`GRACIA_EN_VUELO_MS`, con tope— para
+ *    lo que esté a medio traducir. Así entra en la cuenta que va a la base de
+ *    datos.
+ *  4. Y sólo entonces se cierra el archivo y se cierra la fila de la sesión.
+ *
+ * `graciaMs` es un parámetro para poder ejercer el vencimiento de la gracia en
+ * una prueba sin dormir tres segundos. En producción nadie lo pasa.
+ */
+async function pararSesion (motivo = 'el usuario paró', graciaMs = GRACIA_EN_VUELO_MS) {
   if (!sesion) return { ok: true }
   const s = sesion
   sesion = null
+  s.cerrada = true
+  let enVuelo = 0
   try {
     await s.transcriptor.stop()          // manda Terminate y espera el acuse
+    enVuelo = await esperarEnVuelo(s, graciaMs)
+    if (enVuelo > 0) {
+      // No se pierden: la frase que vuelva después reabre el archivo y se
+      // escribe igual. Lo que queda desfasado es `lineCount`, y por eso el
+      // número sale también en el resultado.
+      console.error(`[sesión] ${enVuelo} frase(s) seguían traduciéndose al cerrar; `
+        + 'se guardarán en el archivo de la sesión cuando terminen')
+    }
     s.autosave.cerrar()
     db.endSession(s.idSesion, {
       durationSeconds: Math.round((Date.now() - s.inicio) / 1000),
@@ -292,6 +457,10 @@ async function pararSesion (motivo = 'el usuario paró') {
   return {
     ok: true, motivo,
     frases: s.frases,
+    // Cuántas no llegaron a tiempo a la cuenta de arriba. Se guardan en el
+    // `.jsonl` de todas formas; el número está para que no parezca que se
+    // perdieron y para poder contarlo si algún día pasa a menudo.
+    enVuelo,
     costeUsd: s.transcriptor.costeAproximadoUsd(0.45),
     stats: s.transcriptor.stats,
   }

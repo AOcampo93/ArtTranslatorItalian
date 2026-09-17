@@ -28,7 +28,7 @@ const { aPcm16, construirUrl, MUESTRAS_TROZO, MS_TROZO, MAX_CONEXIONES_MIN } = _
 
 /** Socket de mentira: registra todo lo enviado y deja provocar los mensajes. */
 class SocketFalso extends EventEmitter {
-  constructor (url, clave) {
+  constructor (url, clave, { abrirAMano = false } = {}) {
     super()
     this.url = url
     this.clave = clave
@@ -36,9 +36,22 @@ class SocketFalso extends EventEmitter {
     this.binarios = []
     this.textos = []
     this.cerrado = false
-    // Abre en el siguiente tic, como haría uno de verdad.
-    setImmediate(() => { this.readyState = 1; this.emit('open') })
+    // Abre en el siguiente tic, como haría uno de verdad. Con `abrirAMano` la
+    // prueba decide cuándo, que es lo que hace falta para pararse EN el hueco.
+    if (!abrirAMano) setImmediate(() => this.abre())
   }
+
+  /**
+   * El saludo ya está hecho: el servidor tiene la sesión abierta y **ya
+   * factura**, aunque el evento todavía no se haya entregado. Un socket de
+   * verdad pasa por este estado —`readyState` es OPEN antes de que se
+   * despache `open`— y es exactamente el instante que cuesta dinero: la sesión
+   * existe en el servidor y nuestro código aún no sabe que existe.
+   */
+  conecta () { this.readyState = 1 }
+
+  /** Y ahora sí, el evento que `_abrir()` está esperando. */
+  abre () { this.conecta(); this.emit('open') }
 
   send (d) {
     if (typeof d !== 'string') { this.binarios.push(d); return }
@@ -63,18 +76,30 @@ class SocketFalso extends EventEmitter {
   seCae (codigo = 1006) { this.readyState = 3; this.emit('close', codigo, 'caída') }
 }
 
+/**
+ * @param {object} [opts] opciones del transcriptor. `abrirAMano: true` no es
+ *   una de ellas: deja los sockets falsos sin abrirse hasta que la prueba
+ *   llame a `s.conecta()` / `s.abre()`.
+ */
 function montar (opts = {}) {
+  const { abrirAMano = false, ...delTranscriptor } = opts
   const sockets = []
   const t = new AssemblyLiveTranscriber({
     apiKey: 'de-prueba',
-    crearSocket: (url, clave) => { const s = new SocketFalso(url, clave); sockets.push(s); return s },
-    ...opts,
+    crearSocket: (url, clave) => {
+      const s = new SocketFalso(url, clave, { abrirAMano })
+      sockets.push(s)
+      return s
+    },
+    ...delTranscriptor,
   })
   return { t, sockets }
 }
 
 const trozo = (v = 0.4) => new Float32Array(MUESTRAS_TROZO).fill(v)
 const esperar = ms => new Promise(r => setTimeout(r, ms))
+/** Sockets que el servidor seguiría facturando. */
+const vivos = sockets => sockets.filter(s => s.readyState === 1 && !s.cerrado)
 
 describe('la URL lleva lo que el modelo necesita', () => {
   test('modelo, formato y frecuencia, como exige el protocolo', () => {
@@ -245,6 +270,203 @@ describe('la disciplina de sesión — lo que cuesta dinero si se olvida', () =>
     sockets[0].recibe({ type: 'Termination', audio_duration_seconds: 10, session_duration_seconds: 3600 })
     await t.stop()
     assert.strictEqual(t.costeAproximadoUsd(0.45), 0.45, 'una hora de socket es una hora facturada')
+  })
+})
+
+describe('parar mientras conecta — el socket huérfano que factura 3 horas', () => {
+  // La carrera: `_abrir()` espera el evento `open` y sólo DESPUÉS asigna
+  // `this._ws`. Quien pare en ese hueco pasa por `_cerrarSesion()` y su
+  // `if (!ws) return` sin cerrar nada, y el socket se queda vivo sin sesión
+  // que lo posea: factura hasta 3 horas —se cierra solo al llegar al tope y se
+  // facturan completas— y ocupa una de las cinco plazas de concurrencia, o sea
+  // que impide la SIGUIENTE reunión del cliente.
+  //
+  // El caso de usuario es de lo más normal: abrir la app, pulsar Escuchar y
+  // arrepentirse en el primer segundo.
+
+  test('parar entre el new WebSocket y el evento open no deja ningún socket vivo', async () => {
+    const { t, sockets } = montar({ abrirAMano: true })
+    const estados = []
+    t.on('estado', e => estados.push(e))
+
+    const arranque = t.start()
+    await esperar(0)
+    assert.strictEqual(sockets.length, 1, 'el socket ya existe')
+    const s = sockets[0]
+    // El saludo está hecho: el servidor tiene la sesión abierta y facturando,
+    // pero el evento `open` todavía no se ha entregado. Ése es el hueco.
+    s.conecta()
+    assert.strictEqual(t._ws, null, 'la sesión aún no está instalada: es el hueco')
+
+    const t0 = Date.now()
+    await t.stop()
+    const tardo = Date.now() - t0
+
+    // Lo que de verdad importa, y en este orden: que se mandara Terminate
+    // (cerrar sin él es justo lo que deja la sesión viva hasta el tope), que el
+    // socket esté cerrado, y que no quede nada abierto.
+    assert.deepStrictEqual(s.textos, [{ type: 'Terminate' }],
+      'cerrar sin Terminate deja la sesión viva 3 h y ocupa una plaza')
+    assert.strictEqual(s.cerrado, true, 'el socket sigue abierto al volver de stop()')
+    assert.deepStrictEqual(vivos(sockets), [], 'queda un socket facturando')
+    assert.strictEqual(t._ws, null)
+    assert.strictEqual(t._wsAbriendo, null, 'nadie se queda apuntado como dueño')
+    assert.strictEqual(t._abriendo, null)
+    assert.ok(tardo < 1000, `parar tardó ${tardo} ms: no puede aguardar el plazo de la apertura`)
+
+    // Y el arranque termina sin reventar y sin anunciar que se está escuchando:
+    // eso sería mentir sobre un socket que acaba de cerrarse.
+    await arranque
+    assert.deepStrictEqual(estados, ['conectando', 'parado'], `estados: ${estados}`)
+  })
+
+  test('parar durante la espera de cupo no llega a abrir ningún socket', async () => {
+    // La otra espera de `_abrir()`. Aquí todavía no hay socket, así que la
+    // reparación es no abrirlo: abrirlo sería abrirlo para nadie.
+    const { t, sockets } = montar({ abrirAMano: true })
+    const estados = []
+    t.on('estado', e => estados.push(e))
+    // Cuatro conexiones recientes: la siguiente tiene que esperar turno. Con
+    // estas marcas la espera sale de 5.200 ms.
+    t._conexiones = Array.from({ length: MAX_CONEXIONES_MIN }, () => Date.now() - 55000)
+    assert.ok(t._esperaPorRitmo() > 5000, 'el freno de ritmo tiene que hacer esperar')
+
+    const arranque = t.start()
+    await esperar(0)
+    assert.deepStrictEqual(estados, ['conectando', 'esperando-cupo'], `estados: ${estados}`)
+    assert.strictEqual(sockets.length, 0, 'todavía no toca abrir')
+
+    const t0 = Date.now()
+    await t.stop()
+    await arranque
+    const tardo = Date.now() - t0
+
+    assert.strictEqual(sockets.length, 0, 'se abrió un socket para una sesión que ya no existe')
+    assert.ok(tardo < 1000, `parar tardó ${tardo} ms: la espera de cupo no se cortó`)
+    assert.deepStrictEqual(estados, ['conectando', 'esperando-cupo', 'parado'], `estados: ${estados}`)
+  })
+
+  test('parar durante una reconexión no abre un socket que nadie posee', async () => {
+    // El mismo fallo con otro disparador: la reconexión duerme, el usuario
+    // para, y al despertar se abría una sesión nueva para nadie.
+    const { t, sockets } = montar()
+    const estados = []
+    t.on('estado', e => estados.push(e))
+    t.on('error', () => {})           // la caída se anuncia; no es lo que se mide
+    await t.start()
+    sockets[0].seCae(1006)
+    await esperar(0)
+    assert.strictEqual(t._reconectando, true, 'debería haber una reconexión en curso')
+
+    await t.stop()
+    await esperar(0)
+    assert.strictEqual(t._reconectando, false,
+      'al parar, la reconexión tiene que soltar la espera, no seguir dormida 1,5 s')
+
+    // Y cuando venza la espera que estaba durmiendo, tampoco puede aparecer un
+    // socket nuevo: eso es lo que factura.
+    await esperar(_internos.ESPERAS_MS[0] + 200)
+    assert.strictEqual(sockets.length, 1, 'se abrió una sesión después de parar')
+    assert.deepStrictEqual(vivos(sockets), [], 'queda un socket facturando')
+    assert.ok(!estados.slice(estados.indexOf('parado')).includes('escuchando'),
+      `después de parar no se puede volver a escuchar; estados: ${estados}`)
+  })
+
+  test('una apertura que vence sin abrirse tampoco se queda facturando', async () => {
+    // El hermano del hueco: el plazo de la apertura no cierra nada por sí solo,
+    // así que el socket del intento fallido podía completar el saludo después,
+    // ya sin nadie que lo reclamara, mientras el reintento abría otro.
+    const { t, sockets } = montar({ abrirAMano: true, esperaAperturaMs: 30 })
+    await assert.rejects(t.start(), /30 ms sin conectar/)
+    const s = sockets[0]
+    assert.strictEqual(s.cerrado, true, 'el socket del intento fallido hay que cerrarlo')
+    assert.deepStrictEqual(s.textos, [], 'sin saludo no hay sesión que terminar')
+    assert.deepStrictEqual(vivos(sockets), [])
+    t._quitarSalidas?.()
+  })
+
+  test('si el saludo ya estaba hecho, la apertura vencida manda Terminate antes de cerrar', async () => {
+    // El caro de los dos: el servidor YA abrió la sesión y ya factura, y el
+    // evento `open` no llegó a entregarse nunca. Cerrar a secas la dejaría viva
+    // hasta el tope de 3 horas.
+    const { t, sockets } = montar({ abrirAMano: true, esperaAperturaMs: 40 })
+    const arranque = assert.rejects(t.start(), /sin conectar/)
+    await esperar(0)
+    sockets[0].conecta()
+    await arranque
+
+    assert.deepStrictEqual(sockets[0].textos, [{ type: 'Terminate' }],
+      'el socket estaba conectado: hay sesión que terminar')
+    assert.strictEqual(sockets[0].cerrado, true)
+    t._quitarSalidas?.()
+  })
+
+  test('si el proceso se va mientras conecta, la salida también manda Terminate', async () => {
+    // `_registrarSalidas()` miraba sólo `this._ws`, que en el hueco es null: un
+    // Ctrl-C mientras conecta dejaba la sesión viva. Es el mismo punto ciego.
+    const yaHabia = new Set(process.listeners('SIGTERM'))
+    const { t, sockets } = montar({ abrirAMano: true })
+    const arranque = t.start()
+    try {
+      await esperar(0)
+      const s = sockets[0]
+      s.conecta()
+      const cerrarYa = process.listeners('SIGTERM').find(f => !yaHabia.has(f))
+      assert.ok(cerrarYa, 'start() tiene que registrar las salidas del proceso')
+      cerrarYa()
+      assert.deepStrictEqual(s.textos, [{ type: 'Terminate' }],
+        'un cierre brusco sin Terminate deja la sesión viva 3 h y ocupa una plaza')
+      assert.strictEqual(s.cerrado, true)
+    } finally {
+      await arranque.catch(() => {})   // la apertura muere con el socket
+      t._quitarSalidas?.()
+    }
+  })
+
+  test('después de parar en medio de la conexión, volver a arrancar funciona', async () => {
+    const { t, sockets } = montar({ abrirAMano: true })
+    const estados = []
+    t.on('estado', e => estados.push(e))
+
+    const primero = t.start()
+    await esperar(0)
+    sockets[0].conecta()
+    await t.stop()
+    await primero
+
+    // La sesión nueva no puede heredar el aviso de parada de la anterior: si lo
+    // heredara, se daría por abierta sin haber recibido el `open` y creería
+    // estar escuchando un socket que todavía no existe.
+    const segundo = t.start()
+    await esperar(0)
+    assert.strictEqual(sockets.length, 2)
+    assert.strictEqual(t._ws, null, 'no puede darse por abierta antes del evento open')
+    sockets[1].abre()
+    await segundo
+
+    assert.strictEqual(t._ws, sockets[1])
+    assert.strictEqual(estados[estados.length - 1], 'escuchando', `estados: ${estados}`)
+    await t.stop()
+    assert.deepStrictEqual(sockets[1].textos, [{ type: 'Terminate' }])
+    assert.deepStrictEqual(vivos(sockets), [])
+  })
+
+  test('un error del socket después de parar no se le pinta al usuario', async () => {
+    // Al abortar el saludo, `ws` avisa con un error («closed before the
+    // connection was established»). Mientras la reunión corre eso se cuenta;
+    // después de parar es el cierre que se pidió, no un fallo.
+    const { t, sockets } = montar()
+    const errores = []
+    t.on('error', e => errores.push(e.message))
+    await t.start()
+    sockets[0].emit('error', new Error('la red se rompió'))
+    assert.deepStrictEqual(errores, ['socket: la red se rompió'],
+      'con la reunión en marcha, un error del socket sí se cuenta')
+
+    await t.stop()
+    sockets[0].emit('error', new Error('WebSocket was closed before the connection was established'))
+    assert.strictEqual(errores.length, 1,
+      `después de parar el socket ya no tiene nada que decir; errores: ${errores}`)
   })
 })
 

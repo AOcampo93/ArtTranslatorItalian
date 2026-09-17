@@ -33,7 +33,9 @@
  *     Gemini: con sesiones de 3 horas no hace falta, y solapar quemaría el
  *     límite de concurrencia.
  *  2. **`Terminate` siempre**, y en todas las salidas: al parar, al cerrar la
- *     ventana, al morir el proceso. Ver `registrarSalidas()`.
+ *     ventana, al morir el proceso, **y también si se para mientras se está
+ *     conectando** — ese socket todavía no es `this._ws`, así que hay que
+ *     cerrarlo donde se abrió. Ver `registrarSalidas()` y `_abrir()`.
  *  3. **Nunca más de cuatro conexiones nuevas por minuto.** El límite del plan
  *     gratuito son cinco; se deja una de margen. Sin este freno, una racha de
  *     reconexiones deja al usuario sin servicio justo cuando más lo necesita.
@@ -146,6 +148,20 @@ const MARGEN_SILENCIO_MS = 700
 /** Tras `Terminate`, el acuse tardó 1.067–1.224 ms medidos. Se espera de sobra. */
 const ESPERA_TERMINATION_MS = 4000
 
+/**
+ * Plazo para que un socket nuevo llegue a abrirse.
+ *
+ * Es un tope, no una medida: lo medido es que la sesión está lista muy por
+ * debajo —el primer parcial, que ya necesita el saludo hecho y audio enviado,
+ * llegó a los 881–980 ms [medido]—. Cuánto tarda el saludo por sí solo no está
+ * medido contra el servicio.  [por medir]
+ *
+ * Se puede acortar por sesión (`esperaAperturaMs`). En producción nadie lo
+ * pasa: existe para poder ejercer el vencimiento en una prueba sin esperar
+ * quince segundos.
+ */
+const ESPERA_APERTURA_MS = 15000
+
 /** Cuánto audio se guarda sin conexión antes de empezar a tirarlo. */
 const MAX_BUFFER_S = 60
 
@@ -208,6 +224,7 @@ class AssemblyLiveTranscriber extends EventEmitter {
   constructor ({
     apiKey, idioma = 'it', glosario = [], contexto = '', modo = 'balanced', crearSocket,
     topeTurnoMs = TOPE_TURNO_MS, margenSilencioMs = MARGEN_SILENCIO_MS,
+    esperaAperturaMs = ESPERA_APERTURA_MS,
   } = {}) {
     super()
     if (!apiKey && !crearSocket) throw new Error('hace falta una API key de AssemblyAI')
@@ -216,8 +233,16 @@ class AssemblyLiveTranscriber extends EventEmitter {
     this._crearSocket = crearSocket
     this._topeTurnoMs = topeTurnoMs
     this._margenSilencioMs = margenSilencioMs
+    this._esperaAperturaMs = esperaAperturaMs
 
     this._ws = null
+    // El socket de la apertura en curso y la promesa de esa apertura. Los dos
+    // existen por lo mismo: entre el `new WebSocket` y el evento `open` hay un
+    // socket que ya puede estar facturando y que todavía no es `this._ws`, así
+    // que `_cerrarSesion()` no lo ve. Ver `_abrir()` y `stop()`.
+    this._wsAbriendo = null
+    this._abriendo = null
+    this._avisoParada = null
     this._corriendo = false
     this._cerrandoAdrede = false
     this._reconectando = false
@@ -250,46 +275,159 @@ class AssemblyLiveTranscriber extends EventEmitter {
   async start () {
     if (this._corriendo) return
     this._corriendo = true
+    // Una parada anterior no puede cortar las esperas de esta sesión: sin este
+    // reseteo, el aviso ya cumplido haría que `_abrir()` se diera por abierto
+    // sin haber recibido el `open`.
+    this._avisoParada = null
     this._registrarSalidas()
     this.emit('estado', 'conectando')
-    await this._abrir()
+    // Si se paró mientras conectaba, `_abrir()` ya cerró lo que hubiera abierto
+    // y quien paró anunció el estado: decir 'escuchando' aquí sería mentir
+    // sobre un socket que acaba de cerrarse.
+    const abierta = await this._abrir()
+    if (!abierta) return
     this.emit('estado', 'escuchando')
   }
 
-  async _abrir () {
-    const espera = this._esperaPorRitmo()
-    if (espera > 0) {
-      this.emit('estado', 'esperando-cupo')
-      await new Promise(r => setTimeout(r, espera))
+  // ── Parar sin aguardar los plazos ───────────────────────────────────
+  /**
+   * Promesa que se cumple en cuanto alguien pare.
+   *
+   * Las dos esperas de `_abrir()` corren contra ella. Sin esto, parar mientras
+   * se conecta obligaría a aguardar el plazo entero de la espera —hasta 15 s la
+   * de la apertura, hasta un minuto la del freno de ritmo— antes de poder
+   * cerrar el socket, y `stop()` no podría prometer que al volver no queda nada
+   * abierto. Lo que queda abierto es lo que factura.
+   */
+  _esperarParada () {
+    if (!this._avisoParada) {
+      let avisar
+      const promesa = new Promise(res => { avisar = res })
+      this._avisoParada = { promesa, avisar }
     }
+    return this._avisoParada.promesa
+  }
 
-    const url = construirUrl(this.opciones)
-    const ws = this._crearSocket
-      ? this._crearSocket(url, this.apiKey)
-      : new (require('ws'))(url, { headers: { authorization: this.apiKey } })
-
-    this._conexiones.push(Date.now())
-    this.stats.sesiones++
-
-    ws.on('message', d => this._mensaje(d))
-    ws.on('close', (codigo, motivo) => this._cerrado(ws, codigo, String(motivo || '')))
-    ws.on('error', e => this.emit('error', new Error(`socket: ${e.message}`)))
-
-    await new Promise((res, rej) => {
-      const t = setTimeout(() => rej(new Error('15 s sin conectar')), 15000)
-      ws.once('open', () => { clearTimeout(t); res() })
-      ws.once('close', (c, m) => {
-        clearTimeout(t)
-        rej(new Error(`cerró al abrir: ${c} ${CIERRES[c] || String(m || '')}`))
-      })
+  /** Duerme `ms`, o menos si alguien para. Sin dejar el temporizador colgando. */
+  _dormir (ms) {
+    return new Promise(res => {
+      const t = setTimeout(res, ms)
+      this._esperarParada().then(() => { clearTimeout(t); res() })
     })
+  }
 
-    this._ws = ws
-    this._abiertaEn = Date.now()
-    // Sesión nueva, turnos nuevos: arrastrar el turno de la anterior forzaría
-    // el primero del relevo nada más abrir.
-    this._turno = null
-    this._vaciarPendiente()
+  /**
+   * Abre una sesión nueva y la deja instalada en `this._ws`.
+   *
+   * @returns {Promise<boolean>} `true` si la sesión queda viva. `false` si se
+   *   paró mientras conectaba, y entonces **no queda ningún socket abierto**.
+   *   Lanza si la conexión falla, y tampoco deja nada abierto.
+   *
+   * ## El hueco que facturaba tres horas
+   *
+   * Mientras se espera aquí, `this._ws` sigue siendo `null`. Un `stop()` en ese
+   * momento pasa por `_cerrarSesion()` y su `if (!ws) return` **sin cerrar
+   * nada**: la versión anterior asignaba `this._ws` al terminar la espera y no
+   * volvía a mirar `_corriendo`, así que dejaba un socket vivo que ninguna
+   * sesión poseía. Un socket huérfano factura hasta 3 horas —se cierra solo al
+   * llegar al tope y se facturan completas— y ocupa una de las cinco plazas de
+   * concurrencia, o sea que **impide la siguiente reunión del cliente**. Y el
+   * caso de usuario es de lo más normal: pulsar Escuchar y arrepentirse en el
+   * primer segundo.
+   *
+   * De ahí la regla: **el socket es de quien lo abre hasta que queda instalado
+   * en `this._ws`**. Por eso se comprueba `_corriendo` después de cada espera y
+   * se cierra aquí mismo, con `Terminate`, lo que se haya abierto. Cerrar sin
+   * `Terminate` no vale: eso es justo lo que deja la sesión viva en el servidor
+   * hasta el tope.
+   */
+  async _abrir () {
+    let terminado
+    const mia = new Promise(res => { terminado = res })
+    this._abriendo = mia          // `stop()` espera esto antes de volver
+    try {
+      // Se puede haber parado mientras se esperaba para llegar hasta aquí —la
+      // espera de reconexión, o el relevo de las 3 horas—. Abrir ahora sería
+      // abrir para nadie.
+      if (!this._corriendo) return false
+
+      const espera = this._esperaPorRitmo()
+      if (espera > 0) {
+        this.emit('estado', 'esperando-cupo')
+        await this._dormir(espera)
+        // Primera espera. Aquí todavía no hay socket, así que la reparación es
+        // la más barata de las dos: no abrirlo.
+        if (!this._corriendo) return false
+      }
+
+      const url = construirUrl(this.opciones)
+      const ws = this._crearSocket
+        ? this._crearSocket(url, this.apiKey)
+        : new (require('ws'))(url, { headers: { authorization: this.apiKey } })
+
+      this._conexiones.push(Date.now())
+      this.stats.sesiones++
+      // Desde esta línea hay un socket que puede estar facturando sin que
+      // `this._ws` lo delate. `_registrarSalidas()` también lo mira, porque un
+      // proceso que muere aquí no puede esperar a que esta función lo cierre.
+      this._wsAbriendo = ws
+
+      ws.on('message', d => this._mensaje(d))
+      ws.on('close', (codigo, motivo) => this._cerrado(ws, codigo, String(motivo || '')))
+      ws.on('error', e => {
+        // Abortar el saludo hace que `ws` emita un error («closed before the
+        // connection was established»). Si ya se paró, eso no es un fallo que
+        // pintarle al usuario: es el cierre que él pidió.
+        if (!this._corriendo) return
+        this.emit('error', new Error(`socket: ${e.message}`))
+      })
+
+      try {
+        await new Promise((res, rej) => {
+          const t = setTimeout(
+            () => rej(new Error(`${this._esperaAperturaMs} ms sin conectar`)),
+            this._esperaAperturaMs)
+          ws.once('open', () => { clearTimeout(t); res() })
+          ws.once('close', (c, m) => {
+            clearTimeout(t)
+            rej(new Error(`cerró al abrir: ${c} ${CIERRES[c] || String(m || '')}`))
+          })
+          // Segunda espera, la del hueco. Si se para, no se aguarda el plazo:
+          // se sale ya, y quien decide qué hacer con el socket que hay en la
+          // mano es la comprobación de `_corriendo` de abajo.
+          this._esperarParada().then(() => { clearTimeout(t); res() })
+        })
+      } catch (err) {
+        // El socket puede seguir vivo aunque la apertura haya fallado: el plazo
+        // vencido no cierra nada por sí solo y el saludo puede completarse
+        // después, ya sin nadie que lo reclame. Cerrarlo es lo único que impide
+        // que se quede facturando en un reintento que ya nadie mira.
+        await this._terminarSocket(ws)
+        throw err
+      } finally {
+        this._wsAbriendo = null
+      }
+
+      if (!this._corriendo) {
+        // Se paró mientras conectaba: `_cerrarSesion()` no pudo cerrar este
+        // socket porque `this._ws` todavía era null. Lo cierra quien lo abrió.
+        await this._terminarSocket(ws)
+        return false
+      }
+
+      this._ws = ws
+      this._abiertaEn = Date.now()
+      // Sesión nueva, turnos nuevos: arrastrar el turno de la anterior forzaría
+      // el primero del relevo nada más abrir.
+      this._turno = null
+      this._vaciarPendiente()
+      return true
+    } finally {
+      // La comparación evita que una apertura que termina tarde borre el
+      // registro de otra más nueva.
+      if (this._abriendo === mia) this._abriendo = null
+      terminado()
+    }
   }
 
   _mensaje (datos) {
@@ -362,11 +500,17 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
     for (const espera of ESPERAS_MS) {
       if (!this._corriendo) break
-      await new Promise(r => setTimeout(r, espera))
+      // Se duerme con `_dormir`, no con un `setTimeout` a secas: si el usuario
+      // para durante la espera, esto tiene que soltarla y no seguir dormido
+      // hasta 40 s con una reconexión pendiente de alguien que ya se fue.
+      await this._dormir(espera)
       try {
-        await this._abrir()
+        // `false` significa que se paró —mientras se esperaba o mientras se
+        // conectaba— y que `_abrir()` ya cerró lo que hubiera abierto: no hay
+        // nada que escuchar, y quien paró ya anuncia el estado.
+        const abierta = await this._abrir()
         this._reconectando = false
-        this.emit('estado', 'escuchando')
+        if (abierta) this.emit('estado', 'escuchando')
         return
       } catch (err) {
         this.emit('error', new Error(`reintento fallido: ${err.message}`))
@@ -543,15 +687,17 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
   // ── Cierre, que es lo que cuesta dinero si se olvida ────────────────
   /**
-   * Cierra la sesión **como manda el protocolo**: `Terminate`, esperar el
-   * acuse, y sólo entonces cerrar el socket. Cerrar sin esto deja la sesión
-   * viva hasta 3 horas, facturando y ocupando una plaza de concurrencia.
+   * Cierra UN socket **como manda el protocolo**: `Terminate`, esperar el
+   * acuse, y sólo entonces cerrar. Cerrar sin esto deja la sesión viva hasta 3
+   * horas, facturando y ocupando una plaza de concurrencia.
+   *
+   * Está separado de `_cerrarSesion()` porque hay un socket que **no** es
+   * `this._ws` y hay que cerrarlo igual de bien: el que `_abrir()` tiene en la
+   * mano cuando se para mientras conecta. El protocolo es el mismo para los
+   * dos, y escribirlo dos veces sería tener una de las dos copias mal.
    */
-  async _cerrarSesion () {
-    const ws = this._ws
-    if (!ws) return
+  async _terminarSocket (ws) {
     this._cerrandoAdrede = true
-    this._ws = null
     try {
       if (ws.readyState === 1) {
         ws.send(JSON.stringify({ type: 'Terminate' }))
@@ -570,23 +716,51 @@ class AssemblyLiveTranscriber extends EventEmitter {
       this.emit('error', new Error(`al cerrar la sesión: ${err.message}`))
     } finally {
       try { ws.close() } catch { /* ya estaba */ }
+      this._cerrandoAdrede = false
+    }
+  }
+
+  /**
+   * Cierra la sesión viva, si hay una.
+   *
+   * Lo que **no** cierra es el socket de una apertura en curso: ése todavía no
+   * es `this._ws`, y su dueño es `_abrir()`, que lo cierra al ver `_corriendo`
+   * en false. `stop()` espera esa apertura precisamente para que al volver no
+   * quede nada abierto por ninguno de los dos caminos.
+   */
+  async _cerrarSesion () {
+    const ws = this._ws
+    if (!ws) return
+    this._ws = null
+    try {
+      await this._terminarSocket(ws)
+    } finally {
       // Sin esto, el coste seguiría creciendo con el reloj aunque no haya
       // ninguna sesión abierta, y el número que se le enseña al cliente
       // dejaría de significar nada.
       this._abiertaEn = null
-      this._cerrandoAdrede = false
     }
   }
 
   async stop () {
     this._corriendo = false
     this._turno = null
+    // Saca a `_abrir()` de sus esperas: si hay un socket a medio abrir hay que
+    // cerrarlo ahora, no cuando venza el plazo de la apertura.
+    this._avisoParada?.avisar()
     if (this._resto.length) {
       // El resto puede ser el final de la última frase.
       this._enviar(aPcm16(this._resto))
       this._resto = []
     }
     await this._cerrarSesion()
+    // El socket de una apertura en curso no es `this._ws`, así que
+    // `_cerrarSesion()` no lo ha cerrado: lo cierra `_abrir()` al ver
+    // `_corriendo` en false. Se espera aquí porque `stop()` tiene que volver
+    // con todo cerrado —`before-quit` hace `app.exit(0)` justo después, y un
+    // proceso que muere dejando el socket a medio abrir deja la sesión viva en
+    // el servidor, facturando hasta 3 horas y ocupando una plaza.
+    await this._abriendo
     this._quitarSalidas?.()
     this._pendiente = []
     this.emit('estado', 'parado')
@@ -602,9 +776,13 @@ class AssemblyLiveTranscriber extends EventEmitter {
   _registrarSalidas () {
     if (this._quitarSalidas) return
     const cerrarYa = () => {
-      const ws = this._ws
-      if (ws?.readyState === 1) {
-        try { ws.send(JSON.stringify({ type: 'Terminate' })); ws.close() } catch { /* nada que hacer */ }
+      // Los dos sockets: la sesión viva y la que se esté abriendo. `cerrarYa`
+      // es síncrono y el proceso se está muriendo, así que no puede esperar a
+      // que `_abrir()` cierre lo suyo, como sí hace `stop()`.
+      for (const ws of [this._ws, this._wsAbriendo]) {
+        if (ws?.readyState === 1) {
+          try { ws.send(JSON.stringify({ type: 'Terminate' })); ws.close() } catch { /* nada que hacer */ }
+        }
       }
     }
     const sucesos = ['exit', 'SIGINT', 'SIGTERM', 'uncaughtException']
@@ -627,5 +805,5 @@ module.exports = { AssemblyLiveTranscriber, SAMPLE_RATE, MODELO, CIERRES }
 module.exports._internos = {
   aPcm16, construirUrl, MUESTRAS_TROZO, MS_TROZO, MS_TROZO_MIN, MS_TROZO_MAX,
   MAX_CONEXIONES_MIN, ESPERAS_MS, MAX_BUFFER_S, RELEVAR_A_LOS_MS, TOPE_SESION_MS,
-  TOPE_TURNO_MS, MARGEN_SILENCIO_MS,
+  TOPE_TURNO_MS, MARGEN_SILENCIO_MS, ESPERA_APERTURA_MS, ESPERA_TERMINATION_MS,
 }

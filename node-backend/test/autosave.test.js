@@ -62,6 +62,31 @@ describe('escritura', () => {
     const { entradas } = Autosave.leer(b.ruta)
     assert.strictEqual(entradas.length, 2, 'la primera frase no debe perderse')
   })
+
+  test('escribir después de cerrar reabre y añade, y `abierto` lo dice', () => {
+    // Es la mitad del arreglo de F022: una frase que vuelve de traducir cuando
+    // la reunión ya se cerró tiene que acabar en disco igual. Y quien la
+    // escribe necesita saber si el archivo estaba cerrado, para volver a
+    // cerrarlo: nadie más va a hacerlo y un descriptor por sesión terminada se
+    // acumula.
+    const a = new Autosave({ directorio: dir, idSesion: 'tardia' })
+    assert.strictEqual(a.abierto, false, 'recién construido no abre nada')
+
+    a.escribir({ tipo: 'frase', it: 'prima' })
+    assert.strictEqual(a.abierto, true)
+    a.cerrar()
+    assert.strictEqual(a.abierto, false)
+
+    a.escribir({ tipo: 'frase', it: 'tardia' })     // la frase que llega tarde
+    assert.strictEqual(a.abierto, true, 'escribir tiene que reabrir el archivo')
+    a.cerrar()
+
+    const { entradas, truncadas } = Autosave.leer(a.ruta)
+    assert.deepStrictEqual(entradas.map(e => e.it), ['prima', 'tardia'],
+      'la frase tardía se añade al final: no reemplaza y no corrompe lo anterior')
+    assert.strictEqual(truncadas, 0)
+    assert.strictEqual(a.lineasEscritas, 2, 'y se cuenta como línea escrita')
+  })
 })
 
 describe('tolerancia a una línea truncada', () => {

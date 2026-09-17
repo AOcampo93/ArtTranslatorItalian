@@ -428,7 +428,13 @@ function resumenAlDetener (r) {
       ? `${frasesCortadas} troceadas`
       : `${pedidos} troceos pedidos, NINGUNO aplicado`
 
-  return `Detenido · ${r.frases} frases · ${troceo} · $${r.costeUsd}`
+  // Si al parar quedaba algo a medio traducir, `r.frases` se queda corto: esas
+  // frases se escriben en el archivo de la sesión cuando terminen, pero ya no
+  // entran en esta cuenta. Decirlo es la diferencia entre un número corto y un
+  // número que miente —y es el mismo criterio que el de los troceos: dos casos
+  // distintos no pueden verse igual en la barra—.
+  const enVuelo = r.enVuelo > 0 ? ` · ${r.enVuelo} aún traduciéndose` : ''
+  return `Detenido · ${r.frases} frases${enVuelo} · ${troceo} · $${r.costeUsd}`
 }
 
 // ── Burbujas ──────────────────────────────────────────────────────────

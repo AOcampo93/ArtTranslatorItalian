@@ -83,6 +83,17 @@ class Autosave {
     this._fd = null
   }
 
+  /**
+   * ¿Está el archivo abierto ahora mismo?
+   *
+   * Existe porque `escribir()` REABRE el archivo si hace falta, y eso es lo que
+   * permite guardar una frase que llega cuando la sesión ya se cerró (el caso
+   * de parar la reunión con una traducción en vuelo). Quien escribe entonces
+   * necesita saber si lo ha reabierto él para volver a cerrarlo: nadie más lo
+   * va a hacer, y un descriptor por sesión terminada se acumula.
+   */
+  get abierto () { return this._fd !== null }
+
   get lineasEscritas () { return this._lineas }
 
   /**

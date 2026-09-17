@@ -238,6 +238,28 @@ describe('el troceo en la barra al detener', () => {
     assert.match(b.barra(), /sin troceos/, `la barra dice "${b.barra()}"`)
   })
 
+  test('si una frase se quedó traduciéndose al parar, la barra lo dice (F022)', async () => {
+    // `frases` cuenta lo que ya está en el `.jsonl`. Si la gracia de
+    // `pararSesion` vence con una traducción en vuelo, esa frase se escribe
+    // después y no entra en la cuenta: sin este trozo la barra diría «12
+    // frases» y el archivo tendría 13, y quien mida la prueba en Windows no
+    // sabría cuál de los dos números creer.
+    const b = montar({ api: apiQueDevuelve({
+      ok: true, frases: 12, enVuelo: 1, costeUsd: 0.02, stats: { turnosForzados: 0 },
+    }) })
+    await b.pulsarParar()
+    assert.match(b.barra(), /12 frases · 1 aún traduciéndose/, `la barra dice "${b.barra()}"`)
+  })
+
+  test('y si no quedó ninguna, no se añade ruido a la barra', async () => {
+    const b = montar({ api: apiQueDevuelve({
+      ok: true, frases: 9, enVuelo: 0, costeUsd: 0.02, stats: { turnosForzados: 0 },
+    }) })
+    await b.pulsarParar()
+    assert.doesNotMatch(b.barra(), /traduciéndose/, `la barra dice "${b.barra()}"`)
+    assert.match(b.barra(), /9 frases · sin troceos/)
+  })
+
   test('en el modo de ejemplo no se inventa un resumen', async () => {
     const b = montar()                    // sin puente: la interfaz sin sesión
     await b.pulsarParar()
