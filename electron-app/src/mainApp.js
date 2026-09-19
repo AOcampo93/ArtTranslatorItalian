@@ -252,11 +252,25 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   await traductor.cargar()
 
   const idSesion = db.startSession('assemblyai/universal-3-5-pro')
+  // `inicio` fija el nombre del archivo (F030): `idSesion` es un
+  // autoincremento de `db.js` que vuelve a 1 si la base se reinicia, y dos
+  // reuniones con el mismo id fundieron sus frases en un solo `.jsonl` —
+  // MEDIDO en `sesion-1.jsonl` del cliente. La fecha y hora locales de
+  // arranque distinguen el archivo aunque el id se repita.
+  const inicio = new Date()
   const autosave = new Autosave({
     directorio: path.join(app.getPath('userData'), 'reuniones'),
     idSesion: String(idSesion),
+    inicio,
+    version: app.getVersion(),
   })
   autosave.abrir()
+  // Primera línea del archivo: de qué reunión y versión es, sin tener que
+  // mirar el nombre ni abrirlo entero. También es la señal que usa
+  // `Autosave.detectarMezcla()` para saber si un archivo funde dos reuniones.
+  // Sin `version`: el constructor ya la recibió arriba y `guardarCabecera`
+  // cae en `this.version` si no se le pasa otra.
+  autosave.guardarCabecera({ perfil, contexto: ctx, inicio, id: idSesion })
 
   const { motor, resumen } = montarMotores({ perfil, ctx, claveLlm: claves.llm })
   sesion = {

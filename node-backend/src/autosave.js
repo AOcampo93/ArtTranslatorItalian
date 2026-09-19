@@ -26,16 +26,66 @@
 const fs = require('fs')
 const path = require('path')
 
+/**
+ * Hueco máximo, hacia adelante, entre dos líneas seguidas de una reunión en
+ * curso antes de que `Autosave.detectarMezcla()` sospeche que en realidad
+ * son dos reuniones distintas. `[estimado]`: no hay todavía una medición de
+ * la pausa más larga de una reunión real (candidato para F038, que sí va a
+ * leer `.jsonl` de reuniones de verdad); 30 min es el valor de partida y se
+ * puede ajustar cuando haya datos.
+ */
+const UMBRAL_HUECO_MS = 30 * 60 * 1000
+
+/**
+ * Fecha y hora LOCALES en `AAAAMMDD-HHMMSS`, para el nombre del archivo.
+ *
+ * Local y no UTC a propósito: es la hora que el cliente reconoce si mira la
+ * carpeta de reuniones.
+ *
+ * Con SEGUNDOS, no solo minutos (ronda 2 de F030): con minutos, dos arranques
+ * de `db.js` reiniciada dentro del mismo minuto Y con el mismo `idSesion`
+ * seguían cayendo en el mismo archivo — lo prueba `detectarMezcla…` con la
+ * clase real (`autosave.test.js`), que fuerza ese choque a propósito para
+ * comprobar la segunda red de seguridad. Los segundos no lo vuelven
+ * imposible (dos arranques en el mismo segundo seguirían chocando), pero
+ * reducen la ventana de choque ×60, de 60 000 ms a 1 000 ms. Cerrarla del
+ * todo exigiría que `abrir()` sufijara el nombre si el archivo ya existe, y
+ * eso rompería el invariante de "reabrir la misma sesión añade, no
+ * reemplaza" (ver el constructor) sin ganar nada en el producto real: hoy
+ * `mainApp.js` nunca reabre una sesión ya empezada, crea un `Autosave` nuevo
+ * en cada `empezarSesion()`, así que el choque de segundo exacto no es
+ * alcanzable desde la app tal como está hoy.
+ */
+function marcaLocal (fecha) {
+  const p = n => String(n).padStart(2, '0')
+  return `${fecha.getFullYear()}${p(fecha.getMonth() + 1)}${p(fecha.getDate())}`
+       + `-${p(fecha.getHours())}${p(fecha.getMinutes())}${p(fecha.getSeconds())}`
+}
+
 class Autosave {
   /**
    * @param {object} opts
    * @param {string} opts.directorio  dónde viven los archivos de sesión
-   * @param {string} [opts.idSesion]  por defecto, la fecha y hora
+   * @param {string} [opts.idSesion]  por defecto, la fecha y hora ISO
+   * @param {Date|string} [opts.inicio]  cuándo arrancó la reunión; por
+   *   defecto, ahora. Entra en el nombre del archivo (F030): antes el nombre
+   *   era solo `sesion-<idSesion>.jsonl`, y `idSesion` es un autoincremento
+   *   de `db.js` que vuelve a 1 cada vez que la base se reinicia — MEDIDO en
+   *   `sesion-1.jsonl` del cliente, que fundió 21 frases del 16-09 (v0.2) con
+   *   6 del 17-09 (v0.4) porque las dos reuniones cayeron en el mismo id y
+   *   por tanto en el mismo archivo.
+   * @param {string} [opts.version]  versión de la app, para la cabecera
    */
-  constructor ({ directorio, idSesion }) {
+  constructor ({ directorio, idSesion, inicio, version }) {
     this.directorio = directorio
-    this.idSesion = idSesion || new Date().toISOString().replace(/[:.]/g, '-')
-    this.ruta = path.join(directorio, `sesion-${this.idSesion}.jsonl`)
+    this.inicio = inicio ? new Date(inicio) : new Date()
+    this.idSesion = idSesion || this.inicio.toISOString().replace(/[:.]/g, '-')
+    this.version = version || null
+    // El id solo ya no basta (ver arriba): la marca de tiempo local, CON
+    // segundos (ver `marcaLocal`), lo acompaña siempre. `listar()` sigue
+    // reconociendo el formato viejo `sesion-<id>.jsonl` porque su patrón no
+    // exige la marca.
+    this.ruta = path.join(directorio, `sesion-${marcaLocal(this.inicio)}-${this.idSesion}.jsonl`)
     this._fd = null
     this._lineas = 0
   }
@@ -72,9 +122,24 @@ class Autosave {
     this.escribir({ tipo: 'pregunta', it, es, respuesta: respuesta || null })
   }
 
-  /** Metadatos de la sesión: con qué perfil y contexto se grabó. */
-  guardarCabecera ({ perfil, contexto }) {
-    this.escribir({ tipo: 'cabecera', perfil: perfil || null, contexto: contexto || null })
+  /**
+   * Metadatos de la sesión: con qué perfil y contexto se grabó, con qué
+   * versión de la app, cuándo empezó y con qué id de `db.js`.
+   *
+   * Se escribe una sola vez, como PRIMERA línea del archivo (F030): así se
+   * sabe de qué reunión y versión es sin mirar el nombre, y un archivo con
+   * más de una cabecera es la huella de dos reuniones fundidas —
+   * `detectarMezcla()` la busca.
+   */
+  guardarCabecera ({ perfil, contexto, version, inicio, id } = {}) {
+    this.escribir({
+      tipo: 'cabecera',
+      perfil: perfil || null,
+      contexto: contexto || null,
+      version: version || this.version || null,
+      inicio: (inicio ? new Date(inicio) : this.inicio).toISOString(),
+      id: id !== undefined ? id : this.idSesion,
+    })
   }
 
   cerrar () {
@@ -114,7 +179,14 @@ class Autosave {
     return { entradas, truncadas }
   }
 
-  /** Las sesiones guardadas en un directorio, de la más reciente a la más antigua. */
+  /**
+   * Las sesiones guardadas en un directorio, de la más reciente a la más
+   * antigua. El patrón es deliberadamente laxo (`sesion-*.jsonl`): así
+   * encuentra tanto el nombre nuevo (`sesion-AAAAMMDD-HHMMSS-<id>.jsonl`,
+   * F030, con segundos desde la ronda 2) como el viejo (`sesion-<id>.jsonl`)
+   * sin distinguir uno de otro. Un cambio de formato de nombre no puede
+   * volver invisibles las reuniones grabadas antes del cambio.
+   */
   static listar (directorio) {
     if (!fs.existsSync(directorio)) return []
     return fs.readdirSync(directorio)
@@ -125,6 +197,69 @@ class Autosave {
         tamano: fs.statSync(path.join(directorio, f)).size,
       }))
       .sort((a, b) => b.archivo.localeCompare(a.archivo))
+  }
+
+  /**
+   * ¿Este archivo trae dos reuniones fundidas en una (el fallo de F030)?
+   *
+   * No repara nada: solo avisa, con el motivo. Tres señales, cualquiera basta:
+   *
+   *  - **Más de una cabecera.** Desde que `guardarCabecera()` se llama al
+   *    abrir cada sesión, un archivo con dos es la prueba directa de que dos
+   *    reuniones escribieron en el mismo sitio.
+   *  - **Un hueco desproporcionado hacia adelante.** Cada línea lleva su `t`
+   *    (`escribir()`, arriba). Con escritura `append`, dos reuniones fundidas
+   *    se escriben SIEMPRE en orden cronológico — la segunda va después de la
+   *    primera, nunca al revés —, así que esta es la señal que de verdad
+   *    detecta el caso MEDIDO en `sesion-1.jsonl` del cliente: 21 frases del
+   *    16-09 (v0.2) seguidas de 6 del 17-09 (v0.4), con el `t` avanzando todo
+   *    el rato. Ninguna pausa real de una reunión en curso dura
+   *    `UMBRAL_HUECO_MS`; si el hueco entre dos líneas seguidas lo pasa, lo
+   *    más probable es que la segunda sea otra reunión. (Ronda 2 de F030: la
+   *    ronda 1 solo tenía la señal de abajo, que con escritura `append` NUNCA
+   *    puede ser cierta para el caso real —el `t` avanza, no retrocede—; la
+   *    prueba «archivo real del cliente…» de `autosave.test.js` reproduce esa
+   *    forma exacta y por eso hacía falta esta señal.)
+   *  - **El reloj retrocede.** Si una entrada es anterior a la de justo
+   *    antes, el archivo no se escribió en una sola pasada `append`
+   *    continua: alguien escribió las líneas fuera de orden, o el reloj del
+   *    sistema saltó hacia atrás a media escritura. No es el caso medido del
+   *    cliente (ver arriba), pero sí un archivo sospechoso.
+   *
+   * Sirve tanto para archivos nuevos como para los ya mezclados de antes del
+   * arreglo, que no tienen cabecera y donde solo las dos últimas señales
+   * aplican.
+   *
+   * @returns {{ mezclado: boolean, motivo: string|null }}
+   */
+  static detectarMezcla (ruta) {
+    const { entradas } = Autosave.leer(ruta)
+    const cabeceras = entradas.filter(e => e && e.tipo === 'cabecera')
+    if (cabeceras.length > 1) {
+      return { mezclado: true, motivo: `${cabeceras.length} cabeceras en el mismo archivo` }
+    }
+    for (let i = 1; i < entradas.length; i++) {
+      const anterior = entradas[i - 1]
+      const actual = entradas[i]
+      if (!anterior || !actual) continue
+      // Ronda 3 de F030: la cabecera se escribe al ABRIR la sesión, antes de
+      // que nadie haya hablado, así que el primer par (cabecera → primera
+      // frase) mide tiempo de espera del usuario, no una pausa de la
+      // conversación. Sin este salto, una reunión sana con la app abierta
+      // 30+ min antes de la primera frase salía `mezclado: true` — falso
+      // positivo determinista, medido por el revisor (review_F030_correccion.md).
+      if (anterior.tipo === 'cabecera') continue
+      const tAnterior = new Date(anterior.t).getTime()
+      const tActual = new Date(actual.t).getTime()
+      if (tActual < tAnterior) {
+        return { mezclado: true, motivo: `la marca de tiempo retrocede en la línea ${i + 1}` }
+      }
+      if (tActual - tAnterior > UMBRAL_HUECO_MS) {
+        const minutos = Math.round((tActual - tAnterior) / 60000)
+        return { mezclado: true, motivo: `hueco de ${minutos} min entre las líneas ${i} y ${i + 1}` }
+      }
+    }
+    return { mezclado: false, motivo: null }
   }
 }
 
