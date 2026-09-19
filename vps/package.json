@@ -1,0 +1,11 @@
+{
+  "name": "arttranslator-informes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Receptor HTTP de informes de reuniones (F039a) — http nativo, sin dependencias",
+  "main": "servidor.js",
+  "scripts": {
+    "start": "node servidor.js",
+    "test": "node --test"
+  }
+}

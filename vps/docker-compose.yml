@@ -1,0 +1,32 @@
+# Receptor de informes (F039a). Se enchufa a la red "coolify" que ya existe
+# en el VPS y a Traefik con las mismas etiquetas que usa el resto de
+# servicios [verificado por ssh 19-09-2026] — así no hace falta tocar DNS ni
+# la config de Traefik: arttranslator.81.17.100.181.sslip.io ya resuelve.
+services:
+  informes:
+    build: .
+    container_name: arttranslator-informes
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./informes:/datos/informes
+    networks:
+      - coolify
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=coolify"
+      # Router HTTPS
+      - "traefik.http.routers.arttranslator-informes.rule=Host(`arttranslator.81.17.100.181.sslip.io`)"
+      - "traefik.http.routers.arttranslator-informes.entrypoints=https"
+      - "traefik.http.routers.arttranslator-informes.tls.certresolver=letsencrypt"
+      # Router HTTP: solo redirige a HTTPS, no sirve nada por sí mismo
+      - "traefik.http.routers.arttranslator-informes-http.rule=Host(`arttranslator.81.17.100.181.sslip.io`)"
+      - "traefik.http.routers.arttranslator-informes-http.entrypoints=http"
+      - "traefik.http.routers.arttranslator-informes-http.middlewares=arttranslator-informes-redirect"
+      - "traefik.http.middlewares.arttranslator-informes-redirect.redirectscheme.scheme=https"
+      # A qué puerto del contenedor apunta Traefik
+      - "traefik.http.services.arttranslator-informes.loadbalancer.server.port=3000"
+
+networks:
+  coolify:
+    external: true

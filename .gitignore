@@ -39,3 +39,9 @@ electron-app/node_modules/
 vendor/
 bin-win/
 *.zip
+
+# vps/: receptor de informes en la nube (F039a). El token real no entra a
+# git; el ejemplo sí, aunque .env.* ya lo taparía por el nombre.
+vps/.env
+!vps/.env.ejemplo
+vps/informes/
