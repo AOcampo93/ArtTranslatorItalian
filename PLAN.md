@@ -31,7 +31,7 @@ se discute y se cambia el documento; no se salta.
 |---|---|---|
 | 1 | `win.setContentProtection(true)` en la ventana del modo en vivo | Al compartir pantalla en Teams, **la sala entera lee las respuestas sugeridas del cliente**. Se traduce a `WDA_EXCLUDEFROMCAPTURE`, que necesita Windows 10 build 19041+; por debajo la ventana sale negra en vez de invisible — protege igual, se ve distinto |
 | 2 | `wsServer` y `whisper-server` escuchan en **`127.0.0.1` explícito** y puerto efímero | El Firewall pregunta en el primer arranque, el usuario cancela, y **la app queda rota para siempre sin mensaje** |
-| 3 | **Autoguardado** append-only a `.jsonl` desde la primera frase confirmada | Un crash en el minuto 58 **borra la reunión entera** |
+| 3 | **Autoguardado** append-only a `.jsonl` desde la primera frase confirmada. Desde F037 la unidad del archivo es la **oración** y no el turno, y eso deja una cola esperando en memoria: qué queda fuera del disco, cuánto como mucho y por qué se acepta está escrito en §7bis, «La burbuja es la frase, no el turno» | Un crash en el minuto 58 **borra la reunión entera** |
 | 4 | El modelo de Whisper va **embebido en el instalador**, nunca se descarga al arrancar | Barra de descarga que puede fallar por red y deja la app muda sin explicación |
 | 5 | Embarcar `VCRUNTIME140`, `VCRUNTIME140_1`, `MSVCP140` y **`VCOMP140`** junto al binario, nunca como instalador aparte | En un Windows limpio **el binario no arranca** (`0xC0000135`, visto en la VM). Incluir el redistribuible no basta: nadie lo ejecuta `[verificado]` |
 | 6 | Las nueve DLL `ggml-cpu-*` junto a `ggml-base.dll`, **y loguear cuál se cargó** | El despacho cae a la peor variante **sin dar error** |
@@ -642,6 +642,13 @@ campos por frase:
   ignoró, la palabra la parte el segundo, y anotar «silencio» contaría esa palabra
   partida como corte limpio.
 
+**Desde F037 la línea del archivo ya no es el turno**, sino la frase (ver «La burbuja es
+la frase, no el turno», más abajo): estos cuatro campos son los del **último turno** que
+compone la línea, y `acabaEnPuntuacion` pasa a medirse sobre el texto guardado cuando la
+línea la componemos nosotros. Sin esa excepción, una frase cerrada con interrogación se
+guardaría como «acabó a media oración» porque el turno que la cerró sí acababa a medias, y
+el «% a media frase» de la prueba saldría inflado.
+
 Y la barra al detener dice **«N a media frase»** junto a los troceos. Sin esto la próxima
 prueba se vuelve a contar a mano sobre el archivo, que es como se contó ésta.
 
@@ -727,6 +734,127 @@ de verdad.
 
 **Lo que queda por verificar contra el servicio:** el hueco máximo y el porcentaje a
 media frase con **habla real** en Windows, y por qué el servidor ignora `max_turn_silence`.
+
+### La burbuja es la frase, no el turno
+
+El troceo de F031 acota el hueco, y **paga con oraciones partidas**: 10 de 13 trozos
+forzados de `sesion-2.jsonl` acabaron a media oración `[medido]`. Lo que hace de eso un
+problema de producto y no una fealdad es qué hace Marian con un trozo que **empieza** por
+la mitad: no lo traduce a medias, lo **completa**. Los dos casos, con las cadenas del
+archivo `[medido]`:
+
+| lo que se le mandó | lo que devolvió |
+|---|---|
+| «Tu pensi che questo ruolo di Malena ti darà» ⟂ «la possibilità di fare il salto definitivo a livello internazionale? …» | «Crees que este papel de Malena te dará» y **«¿Cómo se puede dar el salto definitivo a nivel internacional?»** — el «Cómo» no lo dijo nadie |
+| «… Ci potresti fare un riassunto molto breve del» ⟂ «film? Come lo spiegheresti? …» | **«¿Películas?»** |
+
+No es un fallo del modelo: es que se le está dando media oración y pidiéndole una
+traducción entera. Y **bajar el tope del turno lo hace más frecuente**, así que F031 y
+F037 van en la misma entrega o la entrega empeora la traducción.
+
+**La unidad que se traduce, se pinta y se guarda pasa a ser la oración, no el turno.** El
+final formateado de AssemblyAI trae puntuación fiable, así que cada turno se parte en las
+oraciones completas —hasta el último `.?!…`— y una **cola** sin cerrar
+(`node-backend/src/frases.js`, puro y probado contra las cadenas exactas del `.jsonl`):
+
+1. Las completas se traducen y se pintan como siempre.
+2. La cola se traduce y se pinta **provisional**: atenuada y con «…». Sin esto la pantalla
+   se quedaría en blanco hasta el turno siguiente, que es el problema que F031 acaba de
+   arreglar.
+3. Al llegar ese turno se traduce `cola + turno` **junto** y la definitiva **sustituye** a
+   la provisional en su sitio.
+
+**Una llamada a Marian = una burbuja.** No se alinea ni se pega nada: lo que sustituye a
+la provisional es una traducción entera y nueva. Pegar dos traducciones parciales daría
+una frase que no dijo nadie, que es el mismo fallo con otra ropa.
+
+**El tope de arrastre son 300 caracteres.** Arrastrar se paga por carácter —`ms = 56 +
+6,34·caracteres` `[medido]`—, así que 300 son ≈ 1.960 ms
+`[estimado a partir de lo medido]`. Pasada esa cola se suelta y se cierra tal cual.
+
+**Y la marca del archivo va en la línea SIGUIENTE, no en la que se cierra.** Es la
+asimetría que más fácil se cuenta al revés. Las puertas por las que un texto llega a
+Marian empezado por la mitad son **tres**, y las tres son el mismo gesto —soltar una cola
+sin que nadie la continúe—:
+
+1. **el tope de arrastre**, cuando la cola pasa de los 300 caracteres;
+2. **un fallo de Marian** traduciendo el turno que continuaba una cola;
+3. **la parada de la reunión** con un turno todavía por procesar: la cola se cierra con
+   `'parada'` y el turno que venía detrás en la fila se va solo a Marian.
+
+(La primera línea de la reunión es caso aparte: empieza donde el micrófono empezó a oír,
+no hay línea anterior con la que compararla, y el archivo no la marca.) En las tres, la
+cola que se suelta empieza donde empezaba su oración —a Marian le llegó entera—, y la que
+se queda sin principio es la línea de después. Por eso cada línea del `.jsonl` lleva
+`empiezaAMedias`, puesto en la que de verdad se quedó sin principio; el `cierre` de la
+línea anterior dice por qué pasó.
+
+Que sean tres y no dos es exactamente el error que se cometió al escribir esto la primera
+vez: la tercera puerta existía en el código y no la marcaba nadie. Por eso en `mainApp.js`
+la marca no se pone en cada puerta, sino en la **única función por la que pasan las tres**
+(`cerrarColaEnMano`): una puerta nueva la hereda sin que nadie se acuerde. Si algún día se
+añade una cuarta que no pase por ahí, esta lista y ese código dejan de cuadrar y la cuenta
+de abajo vuelve a salir bonita sin medir nada.
+
+Tres decisiones que no son obvias y que se toman aquí:
+
+- **Los motores de preguntas y de resumen sólo ven texto definitivo.** Una pregunta leída
+  a medias se contesta a medias, y la respuesta sugerida es lo que el usuario va a decir
+  en voz alta.
+- **Al `.jsonl` sólo van líneas definitivas**, con `arrastre` (la línea llevaba cola
+  pegada), `msProvisional` (cuánto tardó en verse algo de esa frase en pantalla; `null` si
+  lo primero que se vio fue ya la definitiva), `cierre` —`'frase'`, `'tope'`, `'parada'`
+  (la reunión se detuvo con la cola en pantalla) o `'fallo'` (Marian no pudo con el turno
+  que la continuaba)— y `empiezaAMedias`, que marca la línea a la que se le quitó el
+  principio. Una provisional y su definitiva serían la misma frase contada dos veces, y el
+  archivo es el instrumento de medida de la prueba en Windows.
+- **Los cuatro campos de F031 se quedan con los del último turno** que compone la línea:
+  describen el corte con el que esa línea se cerró, que es el único que pudo partirle una
+  palabra. `acabaEnPuntuacion` es la excepción y va del **texto guardado** cuando la línea
+  la componemos nosotros —partiendo o uniendo—, porque entonces el transcriptor no la ha
+  medido; cuando la línea es el turno tal cual, manda su medida, y su ausencia sigue
+  siendo `null` y no `false`.
+
+Y la cola que quede en pantalla al parar se cierra y se guarda: es la última frase que
+dijo el interlocutor, ya está traducida y pagada, y el no negociable §0.3 promete que un
+cierre no se come nada.
+
+**Lo que esto estrecha del §0.3, dicho aquí para que no se revierta en silencio.** Hasta
+F037 cada turno confirmado se traducía y se escribía en el acto. Desde F037 la unidad del
+archivo es la oración, así que una cola —una oración que el transcriptor ya dio por
+confirmada, ya traducida y ya pagada— vive **sólo en memoria** (`s.cola`, en `mainApp.js`)
+hasta que la cierra el turno siguiente, el tope, un fallo de Marian o la parada. Si la app
+muere antes, esa frase no está en ningún sitio:
+
+- **Cuánto puede perderse como mucho:** una cola de hasta 300 caracteres —`TOPE_ARRASTRE`
+  en `frases.js`— más el turno que la esté continuando, acotado a su vez por el tope duro
+  de 8 s por turno de F031 (`TOPE_DURO_TURNO_MS` en `assemblyLive.js`) `[verificado]`.
+  Nunca más de eso, y nunca más de una frase.
+- **Cuánto tiempo puede estar fuera del disco: no está acotado.** Si el interlocutor calla
+  después de un turno que no cerró ninguna oración, la cola se queda en pantalla hasta que
+  alguien vuelva a hablar o se pare la reunión. Cuánto dura eso en una reunión real está
+  `[por medir]`.
+- **Por qué se acepta:** la alternativa es escribir la cola en cuanto se traduce y volver
+  a escribirla al cerrarla, y entonces el archivo cuenta la misma frase dos veces, y con
+  ella el `lineCount` y el «% a media frase». El archivo es el instrumento de medida de la
+  prueba en Windows, y un instrumento que cuenta doble no sirve. Escribirla marcada como
+  provisional para descontarla al leer es posible, pero es otra tarea.
+- **Lo que §0.3 sigue garantizando sin cambios:** al parar —el camino normal— la cola se
+  cierra y se guarda, y una frase que vuelve tarde de Marian reabre el archivo y se escribe
+  igual.
+
+**Lo que no cierra esta tarea:** cuánto baja de verdad el «% a media frase» en una reunión
+real está `[por medir]`. Sale del `.jsonl` de la prueba en Windows, contando las líneas con
+`empiezaAMedias: true` sobre el total — y esa cuenta sólo vale **si las tres puertas de
+arriba marcan**: una puerta sin marcar no baja el porcentaje, lo falsea hacia abajo, que es
+la dirección en la que nadie lo investiga. **No se cuenta con `acabaEnPuntuacion`:** de las
+líneas que componemos nosotros ese campo se calcula sobre el texto guardado, que casi
+siempre acaba cerrado, así que ese porcentaje tiende a cero por construcción y no dice nada
+del riesgo que queda vivo. El contador de la barra en vivo es el de F031 y sigue midiendo
+lo suyo —si la línea **acaba** a media oración—, que después de F037 es otra pregunta. Y
+que la traducción de la frase unida sea mejor que la del trozo suelto está comprobado como
+**mecánica** (a Marian le llega la oración entera) pero no medido como calidad: eso pide el
+modelo cargado y oído humano.
 
 ### El coste
 

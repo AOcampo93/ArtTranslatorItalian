@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld('app', {
   // ── Eventos que llegan del proceso principal ──────────────────────
   alParcial: fn => escuchar('app:parcial', fn),
   alFrase: fn => escuchar('app:frase', fn),
+  /**
+   * La burbuja provisional que acaba de dejar de serlo, o que ha crecido
+   * (F037). Llega con el `idProvisional` de la burbuja a la que sustituye: la
+   * traducción entera es nueva, así que la interfaz reemplaza, no pega.
+   */
+  alReemplazo: fn => escuchar('app:frase:reemplazo', fn),
   alPregunta: fn => escuchar('app:pregunta', fn),
   alRespuesta: fn => escuchar('app:respuesta', fn),
   /** Por qué el panel de preguntas no va a dar respuestas (p. ej. falta la clave). */

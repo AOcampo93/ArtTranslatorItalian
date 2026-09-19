@@ -165,7 +165,11 @@ function montar ({ api = null } = {}) {
   const fabrica = new Function('$', 'crear', 'api', 'CapturaAudio', 'perfil',
     'contextoProyecto', 'demo',
     `${codigo}\n return {
-       pintarFrase, pintarParcial, retardos, resumenAlDetener, reiniciarMedidas,
+       pintarFrase, pintarParcial, reemplazarFrase, retardos, resumenAlDetener,
+       reiniciarMedidas,
+       // Cuántas burbujas provisionales siguen vivas (F037). Función, por lo
+       // mismo que las dos de abajo.
+       vivas: () => burbujasProvisionales.size,
        // Función y no getter: al repartir el objeto con \`...\` un getter se
        // evalúa una sola vez y se copia el número, así que una prueba podría
        // ponerse verde leyendo un cero viejo. Pasó.
@@ -179,7 +183,12 @@ function montar ({ api = null } = {}) {
     barra: () => raiz.querySelector('#txtEstado').textContent,
     pulsarParar: () => raiz.querySelector('#btnParar').onclick(),
     pulsarEscuchar: () => raiz.querySelector('#btnEscuchar').onclick(),
+    conversacion: () => raiz.querySelector('#conversacion'),
     burbujas: () => raiz.querySelector('#conversacion').querySelectorAll('.burbuja'),
+    es: (n = 0) => raiz.querySelector('#conversacion')
+      .querySelectorAll('.burbuja')[n].querySelector('.es').textContent,
+    it: (n = 0) => raiz.querySelector('#conversacion')
+      .querySelectorAll('.burbuja')[n].querySelector('.it').textContent,
     pie: (n = 0) => raiz.querySelector('#conversacion')
       .querySelectorAll('.burbuja')[n].querySelector('.pie').textContent,
     ...fabrica($, crear, api, CapturaAudio, perfil, contextoProyecto, demo),
@@ -413,7 +422,10 @@ describe('la burbuja de traducción', () => {
     assert.strictEqual(b.cortadas(), 0)
   })
 
-  test('la burbuja provisional desaparece cuando llega la definitiva', () => {
+  // «parcial» y no «provisional»: desde F037 la burbuja provisional es otra
+  // cosa —una oración traducida que aún no ha acabado—, y confundirlas al leer
+  // el archivo costaría un rato.
+  test('la burbuja del parcial desaparece cuando llega la frase', () => {
     const b = montar()
     b.pintarParcial('Avevo la febbre')
     assert.strictEqual(b.raiz.querySelector('#conversacion').querySelectorAll('.parcial').length, 1)
@@ -421,5 +433,153 @@ describe('la burbuja de traducción', () => {
     assert.strictEqual(b.raiz.querySelector('#conversacion').querySelectorAll('.parcial').length, 0,
       'se quedarían las dos, la provisional y la buena')
     assert.strictEqual(b.burbujas().length, 1)
+  })
+})
+
+describe('la burbuja provisional y su reemplazo (F037)', () => {
+  // Una oración que todavía no ha acabado se pinta igual —esperar al turno
+  // siguiente dejaría la pantalla en blanco varios segundos—, pero se pinta
+  // DICIENDO que no está cerrada, y cuando llega la traducción entera ocupa su
+  // sitio en vez de añadirse debajo. Pegar dos traducciones parciales daría una
+  // frase que no dijo nadie, que es justo el fallo que F037 arregla.
+
+  /** Lo que emite el proceso principal para la cola del primer turno. */
+  const PROVISIONAL = {
+    id: 'pv1', provisional: true,
+    it: 'Tu pensi che questo ruolo di Malena ti darà',
+    es: 'Crees que este papel de Malena te dará',
+    msTranscribir: 300, msTraducir: 120,
+  }
+  /** Y lo que emite cuando el turno siguiente cierra la pregunta. */
+  const DEFINITIVA = {
+    idProvisional: 'pv1',
+    it: 'Tu pensi che questo ruolo di Malena ti darà la possibilità di fare il salto '
+      + 'definitivo a livello internazionale?',
+    es: '¿Crees que este papel de Malena te dará la posibilidad de dar el salto '
+      + 'definitivo a nivel internacional?',
+    msTranscribir: 280, msTraducir: 420, arrastre: true, acabaEnPuntuacion: true,
+  }
+
+  test('se ve atenuada y con «…», y no dice «cortada»', () => {
+    const b = montar()
+    b.pintarFrase({ ...PROVISIONAL, forzado: true })
+
+    const burbuja = b.burbujas()[0]
+    assert.ok(burbuja.classList.contains('provisional'),
+      `la burbuja lleva las clases "${burbuja.className}"`)
+    assert.strictEqual(b.es(), 'Crees que este papel de Malena te dará …',
+      'el «…» es lo que dice que la oración sigue')
+    // «cortada» habla del turno; esta burbuja ya se ve a medias por el «…», y
+    // la que hay que contar como cortada es la frase que quede al final.
+    assert.ok(!/cortada/.test(b.pie()), `el pie dice "${b.pie()}"`)
+  })
+
+  test('no cuenta ni como troceada, ni como a media frase, ni en el retardo', () => {
+    // Si contara, la provisional y su definitiva serían la misma frase contada
+    // dos veces, y los tres números de la barra saldrían inflados.
+    const b = montar()
+    b.pintarFrase({ ...PROVISIONAL, forzado: true, acabaEnPuntuacion: false })
+    assert.strictEqual(b.cortadas(), 0)
+    assert.strictEqual(b.aMedia(), 0)
+    assert.deepStrictEqual(b.retardos, [], 'el p50 mide frases cerradas')
+  })
+
+  test('la definitiva ocupa el sitio de la provisional, no se añade debajo', () => {
+    const b = montar()
+    b.pintarFrase(PROVISIONAL)
+    assert.strictEqual(b.burbujas().length, 1)
+
+    b.reemplazarFrase(DEFINITIVA)
+
+    assert.strictEqual(b.burbujas().length, 1,
+      'dos burbujas serían la misma frase dicha dos veces, una de ellas a medias')
+    assert.strictEqual(b.es(), DEFINITIVA.es, 'se reemplaza entera, no se pega')
+    assert.strictEqual(b.it(), DEFINITIVA.it)
+    assert.ok(!b.burbujas()[0].classList.contains('provisional'),
+      'ya está cerrada: ni atenuada ni con «…»')
+    assert.match(b.pie(), /700 ms/, `el pie dice "${b.pie()}"`)
+    assert.strictEqual(b.vivas(), 0, 'esa burbuja ya no es de nadie')
+  })
+
+  test('al cerrarse SÍ cuenta, y una sola vez', () => {
+    const b = montar()
+    b.pintarFrase({ ...PROVISIONAL, forzado: true })
+    b.reemplazarFrase({ ...DEFINITIVA, forzado: true, acabaEnPuntuacion: true })
+
+    assert.strictEqual(b.cortadas(), 1)
+    assert.strictEqual(b.aMedia(), 0, 'esta frase acaba en interrogación')
+    assert.deepStrictEqual(b.retardos, [700], 'el retardo se apunta al cerrarse')
+    assert.match(b.pie(), /cortada/, 'ahora sí: es una frase definitiva de un turno cortado')
+  })
+
+  test('una cola que crece sigue siendo provisional y sigue en su sitio', () => {
+    // Dos turnos seguidos sin que el hablante cierre ninguna oración: la
+    // traducción de la unión sustituye a la anterior, con el mismo id.
+    const b = montar()
+    b.pintarFrase(PROVISIONAL)
+    b.reemplazarFrase({
+      idProvisional: 'pv1', id: 'pv1', provisional: true,
+      it: 'Tu pensi che questo ruolo di Malena ti darà la possibilità',
+      es: 'Crees que este papel de Malena te dará la posibilidad',
+      msTranscribir: 200, msTraducir: 150,
+    })
+
+    assert.strictEqual(b.burbujas().length, 1)
+    assert.ok(b.burbujas()[0].classList.contains('provisional'))
+    assert.strictEqual(b.es(), 'Crees que este papel de Malena te dará la posibilidad …')
+    assert.strictEqual(b.vivas(), 1, 'sigue habiendo una cola viva, la misma')
+  })
+
+  test('el reemplazo NO mueve el scroll si el usuario había subido a releer', () => {
+    // Es la razón por la que esto importa más que en el resto de la
+    // conversación: el reemplazo ocurre solo, sin que el usuario toque nada.
+    // Si le arrastra la vista mientras relee, la culpa parece del programa.
+    const b = montar()
+    b.pintarFrase(PROVISIONAL)
+
+    const c = b.conversacion()
+    c.scrollHeight = 4000
+    c.clientHeight = 300
+    c.scrollTop = 100              // subió a releer: le faltan 3.600 px hasta el final
+
+    b.reemplazarFrase(DEFINITIVA)
+
+    assert.strictEqual(c.scrollTop, 100, 'le movió la vista mientras releía')
+  })
+
+  test('y sí lo mueve si estaba abajo del todo, como el resto de la conversación', () => {
+    const b = montar()
+    b.pintarFrase(PROVISIONAL)
+
+    const c = b.conversacion()
+    c.scrollHeight = 4000
+    c.clientHeight = 300
+    c.scrollTop = 3700             // pegado al final
+
+    b.reemplazarFrase(DEFINITIVA)
+
+    assert.strictEqual(c.scrollTop, 4000, 'estando abajo, hay que seguir el final')
+  })
+
+  test('un reemplazo sin burbuja que sustituir pinta la frase en vez de perderla', () => {
+    // Pasa si la reunión se reinició entre medias. Enseñar el texto en el sitio
+    // equivocado es malo; perderlo es peor, porque esa frase ya está pagada.
+    const b = montar()
+    b.reemplazarFrase(DEFINITIVA)
+    assert.strictEqual(b.burbujas().length, 1)
+    assert.strictEqual(b.es(), DEFINITIVA.es)
+  })
+
+  test('una reunión nueva no deja vivas las provisionales de la anterior', async () => {
+    // Sin esto, un id repetido escribiría sobre un nodo que ya no está en
+    // pantalla y la frase no se vería en ningún sitio.
+    const b = montar({ api: apiQueDevuelve({
+      ok: true, frases: 1, costeUsd: 0.01, stats: { turnosForzados: 0 },
+    }) })
+    b.pintarFrase(PROVISIONAL)
+    assert.strictEqual(b.vivas(), 1)
+
+    await b.pulsarEscuchar()
+    assert.strictEqual(b.vivas(), 0)
   })
 })

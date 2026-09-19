@@ -148,11 +148,16 @@ function montar ({ traducir, traza = [], alCerrarSocket, autoguardadoRoto = fals
   const consola = { error: (...partes) => avisos.push(partes.map(String).join(' ')) }
 
   const traductor = { traducir }
+  // `frases.js` entra por la puerta, con las funciones DE VERDAD: el manejador
+  // las usa por `require` y aquí no hay `require` dentro del `new Function`.
+  // Fingirlas convertiría estas pruebas en una comprobación de los dobles.
+  const { partirTurno, arrastrar, acabaCerrada } = require('../src/frases')
   const fabrica = new Function(
     'transcriptor', 'traductor', 'autosave', 'idSesion', 'motor', 'resumen',
-    'aRenderer', 'db', 'console', 'sesion', codigo)
+    'aRenderer', 'db', 'console', 'sesion',
+    'partirTurno', 'arrastrar', 'acabaCerrada', codigo)
   const salida = fabrica(transcriptor, traductor, autosave, 7, motor, resumen,
-    aRenderer, db, consola, null)
+    aRenderer, db, consola, null, partirTurno, arrastrar, acabaCerrada)
 
   return {
     transcriptor,
@@ -167,6 +172,15 @@ function montar ({ traducir, traza = [], alCerrarSocket, autoguardadoRoto = fals
     pararSesion: salida.pararSesion,
     guardadas: () => Autosave.leer(autosave.ruta).entradas,
     burbujas: () => pintado.filter(x => x.canal === 'app:frase').map(x => x.datos),
+    // Las definitivas: lo que el usuario acaba leyendo como frase cerrada, sea
+    // una burbuja nueva o la sustitución de una provisional (F037).
+    definitivas: () => pintado
+      .filter(x => (x.canal === 'app:frase' || x.canal === 'app:frase:reemplazo') && !x.datos.provisional)
+      .map(x => x.datos),
+    provisionales: () => pintado
+      .filter(x => (x.canal === 'app:frase' || x.canal === 'app:frase:reemplazo') && x.datos.provisional)
+      .map(x => x.datos),
+    reemplazos: () => pintado.filter(x => x.canal === 'app:frase:reemplazo').map(x => x.datos),
     estados: () => pintado.filter(x => x.canal === 'app:estado').map(x => x.datos),
     cerrar: () => { autosave.cerrar(); fs.rmSync(raiz, { recursive: true, force: true }) },
   }
@@ -193,7 +207,11 @@ describe('la frase que se guarda y se pinta', () => {
     // null cuando nadie lo cortó: en `msHolgura` un cero se leería como «el
     // servidor obedeció al instante», y en `motivoCorte` cualquier etiqueta
     // sería un corte que no ocurrió. Las dos son medidas, no ausencias.
-    const sinLosDelCorte = { ...e, msHolgura: 0, motivoCorte: 'silencio' }
+    // `msProvisional` se suma a las excepciones desde F037 por la misma razón:
+    // es null cuando esta frase NUNCA tuvo burbuja provisional, o sea cuando lo
+    // primero que se vio en pantalla fue ya la definitiva. Un cero ahí diría
+    // «se vio al instante», que es una medida que nadie ha tomado.
+    const sinLosDelCorte = { ...e, msHolgura: 0, motivoCorte: 'silencio', msProvisional: 0 }
     assert.ok(Object.values(sinLosDelCorte).every(v => v !== null),
       `hay un null en ${JSON.stringify(e)}`)
     assert.strictEqual(e.msHolgura, null, 'nadie cortó este turno')
@@ -205,12 +223,19 @@ describe('la frase que se guarda y se pinta', () => {
     // La segunda prueba en Windows se contó a mano sobre el archivo: cuántos
     // trozos acababan a media oración, y cuánto tardaba el corte en aplicarse.
     // Si estos cuatro campos no llegan al `.jsonl`, la próxima se cuenta igual.
+    //
+    // Desde F037 «E quindi» no cierra ninguna oración, así que es una COLA:
+    // se pinta provisional y no llega al disco hasta que se cierra —aquí, al
+    // parar la reunión—. Las cuatro medidas del turno tienen que sobrevivir a
+    // ese camino, que es lo que esta prueba vigila ahora.
     const m = montar({ traducir: async () => ({ es: 'Y entonces', ms: 7 }) })
     m.transcriptor.emit('frase', {
       texto: 'E quindi', msTranscribir: 300,
       msTurno: 8420, msHolgura: 260, acabaEnPuntuacion: false, motivoCorte: 'tope-duro',
     })
-    await hasta(() => m.guardadas().length === 1, 'que la frase llegue al disco')
+    await hasta(() => m.provisionales().length === 1, 'que la cola se vea en pantalla')
+    await m.pararSesion('prueba', 50)
+    assert.strictEqual(m.guardadas().length, 1, 'la cola tiene que acabar en disco')
 
     const e = m.guardadas()[0]
     assert.strictEqual(e.msTurno, 8420, 'sin esto el exceso del turno no se puede medir')
@@ -256,7 +281,10 @@ describe('la frase que se guarda y se pinta', () => {
     m.transcriptor.emit('frase', {
       texto: 'E quindi', msTranscribir: 300, acabaEnPuntuacion: false,
     })
-    await hasta(() => m.guardadas().length === 1, 'que la frase llegue al disco')
+    // Cola: al disco cuando se cierra (F037). El texto guardado es el del turno
+    // tal cual, así que manda la medida del transcriptor.
+    await hasta(() => m.provisionales().length === 1, 'que la cola se vea en pantalla')
+    await m.pararSesion('prueba', 50)
 
     assert.strictEqual(m.guardadas()[0].acabaEnPuntuacion, false)
     m.cerrar()
@@ -301,7 +329,10 @@ describe('la frase que se guarda y se pinta', () => {
     m.transcriptor.emit('frase', {
       texto: 'Perché se non riesce ad aprire', msTranscribir: 260, forzado: true,
     })
-    await hasta(() => m.guardadas().length === 1, 'que la frase llegue al disco')
+    // Otra cola (F037): la marca del troceo tiene que llegar al archivo también
+    // por el camino de la cola, no sólo por el de la frase cerrada.
+    await hasta(() => m.provisionales().length === 1, 'que la cola se vea en pantalla')
+    await m.pararSesion('prueba', 50)
     assert.strictEqual(m.guardadas()[0].forzado, true)
     m.cerrar()
   })
@@ -339,8 +370,12 @@ describe('la frase que se guarda y se pinta', () => {
     // Si la app muere repintando, la frase tiene que estar ya a salvo. Se
     // comprueba mirando el archivo en el instante mismo de pintar: con las dos
     // líneas al revés, aquí habría cero.
-    const m = montar({ traducir: async () => ({ es: 'hola', ms: 1 }) })
-    m.transcriptor.emit('frase', { texto: 'ciao', msTranscribir: 100 })
+    //
+    // Con puntuación a propósito: es una frase cerrada, o sea de las que van al
+    // archivo. La cola provisional no se guarda (F037) y aquí se mide justo el
+    // orden entre disco y pantalla.
+    const m = montar({ traducir: async () => ({ es: '¡Hola!', ms: 1 }) })
+    m.transcriptor.emit('frase', { texto: 'Ciao!', msTranscribir: 100 })
     await hasta(() => m.burbujas().length === 1, 'que la burbuja salga')
 
     const pintadaLaFrase = m.pintado.find(x => x.canal === 'app:frase')
@@ -642,6 +677,583 @@ describe('parar la reunión a media traducción (F022)', () => {
     assert.strictEqual(primera.ok, true)
     assert.deepStrictEqual(segunda, { ok: true }, 'la segunda no repite el cierre')
     assert.strictEqual(m.cerradas.length, 1, 'la base de datos se cierra una sola vez')
+    m.cerrar()
+  })
+})
+
+describe('la burbuja es la frase, no el turno (F037)', () => {
+  // Las dos cadenas son las EXACTAS de `sesion-2.jsonl`, líneas 4 y 5
+  // `[medido]`. Traducido el segundo trozo por su cuenta, Marian devolvió
+  // «¿Cómo se puede dar el salto definitivo a nivel internacional?»: inventó el
+  // «Cómo» para cerrar la pregunta que no había visto empezar.
+  const MALENA_1 = 'Tu pensi che questo ruolo di Malena ti darà'
+  const MALENA_2 = "la possibilità di fare il salto definitivo a livello internazionale? "
+    + "Ma il salto definitivo per un'attrice non c'è mai, perché c'è un film che"
+
+  /** Monta con un Marian que apunta TODO lo que se le manda. */
+  function conMarian (extra = {}) {
+    const pedidos = []
+    const m = montar({
+      traducir: async texto => { pedidos.push(texto); return { es: `[es] ${texto}`, ms: 5 } },
+      ...extra,
+    })
+    m.pedidos = pedidos
+    return m
+  }
+
+  test('a Marian no le llega nunca una oración empezada por la mitad', async () => {
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300, forzado: true })
+    await hasta(() => m.provisionales().length === 1, 'que salga la burbuja provisional')
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280, forzado: true })
+    await hasta(() => m.reemplazos().length === 1, 'que la definitiva sustituya a la provisional')
+
+    // Éste es el criterio, y se comprueba sobre lo que se le pidió a Marian:
+    // ninguna petición empieza por «la possibilità».
+    for (const pedido of m.pedidos) {
+      assert.ok(!pedido.startsWith('la possibilità'),
+        `se le mandó a Marian un trozo a media frase: «${pedido.slice(0, 50)}…»`)
+    }
+    const definitiva = m.definitivas()[0]
+    assert.strictEqual(definitiva.it,
+      'Tu pensi che questo ruolo di Malena ti darà la possibilità di fare il salto '
+      + 'definitivo a livello internazionale?',
+      'la pregunta tiene que llegar entera, desde «Tu pensi»')
+    assert.strictEqual(definitiva.arrastre, true, 'y el archivo tiene que decir que se unió')
+    m.cerrar()
+  })
+
+  test('una llamada a Marian, una burbuja: nada se pega ni se alinea', async () => {
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280 })
+    await hasta(() => m.provisionales().length === 2, 'la cola nueva')
+
+    // Tres burbujas en pantalla en total: la provisional del primer turno, la
+    // definitiva que la sustituye y la cola nueva. Tres llamadas, ni una más.
+    assert.strictEqual(m.pedidos.length, 3, `se pidieron ${JSON.stringify(m.pedidos)}`)
+    const pintado = m.definitivas().length + m.provisionales().length
+    assert.strictEqual(pintado, 3)
+    // Y el texto de cada burbuja es EXACTAMENTE lo que se tradujo, sin recortes.
+    for (const frase of [...m.definitivas(), ...m.provisionales()]) {
+      assert.ok(m.pedidos.includes(frase.it), `«${frase.it}» no se tradujo tal cual`)
+      assert.strictEqual(frase.es, `[es] ${frase.it}`)
+    }
+    m.cerrar()
+  })
+
+  test('el reemplazo apunta a la burbuja que hay que sustituir', async () => {
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    const idProvisional = m.provisionales()[0].id
+    assert.ok(idProvisional, 'una burbuja provisional sin id no se puede sustituir')
+
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280 })
+    await hasta(() => m.provisionales().length === 2, 'el reemplazo y la cola nueva')
+
+    assert.strictEqual(m.reemplazos().length, 1, 'un solo reemplazo: el de la definitiva')
+    assert.strictEqual(m.reemplazos()[0].idProvisional, idProvisional)
+    assert.notStrictEqual(m.provisionales()[1].id, idProvisional,
+      'la cola nueva es otra burbuja, no la misma')
+    m.cerrar()
+  })
+
+  test('al .jsonl sólo van líneas definitivas', async () => {
+    // El archivo es el instrumento de medida de la prueba en Windows: una
+    // provisional y su definitiva serían la misma frase contada dos veces, y el
+    // `lineCount` de la base de datos diría lo mismo.
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    assert.deepStrictEqual(m.guardadas(), [], 'la cola no se guarda: todavía no es una frase')
+
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280 })
+    await hasta(() => m.guardadas().length === 1, 'que la definitiva llegue al disco')
+
+    assert.strictEqual(m.guardadas().length, 1)
+    assert.strictEqual(m.sesion.frases, 1, 'lineCount cuenta lo que está en el archivo')
+    assert.ok(!('provisional' in m.guardadas()[0]))
+    m.cerrar()
+  })
+
+  test('el motor de respuestas y el resumen NO ven la cola provisional', async () => {
+    // Una pregunta leída a medias se contesta a medias, y esa respuesta es la
+    // que el usuario va a decir en voz alta en la reunión.
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    assert.deepStrictEqual(m.alMotor, [], 'la cola no puede llegar al triaje');
+    assert.deepStrictEqual(m.alResumen, [])
+
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280 })
+    await hasta(() => m.alMotor.length === 1, 'que la frase cerrada sí llegue')
+
+    assert.strictEqual(m.alMotor.length, 1, 'una frase, una consideración')
+    assert.ok(m.alMotor[0].it.startsWith('Tu pensi'),
+      `al motor le llegó «${m.alMotor[0].it.slice(0, 40)}…»`)
+    assert.ok(m.alMotor[0].it.endsWith('internazionale?'), 'y con la pregunta cerrada')
+    assert.deepStrictEqual(m.alResumen, m.alMotor, 'el resumen ve lo mismo que el motor')
+    m.cerrar()
+  })
+
+  test('msProvisional dice cuánto tardó en verse ALGO de esa frase', async () => {
+    // Es el número que sostiene «la pantalla sigue mostrando algo enseguida»
+    // aunque la frase tarde dos turnos en cerrarse. Sin él, el archivo sólo
+    // tendría el retardo de la definitiva y parecería que se tardó más.
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280 })
+    await hasta(() => m.guardadas().length === 1, 'la definitiva')
+
+    const linea = m.guardadas()[0]
+    assert.strictEqual(typeof linea.msProvisional, 'number',
+      'la frase venía de una provisional: ese tiempo está medido')
+    assert.ok(linea.msProvisional >= 0)
+    m.cerrar()
+  })
+
+  test('una frase que nunca fue provisional no inventa msProvisional', async () => {
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: 'Sono arrivata.', msTranscribir: 300 })
+    await hasta(() => m.guardadas().length === 1, 'la frase')
+
+    const linea = m.guardadas()[0]
+    assert.strictEqual(linea.msProvisional, null,
+      'lo primero que se vio fue ya la definitiva, y ese tiempo es `ms`')
+    assert.strictEqual(linea.arrastre, false)
+    assert.strictEqual(linea.cierre, 'frase')
+    m.cerrar()
+  })
+
+  test('acabaEnPuntuacion es del TEXTO guardado cuando la línea la componemos nosotros', async () => {
+    // El transcriptor mide el turno, y desde F037 la línea ya no es el turno.
+    // Los dos turnos llegan marcados `acabaEnPuntuacion: false` —los dos acaban
+    // a media oración— y la frase que sale de unirlos acaba en interrogación:
+    // guardar ahí un `false` heredado falsearía el «% a media frase» de la
+    // prueba en Windows, que se cuenta justo sobre este campo.
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300, acabaEnPuntuacion: false })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280, acabaEnPuntuacion: false })
+    await hasta(() => m.guardadas().length === 1, 'la definitiva')
+
+    assert.strictEqual(m.guardadas()[0].acabaEnPuntuacion, true,
+      'esta frase acaba en «internazionale?»')
+    m.cerrar()
+  })
+
+  test('los campos del corte son los del ÚLTIMO turno que compone la frase', async () => {
+    // Criterio elegido, no heredado: describen el corte con el que la línea se
+    // cerró, que es el único que pudo partir una palabra suya.
+    const m = conMarian()
+    m.transcriptor.emit('frase', {
+      texto: MALENA_1, msTranscribir: 300, forzado: true,
+      msTurno: 6100, msHolgura: 200, motivoCorte: 'silencio',
+    })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    m.transcriptor.emit('frase', {
+      texto: MALENA_2, msTranscribir: 280, forzado: true,
+      msTurno: 8000, msHolgura: 460, motivoCorte: 'tope-duro',
+    })
+    await hasta(() => m.guardadas().length === 1, 'la definitiva')
+
+    const linea = m.guardadas()[0]
+    assert.strictEqual(linea.msTurno, 8000)
+    assert.strictEqual(linea.msHolgura, 460)
+    assert.strictEqual(linea.motivoCorte, 'tope-duro')
+    assert.strictEqual(linea.msTranscribir, 280)
+    m.cerrar()
+  })
+
+  test('pasado el tope de arrastre la cola se cierra y queda marcada', async () => {
+    // La única excepción admitida al criterio: arrastrar se paga por carácter
+    // —Marian escala `56 + 6,34·caracteres` ms [medido]—, así que una cola que
+    // crece sin freno acabaría retrasando la burbuja que la sustituye.
+    const largo = 'e poi ha detto che non era vero e che nessuno gliel\'aveva chiesto '.repeat(6).trim()
+    assert.ok(largo.length > 300, 'la cola de esta prueba tiene que pasar del tope')
+
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: largo, msTranscribir: 300, acabaEnPuntuacion: false })
+    await hasta(() => m.provisionales().length === 1, 'la provisional larga')
+    m.transcriptor.emit('frase', { texto: 'Poi è uscito.', msTranscribir: 200, acabaEnPuntuacion: true })
+    await hasta(() => m.guardadas().length === 2, 'las dos frases cerradas')
+
+    const [cerradaPorTope, siguiente] = m.guardadas()
+    assert.strictEqual(cerradaPorTope.it, largo)
+    assert.strictEqual(cerradaPorTope.cierre, 'tope',
+      'sin esta marca, el archivo no distingue esta frase de una que acabó bien')
+    // El texto guardado es el del turno tal cual, así que aquí manda la medida
+    // del transcriptor, que es la que hay.
+    assert.strictEqual(cerradaPorTope.acabaEnPuntuacion, false)
+    assert.strictEqual(siguiente.it, 'Poi è uscito.')
+    assert.strictEqual(siguiente.arrastre, false, 'el turno nuevo va solo: la cola se soltó')
+    // Y no se vuelve a llamar a Marian para cerrarla: esa traducción ya está
+    // hecha y pagada.
+    assert.strictEqual(m.pedidos.filter(t => t === largo).length, 1)
+    m.cerrar()
+  })
+
+  test('al parar, la cola que quedaba en pantalla acaba en el archivo (§0.3)', async () => {
+    // Es la última frase que dijo el interlocutor. Sin esto se perdería, que es
+    // justo lo que el autoguardado promete que no pasa.
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: 'E quindi il film diventa', msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    assert.deepStrictEqual(m.guardadas(), [])
+
+    const r = await m.pararSesion('prueba', 50)
+
+    assert.strictEqual(m.guardadas().length, 1, 'la cola tiene que acabar en disco')
+    assert.strictEqual(m.guardadas()[0].it, 'E quindi il film diventa')
+    assert.strictEqual(m.guardadas()[0].cierre, 'parada')
+    assert.strictEqual(r.frases, 1, 'y entrar en la cuenta que va a la base de datos')
+    assert.strictEqual(m.cerradas[0].lineCount, 1)
+    // Sin otra llamada a Marian: la traducción ya estaba hecha.
+    assert.strictEqual(m.pedidos.length, 1)
+    m.cerrar()
+  })
+
+  test('una frase que llega tarde tampoco deja su cola sin guardar', async () => {
+    // La traducción vence la gracia de `pararSesion`: cuando termina, la
+    // reunión ya está cerrada y nadie va a volver a pasar por la cola.
+    const diferida1 = diferido()
+    const m = conMarian({
+      traducir: async texto => {
+        await diferida1.promesa
+        return { es: `[es] ${texto}`, ms: 5 }
+      },
+    })
+    m.transcriptor.emit('frase', { texto: 'E quindi il film diventa', msTranscribir: 300 })
+    const parada = m.pararSesion('prueba', 20)
+    await hasta(() => m.traza.includes('socket cerrado'), 'que el socket se cierre')
+    const r = await parada
+    assert.strictEqual(r.enVuelo, 1, 'la gracia tenía que vencer para probar esto')
+
+    diferida1.soltar()
+    await hasta(() => m.guardadas().length === 1, 'que la cola tardía se guarde igual')
+    assert.strictEqual(m.guardadas()[0].cierre, 'parada')
+    m.cerrar()
+  })
+
+  test('los turnos se procesan en serie: la cola de uno no se la pisa el siguiente', async () => {
+    // Dos turnos a la vez leerían la misma cola y la traducirían dos veces, por
+    // la mitad. Se fuerza soltando la primera traducción DESPUÉS de que haya
+    // llegado el segundo turno.
+    const primera = diferido()
+    let n = 0
+    const m = montar({
+      traducir: async texto => {
+        n++
+        if (n === 1) await primera.promesa
+        return { es: `[es] ${texto}`, ms: 5 }
+      },
+    })
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300 })
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280 })
+    await esperar(20)
+    assert.strictEqual(n, 1, 'el segundo turno tiene que esperar al primero')
+
+    primera.soltar()
+    await hasta(() => m.guardadas().length === 1, 'la frase cerrada')
+
+    assert.strictEqual(m.guardadas()[0].it,
+      'Tu pensi che questo ruolo di Malena ti darà la possibilità di fare il salto '
+      + 'definitivo a livello internazionale?',
+      'si el segundo turno no esperara, la pregunta se habría traducido partida')
+    m.cerrar()
+  })
+
+  test('si Marian falla con la unión, la cola se cierra y no se inventa una frase', async () => {
+    // El trato de siempre —una frase que no se puede traducir no se guarda— se
+    // mantiene para el turno que falla. Lo que NO puede pasar es que la cola se
+    // quede esperando: uniéndola a un turno con el que ya no es contigua
+    // saldría una frase que no dijo nadie, y ésa sí acabaría en el archivo
+    // como si fuera una transcripción.
+    const m = montar({
+      traducir: async texto => {
+        if (texto.includes('internazionale')) throw new Error('modelo no cargado')
+        return { es: `[es] ${texto}`, ms: 5 }
+      },
+    })
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    m.transcriptor.emit('frase', { texto: MALENA_2, msTranscribir: 280 })
+    await hasta(() => m.estados().length === 1, 'el aviso de que no se pudo traducir')
+    assert.match(m.estados()[0].texto, /no se pudo traducir: modelo no cargado/)
+
+    // La cola sí se guarda: estaba traducida y pagada.
+    await hasta(() => m.guardadas().length === 1, 'que la cola se cierre en el archivo')
+    assert.strictEqual(m.guardadas()[0].it, MALENA_1)
+    assert.strictEqual(m.guardadas()[0].cierre, 'fallo')
+
+    m.transcriptor.emit('frase', { texto: 'Questo è un lavoro difficile.', msTranscribir: 200 })
+    await hasta(() => m.guardadas().length === 2, 'la frase siguiente')
+
+    assert.strictEqual(m.guardadas()[1].it, 'Questo è un lavoro difficile.')
+    assert.strictEqual(m.guardadas()[1].arrastre, false,
+      'la cola vieja no puede pegarse a un turno con el que ya no es contigua')
+    assert.strictEqual(m.guardadas()[0].empiezaAMedias, false,
+      'la cola que se cierra por el fallo empezaba donde empezaba su oración')
+    assert.strictEqual(m.guardadas()[1].empiezaAMedias, true,
+      'el turno que la continuaba se perdió: ESTA es la línea que se queda sin principio')
+    for (const linea of m.guardadas()) {
+      assert.ok(!(linea.it.includes('Malena') && linea.it.includes('lavoro difficile')),
+        `frase inventada en el archivo: «${linea.it}»`)
+    }
+    m.cerrar()
+  })
+
+  test('al parar con la unión en vuelo, la cola no acaba dos veces en el archivo', async () => {
+    // `procesarTurno` se lleva la cola, pero si la dejara puesta en `s.cola`
+    // mientras espera a Marian, la gracia de `pararSesion` podía vencer con ese
+    // turno en vuelo: `cerrarCola(s, 'parada')` escribía esa misma cola y al
+    // volver la traducción se escribía la unión, que la contiene. El mismo
+    // texto del hablante DOS veces en el `.jsonl` y DOS burbujas en pantalla
+    // —el segundo reemplazo ya no encuentra el nodo y pinta otra—, o sea los
+    // tres contadores de la barra contando la misma frase dos veces.
+    //
+    // `MALENA_2` recortado a su primera oración para que el segundo turno
+    // cierre limpio y el archivo tenga exactamente una línea que contar.
+    const MALENA_2_CIERRA = 'la possibilità di fare il salto definitivo a livello internazionale?'
+    const union = diferido()
+    const m = montar({
+      traducir: async texto => {
+        if (texto.length > MALENA_1.length) await union.promesa
+        return { es: `[es] ${texto}`, ms: 5 }
+      },
+    })
+    m.transcriptor.emit('frase', { texto: MALENA_1, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la burbuja provisional')
+    const idProvisional = m.provisionales()[0].id
+
+    m.transcriptor.emit('frase', { texto: MALENA_2_CIERRA, msTranscribir: 280 })
+    const parada = m.pararSesion('prueba', 20)
+    await hasta(() => m.traza.includes('socket cerrado'), 'que el socket se cierre')
+    const r = await parada
+    assert.strictEqual(r.enVuelo, 1, 'la gracia tenía que vencer con la unión a medio traducir')
+    assert.deepStrictEqual(m.guardadas(), [],
+      'la cola ya no está en la sesión: al parar no hay nada que cerrar por detrás')
+
+    union.soltar()
+    await hasta(() => m.reemplazos().length === 1, 'la definitiva que sustituye a la provisional')
+    await esperar(20)
+
+    const lineas = m.guardadas()
+    assert.strictEqual(lineas.length, 1,
+      `el archivo quedó con ${JSON.stringify(lineas.map(l => l.it))}`)
+    assert.strictEqual(lineas[0].it, `${MALENA_1} ${MALENA_2_CIERRA}`)
+    assert.strictEqual(lineas[0].cierre, 'frase')
+    assert.strictEqual(m.sesion.frases, 1, 'y el lineCount cuenta una frase, no dos')
+    assert.strictEqual(
+      m.reemplazos().filter(x => x.idProvisional === idProvisional).length, 1,
+      'dos reemplazos del mismo id dejan dos burbujas: el segundo ya no encuentra el nodo')
+    m.cerrar()
+  })
+
+  test('y tampoco cuando la unión tampoco cierra ninguna oración', async () => {
+    // La otra cara: lo que vuelve de Marian sigue sin cerrar oración, así que
+    // se guarda con `cierre: 'parada'`. Sin la apropiación salían DOS líneas
+    // marcadas así, y la segunda contenía entera a la primera.
+    const union = diferido()
+    const m = montar({
+      traducir: async texto => {
+        if (texto.includes('diventa')) await union.promesa
+        return { es: `[es] ${texto}`, ms: 5 }
+      },
+    })
+    m.transcriptor.emit('frase', { texto: 'E quindi il film', msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    m.transcriptor.emit('frase', { texto: 'diventa una storia diversa', msTranscribir: 280 })
+    const parada = m.pararSesion('prueba', 20)
+    await hasta(() => m.traza.includes('socket cerrado'), 'que el socket se cierre')
+    assert.strictEqual((await parada).enVuelo, 1, 'la gracia tenía que vencer')
+
+    union.soltar()
+    await hasta(() => m.guardadas().length === 1, 'que la cola tardía se cierre')
+    await esperar(20)
+
+    const lineas = m.guardadas()
+    assert.strictEqual(lineas.length, 1,
+      `el archivo quedó con ${JSON.stringify(lineas.map(l => l.it))}`)
+    assert.strictEqual(lineas[0].it, 'E quindi il film diventa una storia diversa')
+    assert.strictEqual(lineas[0].cierre, 'parada')
+    m.cerrar()
+  })
+
+  test('la marca de empezar a media oración va en la línea que empieza a medias', async () => {
+    // La asimetría que hay que vigilar: la línea que se cierra por tope empieza
+    // donde empezaba su oración —Marian la vio entera—, y la que se queda sin
+    // principio es la SIGUIENTE. Marcar la primera haría contar justo al revés
+    // en la prueba en Windows.
+    const largo = 'e poi ha detto che non era vero e che nessuno gliel\'aveva chiesto '.repeat(6).trim()
+    assert.ok(largo.length > 300, 'la cola de esta prueba tiene que pasar del tope')
+
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: largo, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional larga')
+    m.transcriptor.emit('frase', { texto: 'perché non voleva. Poi è uscito.', msTranscribir: 200 })
+    await hasta(() => m.guardadas().length === 2, 'las dos líneas')
+
+    const [porTope, aMedias] = m.guardadas()
+    assert.strictEqual(porTope.cierre, 'tope')
+    assert.strictEqual(porTope.empiezaAMedias, false,
+      'la cola cerrada por tope empieza donde empezaba su oración')
+    assert.strictEqual(aMedias.it, 'perché non voleva. Poi è uscito.')
+    assert.strictEqual(aMedias.empiezaAMedias, true,
+      'a ÉSTA se le mandó a Marian sin su principio')
+    assert.strictEqual(aMedias.cierre, 'frase')
+
+    m.transcriptor.emit('frase', { texto: 'Tutto chiaro.', msTranscribir: 100 })
+    await hasta(() => m.guardadas().length === 3, 'la tercera línea')
+    assert.strictEqual(m.guardadas()[2].empiezaAMedias, false,
+      'la marca se consume: no se queda pegada al resto de la reunión')
+    m.cerrar()
+  })
+
+  test('un fallo con una cola intermedia no borra el msProvisional de la frase', async () => {
+    // La burbuja lleva en pantalla desde el PRIMER turno, así que la definitiva
+    // que la sustituye no puede guardarse con `msProvisional: null`, cuyo
+    // significado documentado es «lo primero que se vio fue ya la definitiva».
+    // Un reemplazo con `null` ahí es una contradicción dentro del archivo.
+    const T1 = 'Tu pensi che questo ruolo'
+    const T2 = 'di Malena ti darà'
+    const T3 = 'la possibilità di fare il salto definitivo a livello internazionale?'
+    const UNION_2 = `${T1} ${T2}`
+    const m = montar({
+      traducir: async texto => {
+        if (texto === UNION_2) throw new Error('modelo no cargado')
+        return { es: `[es] ${texto}`, ms: 5 }
+      },
+    })
+    m.transcriptor.emit('frase', { texto: T1, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional')
+    const pv = m.provisionales()[0].id
+    assert.strictEqual(typeof m.provisionales()[0].msProvisional, 'number')
+
+    m.transcriptor.emit('frase', { texto: T2, msTranscribir: 200 })
+    await hasta(() => m.estados().length === 1, 'el aviso de que no se pudo traducir')
+    assert.deepStrictEqual(m.guardadas(), [], 'la cola que no se pudo traducir no se guarda')
+
+    m.transcriptor.emit('frase', { texto: T3, msTranscribir: 150 })
+    await hasta(() => m.guardadas().length === 1, 'la definitiva')
+
+    const linea = m.guardadas()[0]
+    assert.strictEqual(linea.it, `${UNION_2} ${T3}`)
+    assert.strictEqual(m.reemplazos()[0].idProvisional, pv,
+      'sustituye a la burbuja que lleva en pantalla desde el primer turno')
+    assert.strictEqual(typeof linea.msProvisional, 'number',
+      `un reemplazo no puede guardarse con msProvisional ${linea.msProvisional}`)
+    m.cerrar()
+  })
+
+  test('la marca viaja con la burbuja provisional hasta la línea que se guarda', async () => {
+    // El turno que se queda sin principio puede no cerrar ninguna oración: se
+    // pinta provisional y no llega al archivo hasta que el turno siguiente lo
+    // cierra. La línea que se guarda entonces empieza donde empezaba aquella
+    // cola, así que sigue siendo la que se quedó sin principio.
+    const largo = 'e poi ha detto che non era vero e che nessuno gliel\'aveva chiesto '.repeat(6).trim()
+    const m = conMarian()
+    m.transcriptor.emit('frase', { texto: largo, msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional larga')
+    m.transcriptor.emit('frase', { texto: 'ma nessuno rispose', msTranscribir: 200 })
+    await hasta(() => m.guardadas().length === 1, 'la cola cerrada por tope')
+    await hasta(() => m.provisionales().length === 2, 'la provisional del turno suelto')
+    m.transcriptor.emit('frase', { texto: 'e se ne andò.', msTranscribir: 150 })
+    await hasta(() => m.guardadas().length === 2, 'la definitiva')
+
+    const definitiva = m.guardadas()[1]
+    assert.strictEqual(definitiva.it, 'ma nessuno rispose e se ne andò.')
+    assert.strictEqual(definitiva.arrastre, true)
+    assert.strictEqual(definitiva.empiezaAMedias, true,
+      'la unión empieza donde empezaba la cola, y aquélla se quedó sin principio')
+    m.cerrar()
+  })
+
+  test('la TERCERA puerta: al parar con un turno encolado detrás, el que se queda sin principio queda marcado', async () => {
+    // La puerta que se escapó en la ronda 2. `procesarTurno` acaba con
+    // `if (s.cerrada) cerrarCola(s, 'parada')`: esa cola se suelta sin que
+    // nadie la continúe, exactamente igual que en el tope y en el fallo, pero
+    // el turno que venía DETRÁS en `s.cadena` ya estaba encolado y se va solo a
+    // Marian, sin su principio. Mientras la marca se ponía a mano en cada
+    // puerta, aquí no la ponía nadie y esa línea quedaba `empiezaAMedias:
+    // false`: en el `.jsonl` —el instrumento de la prueba en Windows—
+    // indistinguible de una línea que Marian vio entera.
+    //
+    // Es alcanzable: `pararSesion` puede vencer su gracia con un turno en vuelo
+    // y otro encolado, que es el caso que documenta el propio `pararSesion`
+    // —el servidor suelta una última frase al recibir `Terminate`—.
+    const union = diferido()
+    const pedidos = []
+    const m = montar({
+      traducir: async texto => {
+        pedidos.push(texto)
+        if (texto.includes('diventa')) await union.promesa
+        return { es: `[es] ${texto}`, ms: 5 }
+      },
+    })
+    m.transcriptor.emit('frase', { texto: 'E quindi il film', msTranscribir: 300 })
+    await hasta(() => m.provisionales().length === 1, 'la provisional del primer turno')
+
+    // El segundo se queda en vuelo con Marian, y el tercero espera detrás en la
+    // fila de `s.cadena`.
+    m.transcriptor.emit('frase', { texto: 'diventa una storia', msTranscribir: 280 })
+    m.transcriptor.emit('frase', { texto: 'molto diversa dal libro.', msTranscribir: 200 })
+    const parada = m.pararSesion('prueba', 20)
+    await hasta(() => m.traza.includes('socket cerrado'), 'que el socket se cierre')
+    assert.strictEqual((await parada).enVuelo, 2,
+      'la gracia tenía que vencer con uno en vuelo y otro encolado detrás')
+
+    union.soltar()
+    await hasta(() => m.guardadas().length === 2, 'las dos líneas tardías')
+    await esperar(20)
+
+    const lineas = m.guardadas()
+    assert.strictEqual(lineas.length, 2,
+      `el archivo quedó con ${JSON.stringify(lineas.map(l => l.it))}`)
+
+    const [porParada, aMedias] = lineas
+    assert.strictEqual(porParada.it, 'E quindi il film diventa una storia')
+    assert.strictEqual(porParada.cierre, 'parada')
+    assert.strictEqual(porParada.empiezaAMedias, false,
+      'la cola que se cierra al parar empieza donde empezaba su oración')
+
+    assert.strictEqual(aMedias.it, 'molto diversa dal libro.')
+    assert.strictEqual(aMedias.arrastre, false, 'se fue sola a Marian: la cola ya estaba cerrada')
+    assert.ok(pedidos.includes('molto diversa dal libro.'),
+      `a Marian se le pidió ${JSON.stringify(pedidos)}`)
+    assert.strictEqual(aMedias.empiezaAMedias, true,
+      'a ÉSTA se le mandó a Marian sin su principio, y el archivo tiene que decirlo')
+    m.cerrar()
+  })
+
+  test('un fallo sin cola previa también marca la línea siguiente', async () => {
+    // El otro lado de la misma marca. Si Marian falla con las completas y NO
+    // había cola que soltar, lo que se pierde es el texto de este turno entero
+    // —las completas y la cola que venía detrás, que se va con el `return`—, y
+    // el turno siguiente continúa una oración cuyo principio no quedó en
+    // ningún sitio. Como no hay cola, `cerrarColaEnMano` no marca nada: la
+    // marca tiene que ponerla la propia salida por fallo.
+    const m = montar({
+      traducir: async texto => {
+        if (texto === 'Questo è vero.') throw new Error('modelo no cargado')
+        return { es: `[es] ${texto}`, ms: 5 }
+      },
+    })
+    m.transcriptor.emit('frase', { texto: 'Questo è vero. E poi', msTranscribir: 300 })
+    await hasta(() => m.estados().length === 1, 'el aviso de que no se pudo traducir')
+    assert.deepStrictEqual(m.guardadas(), [], 'no había cola: no hay nada que cerrar')
+
+    m.transcriptor.emit('frase', { texto: 'non lo so.', msTranscribir: 200 })
+    await hasta(() => m.guardadas().length === 1, 'la frase siguiente')
+
+    const linea = m.guardadas()[0]
+    assert.strictEqual(linea.it, 'non lo so.')
+    assert.strictEqual(linea.arrastre, false)
+    assert.strictEqual(linea.empiezaAMedias, true,
+      'continúa el «E poi» que se perdió con el turno: llega a Marian sin principio')
     m.cerrar()
   })
 })

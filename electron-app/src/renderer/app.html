@@ -96,6 +96,13 @@
   .burbuja.parcial { opacity: .6; border-style: dashed; border: 1px dashed var(--linea); background: transparent; }
   .burbuja.parcial .es { color: var(--tx2); font-style: italic; }
 
+  /* La provisional es una oración que AÚN no ha acabado: se ve, pero se ve que
+     no está cerrada. Atenuada y con el «…» que pone `rellenarBurbuja`, sin
+     animación propia — va a ser sustituida en su sitio dentro de unos segundos
+     y un parpadeo ahí llamaría la atención sobre lo que no hay que leer. */
+  .burbuja.provisional { opacity: .72; border-left: 2px dashed var(--linea); }
+  .burbuja.provisional .es { color: var(--tx2); }
+
   .vacio { margin: auto; text-align: center; color: var(--tx3); font-size: 13px; max-width: 320px; }
   .vacio b { display: block; color: var(--tx2); font-size: 14px; margin-bottom: 6px; font-weight: 600; }
 
@@ -417,6 +424,11 @@ function reiniciarMedidas () {
   retardos.length = 0
   frasesCortadas = 0
   frasesAMediaFrase = 0
+  // El mapa se vacía porque esas burbujas son de una reunión ya cerrada. Ojo
+  // con el motivo: NO es que un id pueda repetirse —`nProvisional` vive en el
+  // módulo del proceso principal y no se reinicia entre reuniones—, así que si
+  // algún día alguien reinicia ese contador, este comentario no le da la razón.
+  burbujasProvisionales.clear()
 }
 
 /**
@@ -470,26 +482,36 @@ function pintarParcial (texto) {
   abajo()
 }
 
-function pintarFrase ({ it, es, ms, msTranscribir, msTraducir, forzado, acabaEnPuntuacion }) {
-  $('#vacio')?.classList.add('oculto')
-  burbujaParcial?.remove()
-  burbujaParcial = null
+/**
+ * Las burbujas provisionales vivas, por id (F037).
+ *
+ * Un mapa y no un selector sobre el DOM porque lo que hay que encontrar es
+ * exactamente el nodo que se pintó: si el reemplazo no da con él, el texto
+ * definitivo acabaría duplicado debajo en vez de ocupar su sitio.
+ */
+const burbujasProvisionales = new Map()
 
-  const b = crear('div', 'burbuja')
-  const eIt = crear('div', 'it'); eIt.textContent = it
-  const eEs = crear('div', 'es'); eEs.textContent = es
-
-  // El total se SUMA aquí a partir de las dos piernas en vez de creerse el
-  // `ms` que llegue. En la primera prueba real ese campo traía sólo la
-  // traducción y el rótulo seguía diciendo «retardo»: una cifra etiquetada
-  // como una cosa midiendo otra, y además por lo bajo.
+/**
+ * Escribe el contenido de una burbuja, nueva o ya en pantalla, y devuelve el
+ * total que se enseña en el pie.
+ *
+ * El total se SUMA aquí a partir de las dos piernas en vez de creerse el
+ * `ms` que llegue. En la primera prueba real ese campo traía sólo la
+ * traducción y el rótulo seguía diciendo «retardo»: una cifra etiquetada
+ * como una cosa midiendo otra, y además por lo bajo.
+ */
+function rellenarBurbuja (b, { it, es, ms, msTranscribir, msTraducir, forzado, provisional }) {
   const total = (msTranscribir != null && msTraducir != null)
     ? msTranscribir + msTraducir
     : ms
-  if (forzado) frasesCortadas++
-  if (acabaEnPuntuacion === false) frasesAMediaFrase++
 
-  const pie = crear('div', 'pie')
+  b.classList.toggle('provisional', Boolean(provisional))
+  b.querySelector('.it').textContent = it
+  // El «…» dice que esa oración sigue: lo que se lee es una traducción de
+  // verdad, pero de un texto que todavía no ha acabado y que va a sustituirse
+  // entero cuando acabe.
+  b.querySelector('.es').textContent = provisional ? `${es} …` : es
+
   // El desglose importa: con él se ve si el retardo viene de la red o del
   // equipo, que es lo que habrá que comparar cuando exista el modo local.
   //
@@ -498,16 +520,63 @@ function pintarFrase ({ it, es, ms, msTranscribir, msTraducir, forzado, acabaEnP
   // seguir en la siguiente. Va en el pie, en el mismo gris pequeño que los
   // milisegundos y sin animación: el usuario está leyendo una reunión, y un
   // aviso que llame la atención le costaría más de lo que le informa.
-  pie.textContent = [
+  //
+  // En una provisional no se dice: ya se ve por el «…» que está a medias, y el
+  // troceo que hay que contar es el de la frase que queda, no el del turno.
+  b.querySelector('.pie').textContent = [
     `${total} ms`,
     msTranscribir != null ? `oír ${msTranscribir}` : null,
     msTraducir != null ? `traducir ${msTraducir}` : null,
-    forzado ? 'cortada' : null,
+    !provisional && forzado ? 'cortada' : null,
   ].filter(Boolean).join(' · ')
 
-  b.append(eIt, eEs, pie)
-  $('#conversacion').appendChild(b)
+  return total
+}
+
+/** Lo que sólo cuentan las definitivas: una provisional y su definitiva son la misma frase. */
+function apuntarDefinitiva ({ forzado, acabaEnPuntuacion }, total) {
+  if (forzado) frasesCortadas++
+  if (acabaEnPuntuacion === false) frasesAMediaFrase++
   apuntarRetardo(total)
+}
+
+function pintarFrase (frase) {
+  $('#vacio')?.classList.add('oculto')
+  burbujaParcial?.remove()
+  burbujaParcial = null
+
+  const b = crear('div', 'burbuja')
+  b.append(crear('div', 'it'), crear('div', 'es'), crear('div', 'pie'))
+  const total = rellenarBurbuja(b, frase)
+
+  $('#conversacion').appendChild(b)
+  if (frase.provisional) burbujasProvisionales.set(frase.id, b)
+  else apuntarDefinitiva(frase, total)
+  abajo()
+}
+
+/**
+ * La burbuja provisional deja de serlo, o crece (F037).
+ *
+ * Llega la traducción del texto ENTERO —cola más turno—, así que se reemplaza
+ * en su sitio y no se pega nada: pegar dos traducciones parciales daría una
+ * frase que no dijo nadie, que es justo el fallo que F037 arregla.
+ */
+function reemplazarFrase ({ idProvisional, ...frase }) {
+  const b = burbujasProvisionales.get(idProvisional)
+  // Si esa burbuja ya no está —la reunión se reinició, o el proceso principal
+  // manda un id que aquí no se pintó—, se pinta como frase nueva: enseñar el
+  // texto en el sitio equivocado es malo, perderlo es peor.
+  if (!b) { pintarFrase(frase); return }
+
+  burbujasProvisionales.delete(idProvisional)
+  if (frase.provisional) burbujasProvisionales.set(frase.id ?? idProvisional, b)
+
+  const total = rellenarBurbuja(b, frase)
+  if (!frase.provisional) apuntarDefinitiva(frase, total)
+  // `abajo()` y no `scrollTop = scrollHeight`: el reemplazo ocurre solo, sin
+  // que el usuario toque nada, así que si había subido a releer algo, moverle
+  // la vista sería peor aquí que en ningún otro sitio.
   abajo()
 }
 
@@ -769,6 +838,7 @@ $('#btnGuardarAjustes').onclick = async () => {
 if (api) {
   api.alParcial(pintarParcial)
   api.alFrase(pintarFrase)
+  api.alReemplazo(reemplazarFrase)
   api.alPregunta(pintarPregunta)
   api.alRespuesta(pintarRespuesta)
   api.alAvisoPreguntas(pintarAvisoPreguntas)

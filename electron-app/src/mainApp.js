@@ -39,6 +39,7 @@ const traductor = require(path.join(BACK, 'translator'))
 const contexto = require(path.join(BACK, 'contexto'))
 const db = require(path.join(BACK, 'db'))
 const { Autosave } = require(path.join(BACK, 'autosave'))
+const { partirTurno, arrastrar, acabaCerrada } = require(path.join(BACK, 'frases'))
 const { MotorRespuestas, MotorResumen } = require(path.join(BACK, 'respuestas'))
 const { crearLlamador } = require(path.join(BACK, 'llm'))
 
@@ -222,6 +223,356 @@ async function esperarEnVuelo (s, topeMs = GRACIA_EN_VUELO_MS) {
   return s.enVuelo.size
 }
 
+// ── La burbuja es la frase, no el turno (F037) ────────────────────────
+/**
+ * Por qué el turno no se traduce tal como llega, con el caso medido delante.
+ *
+ * Desde F031 el turno se corta por tope (6 s, tope duro 8 s), así que muchas
+ * veces acaba a media oración: 10 de 13 trozos forzados en `sesion-2.jsonl`
+ * `[medido]`. Y a Marian eso no le sale «a medias», le sale **inventado**:
+ *
+ *   «Tu pensi che questo ruolo di Malena ti darà» + «la possibilità di fare il
+ *   salto definitivo a livello internazionale? …» → «¿Cómo se puede dar el
+ *   salto definitivo a nivel internacional?» `[medido]`. El «Cómo» no lo dijo
+ *   nadie: el modelo completó la oración que le faltaba.
+ *
+ * Desde aquí, la unidad que se traduce, se pinta y se guarda es la **oración**,
+ * no el turno (`frases.js` parte y arrastra; aquí se orquesta):
+ *
+ *  1. Las oraciones completas del turno se traducen y se pintan como siempre.
+ *  2. La cola sin cerrar se traduce y se pinta **provisional** (atenuada, con
+ *     «…»). Así la pantalla sigue enseñando algo enseguida, que es lo que se
+ *     perdería si esperásemos al turno siguiente.
+ *  3. Cuando llega ese turno, se traduce `cola + turno` **junto** y la
+ *     definitiva **sustituye** a la provisional en su sitio.
+ *
+ * Una llamada a Marian = una burbuja. No se alinea ni se pega nada: lo que
+ * sustituye a la provisional es una traducción entera y nueva.
+ *
+ * Y dos reglas que no son de pantalla:
+ *
+ *  - **Los motores sólo ven texto definitivo.** Una pregunta detectada sobre
+ *    media oración se contesta a medias, y la respuesta sugerida es lo que el
+ *    usuario va a decir en voz alta.
+ *  - **Al `.jsonl` sólo van líneas definitivas.** El archivo es el instrumento
+ *    de medida de la prueba en Windows; una provisional y su definitiva serían
+ *    la misma frase contada dos veces.
+ */
+
+/**
+ * Identificadores de burbuja provisional. Sólo tienen que ser únicos dentro de
+ * la ventana: el renderer los usa para encontrar el nodo que hay que sustituir.
+ */
+let nProvisional = 0
+const nuevoIdProvisional = () => `pv${++nProvisional}`
+
+/**
+ * `acabaEnPuntuacion` de una línea, que no siempre es la del turno.
+ *
+ * Cuando la línea ES el turno tal cual, manda la medida del transcriptor, y su
+ * ausencia se respeta como `null` (F031: un campo que no se midió no se
+ * inventa, y `false` significa «acabó a media oración»). Cuando la línea la
+ * componemos nosotros —partiendo o uniendo— el transcriptor no la ha medido:
+ * la medida verdadera es la del texto que se guarda, y leerla de nuestra propia
+ * cadena no es inventar nada.
+ */
+function acabaEnPuntuacionDeLinea (textoLinea, turno) {
+  if (textoLinea === String(turno.texto ?? '').trim()) return turno.acabaEnPuntuacion ?? null
+  return acabaCerrada(textoLinea)
+}
+
+/**
+ * Traduce un texto y arma la línea. No guarda ni pinta: eso es `guardarYPintar`.
+ *
+ * Los cuatro campos de F031 (`forzado`, `msTurno`, `msHolgura`, `motivoCorte`)
+ * se quedan con los del **último turno** que compone la línea, y el criterio
+ * está elegido, no heredado: describen el corte con el que esa línea se cerró,
+ * que es el único que pudo partir una palabra suya. `acabaEnPuntuacion` va
+ * aparte porque es del texto, no del corte (ver arriba).
+ */
+async function traducirLinea (texto, turno, extra = {}) {
+  const t0 = Date.now()
+  const tr = await traductor.traducir(texto)
+  // Reloj de pared y no `tr.ms`: si una frase larga tiene ocupado a Marian,
+  // la siguiente espera su turno, y esa espera la sufre el usuario aunque
+  // el modelo no la cuente como suya.
+  const msTraducir = Date.now() - t0
+  const msTranscribir = turno.msTranscribir
+  return {
+    it: texto, es: tr.es,
+    ms: msTranscribir + msTraducir,   // el retardo es la cadena, no una pierna
+    msTranscribir, msTraducir,
+    forzado: Boolean(turno.forzado),
+    msTurno: turno.msTurno ?? null,
+    msHolgura: turno.msHolgura ?? null,
+    acabaEnPuntuacion: acabaEnPuntuacionDeLinea(texto, turno),
+    motivoCorte: turno.motivoCorte ?? null,
+    // F037. `arrastre`: la línea lleva pegada delante la cola de un turno
+    // anterior, o sea que Marian la vio entera. `msProvisional`: cuánto tardó
+    // en verse ALGO de este texto en pantalla —la burbuja provisional—; `null`
+    // si no hubo ninguna, y entonces lo primero que se vio fue ya la
+    // definitiva, que es `ms`. `cierre` dice por qué acaba donde acaba:
+    // `'frase'` (acabó una oración), `'tope'` (la cola pasó de los 300
+    // caracteres de arrastre), `'parada'` (la reunión se detuvo con la cola en
+    // pantalla) o `'fallo'` (Marian no pudo traducir el turno que la
+    // continuaba). `empiezaAMedias`: a ESTA línea se le quitó el principio
+    // antes de mandarla a Marian. Ojo con la asimetría, que es lo que se cuenta
+    // en la prueba en Windows: la marca NO va en la línea que se cerró sin
+    // acabar su oración —esa empezaba donde empezaba la suya, y Marian la vio
+    // entera—, va en la SIGUIENTE, que es la que se queda sin principio. Las
+    // puertas son tres, y las tres son el mismo gesto —soltar una cola sin que
+    // nadie la continúe—: el tope de arrastre, un fallo de Marian y la parada
+    // de la reunión. Por eso la marca la pone `cerrarColaEnMano`, que es por
+    // donde pasan las tres.
+    arrastre: false, msProvisional: null, cierre: 'frase', empiezaAMedias: false,
+    ...extra,
+  }
+}
+
+/**
+ * Traduce avisando en pantalla si Marian falla, en vez de propagar.
+ *
+ * Devuelve `null` si no se pudo traducir. El aviso nombra SOLO la traducción,
+ * que es el único fallo que este texto sabe nombrar: decir «no se pudo
+ * traducir» de un fallo de disco manda a investigar al sitio equivocado.
+ */
+async function traducirOAvisar (texto, turno, extra) {
+  try {
+    return await traducirLinea(texto, turno, extra)
+  } catch (err) {
+    aRenderer('app:estado', { clase: 'aviso', texto: `no se pudo traducir: ${err.message}` })
+    return null
+  }
+}
+
+/**
+ * Pone la línea a salvo y la pinta. Con `idProvisional`, sustituye esa burbuja
+ * en su sitio en vez de añadir una nueva.
+ */
+function guardarYPintar (s, frase, idProvisional = null) {
+  // `escribir` reabre el archivo si hacía falta (se abre en modo append), así
+  // que una frase que llega tarde se guarda igual. Si lo ha reabierto ella,
+  // hay que volver a cerrarlo: nadie más va a hacerlo y un descriptor por
+  // sesión terminada se acumula.
+  //
+  // Y va en un `finally`, no después de `escribir`: `escribir` hace `abrir()`
+  // **y luego** `writeSync()`, así que un disco lleno (ENOSPC) o un EIO falla
+  // con el archivo YA reabierto. Con el cierre dentro del `try`, esa
+  // excepción se lo saltaba y dejaba el descriptor colgando para siempre.
+  const estabaAbierto = s.autosave.abierto
+  try {
+    // §0.3 — al disco ANTES de pintar y antes de contar: si la app muere en
+    // el repintado, la frase ya está a salvo.
+    s.autosave.escribir(frase)
+    // Se cuenta lo que ESTÁ en disco, no lo que se intentó escribir: este
+    // número acaba en `lineCount` de la base de datos.
+    s.frases++
+  } catch (err) {
+    // La traducción salió bien y lo que falló fue guardarla, que es justo lo
+    // que §0.3 promete. Se dice con su nombre y con la clase de fallo grave.
+    console.error('[autoguardado] no se pudo escribir la frase:', err.message)
+    aRenderer('app:estado', { clase: 'mal', texto: `no se pudo guardar la frase: ${err.message}` })
+  } finally {
+    if (!estabaAbierto) s.autosave.cerrar()
+  }
+  if (idProvisional) aRenderer('app:frase:reemplazo', { idProvisional, ...frase })
+  else aRenderer('app:frase', frase)
+}
+
+/**
+ * Cierra la cola que hubiera en pantalla como línea definitiva.
+ *
+ * Su traducción ya está hecha y PAGADA, así que no se vuelve a llamar a Marian:
+ * se guarda lo que ya se ve. Sin esto, la última cola de la reunión —que en el
+ * archivo es la última frase que dijo el interlocutor— se perdería, y eso es
+ * justo lo que §0.3 promete que no pasa.
+ */
+function cerrarCola (s, cierre) {
+  const cola = s.cola
+  s.cola = null
+  cerrarColaEnMano(s, cola, cierre)
+}
+
+/**
+ * Lo mismo, pero con la cola que un turno ya tiene EN LA MANO.
+ *
+ * `procesarTurno` se apropia de `s.cola` antes de su primer `await` (allí está
+ * escrito por qué), así que desde ese momento la cola ya no está en la sesión y
+ * `cerrarCola` no la encontraría. Las dos salidas que la cierran con la cola
+ * ya en la mano —el tope de arrastre y un fallo de Marian— pasan por aquí, no
+ * por `cerrarCola`.
+ *
+ * Y aquí se pone la marca del archivo, porque aquí pasan TODAS las puertas.
+ */
+function cerrarColaEnMano (s, cola, cierre) {
+  if (!cola) return
+  // Soltar una cola sin que nadie la continúe deja sin principio a la línea
+  // siguiente: lo que venga después continúa una oración cuyo arranque ya se
+  // cerró aparte, y a Marian le llegará sin él. Las tres puertas que sueltan
+  // una cola —el tope de arrastre, un fallo de Marian y la parada de la
+  // reunión— pasan por esta función, así que la marca se pone una sola vez y
+  // en el único sitio donde no se puede olvidar. Marcar a mano en cada puerta
+  // es justo lo que dejó la parada sin marcar: el tope y el fallo tenían su
+  // copia, y la tercera puerta se quedó sin ninguna.
+  //
+  // La condición es «había cola», no «se escribió línea»: si Marian no pudo
+  // traducir esa cola no se guarda nada, pero el turno de después se queda
+  // igual de huérfano.
+  s.empiezaAMedias = true
+  // Sin traducción no hay nada que guardar: la cola volverá a intentarse con el
+  // turno siguiente si aún queda reunión. Es el mismo trato que ya tenía una
+  // frase que Marian no pudo traducir.
+  if (!cola.frase) return
+  guardarYPintar(s, { ...cola.frase, cierre }, cola.id)
+}
+
+/**
+ * Un turno: arrastra lo que faltaba, traduce por oraciones y deja la cola.
+ *
+ * `llegada` es cuándo entró el turno, no cuándo le tocó: los turnos se procesan
+ * en serie, así que la espera detrás del anterior también la sufre el usuario y
+ * tiene que estar dentro de `msProvisional`.
+ */
+async function procesarTurno (s, turno, llegada) {
+  const texto = String(turno.texto ?? '').trim()
+  if (!texto) return
+
+  // La cola se saca de la sesión AQUÍ, en el mismo tick y antes del primer
+  // `await`: desde ahora la lleva este turno en la mano y nadie más puede
+  // cerrarla. Sin esta apropiación, `pararSesion` podía vencer su gracia con la
+  // unión todavía en vuelo, cerrar con `'parada'` esa MISMA cola, y al volver
+  // la traducción se guardaba la unión, que la contiene: el mismo texto del
+  // hablante dos veces en el `.jsonl` y dos burbujas en pantalla, con los tres
+  // contadores de la barra contando esa frase dos veces.
+  const colaPrevia = s.cola
+  s.cola = null
+  // La misma cola, mientras siga sin cerrar. Las dos salidas de abajo —el tope
+  // y el fallo de Marian— la cierran, y ninguna puede cerrarla dos veces.
+  let colaEnMano = colaPrevia
+  const union = arrastrar(colaPrevia?.it, texto)
+
+  // La cola pasó del tope de arrastre: se cierra con lo que ya tiene y el turno
+  // nuevo empieza por donde empiece. Es una de las tres puertas por las que un
+  // texto llega a Marian empezado por la mitad —las otras dos son un fallo de
+  // Marian, más abajo, y la parada de la reunión, al final—. Y la línea que
+  // empieza a medias es la de ESTE turno, no la que se cierra aquí: la cola
+  // cerrada empieza donde empezaba su oración, y a Marian le llegó entera.
+  //
+  // La marca la pone `cerrarColaEnMano`, que es por donde pasan las tres. Aquí
+  // la línea marcada es la de este mismo turno y no la del siguiente: cuando
+  // el tope salta, `s.cola` ya es null, así que `union.arrastre` es false y el
+  // `empiezaAMedias` de tres líneas más abajo la lee para ESTE turno.
+  if (union.colaSuelta) {
+    cerrarColaEnMano(s, colaEnMano, 'tope')
+    colaEnMano = null
+  }
+
+  // Se consume ya con el tope aplicado. Si se arrastra, la línea empieza donde
+  // empezaba la cola y hereda su marca; si no, empieza donde empiece el turno, y
+  // eso es a media oración sólo si la cola anterior se soltó sin continuarla.
+  const empiezaAMedias = union.arrastre
+    ? colaPrevia.empiezaAMedias === true
+    : s.empiezaAMedias === true
+  s.empiezaAMedias = false
+
+  const { completas, cola } = partirTurno(union.texto)
+  // Si se arrastró, la burbuja que ya está en pantalla es la que hay que
+  // sustituir: la definitiva ocupa SU sitio, no se añade otra debajo.
+  let aSustituir = union.arrastre ? colaPrevia.id : null
+  // Se lee de la cola y no de su `frase`: si Marian falló traduciendo la cola,
+  // `frase` es `null` pero la burbuja que la enseña sigue en pantalla desde
+  // antes, y esa medida es la que vale.
+  const msProvisional = union.arrastre ? colaPrevia.msProvisional ?? null : null
+
+  if (completas) {
+    const frase = await traducirOAvisar(completas, turno,
+      { arrastre: union.arrastre, msProvisional, empiezaAMedias })
+    if (!frase) {
+      // Marian no pudo con la unión. El turno se pierde, como cualquier otra
+      // frase que no se puede traducir, pero la cola NO: ya estaba traducida y
+      // en pantalla. Se cierra aquí con lo que tenía.
+      //
+      // Y sobre todo, se cierra para que no se quede esperando al turno
+      // siguiente: uniéndola a un turno con el que ya no es contigua saldría
+      // una frase que no dijo nadie —«Tu pensi che questo ruolo di Malena ti
+      // darà» + «Questo è un lavoro difficile.»— y esa sí acabaría en el
+      // archivo como si fuera una transcripción.
+      cerrarColaEnMano(s, colaEnMano, 'fallo')
+      // Si HABÍA cola, la marca ya la ha puesto ella. Esto cubre el otro caso:
+      // sin cola previa, lo que se pierde es el texto de este turno entero
+      // —las completas y la cola que venía detrás—, así que el turno siguiente
+      // continúa una oración cuyo principio no quedó en ningún sitio y también
+      // llega a Marian sin él.
+      s.empiezaAMedias = true
+      return
+    }
+    guardarYPintar(s, frase, aSustituir)
+    aSustituir = null
+
+    // Y después de pintar, nunca antes: el triaje y el LLM no pueden retrasar
+    // la burbuja, que es lo que el usuario está leyendo.
+    //
+    // Si la reunión ya terminó, aquí se para. Una respuesta sugerida que nadie
+    // va a leer cuesta una llamada al LLM, y el panel donde se pintaría ya no
+    // está en pantalla. La frase, en cambio, sí se ha guardado.
+    //
+    // Sólo texto DEFINITIVO: la cola provisional no pasa por aquí ni cuando se
+    // pinta ni cuando se sustituye, porque una pregunta leída a medias se
+    // contesta a medias y esa respuesta la va a decir el usuario en voz alta.
+    if (!s.cerrada) {
+      // `considerar` no se espera a propósito —dentro decide si merece la
+      // llamada y emite por su cuenta—, así que aquí solo se recoge el fallo.
+      s.motor?.considerar(completas, frase.es)
+        .catch(e => console.error('[preguntas]', e.message))
+      s.resumen?.registrar(completas, frase.es)
+    }
+  }
+
+  if (cola) {
+    // La cola de este turno sólo puede empezar a media oración si no vino
+    // ninguna completa delante: si vino, la cola arranca justo detrás de un
+    // `.?!`, o sea desde el principio de su oración.
+    const colaEmpiezaAMedias = completas ? false : empiezaAMedias
+    // La primera vez que se ve algo de este texto es AHORA; si viene de una
+    // cola anterior, ya se vio entonces y esa es la medida que vale.
+    const msProvisionalAhora = msProvisional ?? (Date.now() - llegada)
+    const frase = await traducirOAvisar(cola, turno, {
+      arrastre: union.arrastre,
+      empiezaAMedias: colaEmpiezaAMedias,
+      msProvisional: msProvisionalAhora,
+    })
+    const id = aSustituir ?? nuevoIdProvisional()
+    // Si Marian no pudo con la cola, el texto se guarda igual para reintentarlo
+    // con el turno siguiente, y se conserva el id de la burbuja que hubiera en
+    // pantalla: sin él esa burbuja se quedaría con un «…» que ya no va a cerrar
+    // nadie, y la frase buena saldría debajo, repetida.
+    // Las dos marcas viven en la cola y no sólo en su `frase`: si Marian falló
+    // con esta cola, `frase` es `null` y las dos tienen que sobrevivir hasta el
+    // turno que la continúe.
+    //
+    // `msProvisional`: si esta cola se tradujo, lo primero que se ve de ella es
+    // ahora. Si falló pero había una burbuja anterior —que enseña parte del
+    // mismo texto—, vale la medida de entonces; y si no había ninguna, no se ha
+    // visto nada todavía y sigue siendo `null`, que es lo que ese campo
+    // significa.
+    s.cola = {
+      id: frase ? id : aSustituir, it: cola, frase,
+      empiezaAMedias: colaEmpiezaAMedias,
+      msProvisional: frase ? msProvisionalAhora : (aSustituir ? msProvisional : null),
+    }
+    if (frase) {
+      aRenderer(aSustituir ? 'app:frase:reemplazo' : 'app:frase',
+        { ...(aSustituir ? { idProvisional: aSustituir } : {}), id, provisional: true, ...frase })
+    }
+  } else {
+    s.cola = null
+  }
+
+  // Si la reunión se cerró mientras esto traducía, la cola ya no va a tener
+  // quien la cierre: `pararSesion` pasó por su sitio antes de que existiera.
+  if (s.cerrada) cerrarCola(s, 'parada')
+}
+
 // ── La reunión ────────────────────────────────────────────────────────
 async function empezarSesion ({ perfil, contexto: ctx }) {
   if (sesion) return { ok: true, yaCorriendo: true }
@@ -280,6 +631,20 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
     // reunión terminó: se guardan igual, pero no gastan llamadas al LLM.
     enVuelo: new Set(),
     cerrada: false,
+    // F037. `cola`: la oración a medias que está en pantalla como burbuja
+    // provisional, con su id y su traducción ya pagada. `cadena`: los turnos se
+    // procesan EN SERIE, porque la cola de uno se arrastra al siguiente y dos
+    // turnos a la vez la pisarían — el segundo leería una cola que el primero
+    // todavía no ha dejado, y esa oración se traduciría dos veces y por la
+    // mitad. Lo que se pierde es solapar dos traducciones; lo que se gana es
+    // que el arrastre signifique algo.
+    cola: null,
+    cadena: Promise.resolve(),
+    // Se pone a `true` cuando una cola se suelta sin que nadie la continúe
+    // —el tope, un fallo de Marian o la parada de la reunión—: la primera línea
+    // que salga después es la que llega a Marian sin su principio, y es ella la
+    // que queda marcada en el archivo.
+    empiezaAMedias: false,
   }
 
   // La sesión de ESTE transcriptor, capturada aquí a propósito. Los manejadores
@@ -316,112 +681,17 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   // Se arregla por dos lados a la vez: la frase es de `s` —la sesión capturada
   // arriba, que no se vuelve null— y su promesa se apunta en `s.enVuelo`, para
   // que `pararSesion` pueda esperarla un momento en vez de perderla.
-  transcriptor.on('frase', ({
-    texto, msTranscribir, forzado, msTurno, msHolgura, acabaEnPuntuacion, motivoCorte,
-  }) => {
-    const tarea = (async () => {
-      const t0 = Date.now()
-      let frase = null
-      try {
-        const tr = await traductor.traducir(texto)
-        // Reloj de pared y no `tr.ms`: si una frase larga tiene ocupado a Marian,
-        // la siguiente espera su turno, y esa espera la sufre el usuario aunque
-        // el modelo no la cuente como suya.
-        const msTraducir = Date.now() - t0
-        frase = {
-          it: texto, es: tr.es,
-          ms: msTranscribir + msTraducir,   // el retardo es la cadena, no una pierna
-          msTranscribir, msTraducir,
-          // `forzado` dice que el turno lo cortamos nosotros por largo, así que
-          // esta frase puede estar partida. Queda en el archivo para poder
-          // contar en la próxima reunión real cuántas se parten de verdad.
-          forzado: Boolean(forzado),
-          // Las cuatro medidas de F031. La segunda prueba en Windows hubo que
-          // contarla a mano sobre el `.jsonl` —y la cifra que más importaba,
-          // los 2,6 s de exceso del turno, sólo se pudo estimar restando
-          // marcas de tiempo—. Con esto la próxima se lee del archivo:
-          //
-          //  · `msTurno`: lo que duró el turno de verdad.
-          //  · `msHolgura`: del corte pedido al turno cerrado; `null` si no se
-          //    forzó, porque un cero ahí sería «obedeció al instante».
-          //  · `acabaEnPuntuacion`: el «a media frase», ya contado.
-          //  · `motivoCorte`: `'silencio'` o `'tope-duro'`; `null` si no se
-          //    forzó. Es lo que separa «se cortó en una pausa» de «se cortó
-          //    encima de la voz», y sin él el criterio «0 palabras partidas en
-          //    trozos forzados con silencio detectado» vuelve a no poderse
-          //    contar sobre el archivo.
-          //
-          // Los tres van con `?? null` por el mismo motivo, y el tercero es el
-          // que más muerde: `Boolean(undefined)` es `false`, o sea «esta frase
-          // acabó a media oración», que es una medida que nadie ha tomado. El
-          // `.jsonl` es de donde va a salir el «% de trozos a media frase» de
-          // la prueba en Windows, y un motor que no calcule el campo —hoy
-          // ninguno de los enchufados, pero `pipeline.js` y `geminiLive.js`
-          // emiten `frase` sin él— dejaría ese porcentaje en 100% sin que
-          // nadie lo note. El renderer ya cuenta con `=== false` por esto
-          // mismo; si aquí se rellena el hueco, esa defensa no sirve de nada.
-          msTurno: msTurno ?? null,
-          msHolgura: msHolgura ?? null,
-          acabaEnPuntuacion: acabaEnPuntuacion ?? null,
-          motivoCorte: motivoCorte ?? null,
-        }
-      } catch (err) {
-        // Este `catch` abraza SOLO la traducción, que es el único fallo que este
-        // texto sabe nombrar. Lo que venga después tiene su propio aviso: decir
-        // «no se pudo traducir» de otra cosa manda a investigar al sitio
-        // equivocado.
-        aRenderer('app:estado', { clase: 'aviso', texto: `no se pudo traducir: ${err.message}` })
-        return
-      }
-
-      // De aquí en adelante la frase ya está traducida y PAGADA. Lo único que
-      // queda es ponerla a salvo, y eso se hace aunque la reunión ya se haya
-      // cerrado mientras se traducía.
-      // `escribir` reabre el archivo si hacía falta (se abre en modo append), así
-      // que una frase que llega tarde se guarda igual. Si lo ha reabierto ella,
-      // hay que volver a cerrarlo: nadie más va a hacerlo y un descriptor por
-      // sesión terminada se acumula.
-      //
-      // Y va en un `finally`, no después de `escribir`: `escribir` hace `abrir()`
-      // **y luego** `writeSync()`, así que un disco lleno (ENOSPC) o un EIO falla
-      // con el archivo YA reabierto. Con el cierre dentro del `try`, esa
-      // excepción se lo saltaba y dejaba el descriptor colgando para siempre.
-      const estabaAbierto = s.autosave.abierto
-      try {
-        // §0.3 — al disco ANTES de pintar y antes de contar: si la app muere en
-        // el repintado, la frase ya está a salvo.
-        s.autosave.escribir(frase)
-        // Se cuenta lo que ESTÁ en disco, no lo que se intentó escribir: este
-        // número acaba en `lineCount` de la base de datos.
-        s.frases++
-      } catch (err) {
-        // La traducción salió bien y lo que falló fue guardarla, que es justo lo
-        // que §0.3 promete. Se dice con su nombre y con la clase de fallo grave.
-        console.error('[autoguardado] no se pudo escribir la frase:', err.message)
-        aRenderer('app:estado', { clase: 'mal', texto: `no se pudo guardar la frase: ${err.message}` })
-      } finally {
-        if (!estabaAbierto) s.autosave.cerrar()
-      }
-      aRenderer('app:frase', frase)
-
-      // Y después de pintar, nunca antes: el triaje y el LLM no pueden
-      // retrasar la burbuja, que es lo que el usuario está leyendo.
-      //
-      // Si la reunión ya terminó, aquí se para. Una respuesta sugerida que nadie
-      // va a leer cuesta una llamada al LLM, y el panel donde se pintaría ya no
-      // está en pantalla. La frase, en cambio, sí se ha guardado.
-      if (s.cerrada) return
-      // `considerar` no se espera a propósito —dentro decide si merece la
-      // llamada y emite por su cuenta—, así que aquí solo se recoge el fallo.
-      s.motor?.considerar(texto, frase.es)
-        .catch(e => console.error('[preguntas]', e.message))
-      s.resumen?.registrar(texto, frase.es)
-    })()
-      // Última red: si algo de arriba lanza fuera de sus dos `try`, la promesa
-      // no puede quedar rechazada sin dueño. Node tumba el proceso por una
-      // rechazada sin manejar, y eso sería perder la reunión entera por un
-      // repintado. No se pinta nada: no es un fallo que el usuario pueda
-      // interpretar, y desde luego no es «no se pudo traducir».
+  transcriptor.on('frase', turno => {
+    // Cuándo LLEGÓ, no cuándo le toque: los turnos se procesan en serie (ver
+    // `s.cadena`), y la espera detrás del anterior también la sufre el usuario.
+    const llegada = Date.now()
+    // `s.cadena` es la fila: cada turno espera al anterior. `catch` aquí y no
+    // fuera porque una fila rota no vuelve a andar, y con ella se quedaría sin
+    // procesar el resto de la reunión. No se pinta nada: no es un fallo que el
+    // usuario pueda interpretar, y desde luego no es «no se pudo traducir»
+    // —eso ya lo dice `traducirOAvisar` cuando el que falla es Marian—.
+    const tarea = s.cadena = s.cadena
+      .then(() => procesarTurno(s, turno, llegada))
       .catch(err => console.error('[frase] fallo inesperado:', err.message))
 
     // Apuntarla ANTES de cualquier microtarea: `pararSesion` sólo puede esperar
@@ -489,6 +759,11 @@ async function pararSesion (motivo = 'el usuario paró', graciaMs = GRACIA_EN_VU
       console.error(`[sesión] ${enVuelo} frase(s) seguían traduciéndose al cerrar; `
         + 'se guardarán en el archivo de la sesión cuando terminen')
     }
+    // La oración a medias que quedara en pantalla se cierra ANTES de cerrar el
+    // archivo: su traducción ya está hecha y pagada, y es la última frase que
+    // dijo el interlocutor. Va después de la gracia para que la cola sea ya la
+    // definitiva, y antes del `lineCount` para que entre en la cuenta.
+    cerrarCola(s, 'parada')
     s.autosave.cerrar()
     db.endSession(s.idSesion, {
       durationSeconds: Math.round((Date.now() - s.inicio) / 1000),
