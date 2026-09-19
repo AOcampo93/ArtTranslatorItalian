@@ -177,14 +177,88 @@ describe('la frase que se guarda y se pinta', () => {
 
   test('el .jsonl guarda las DOS piernas: nunca más un msTranscribir en null', async () => {
     const m = montar({ traducir: async () => ({ es: 'Tenía fiebre a 39.', ms: 7 }) })
-    m.transcriptor.emit('frase', { texto: 'Avevo la febbre a 39.', msTranscribir: 412 })
+    m.transcriptor.emit('frase', {
+      texto: 'Avevo la febbre a 39.', msTranscribir: 412,
+      msTurno: 3100, acabaEnPuntuacion: true,
+    })
     await hasta(() => m.guardadas().length === 1, 'que la frase llegue al disco')
 
     const e = m.guardadas()[0]
     assert.strictEqual(e.msTranscribir, 412, 'la pierna de oír se guarda tal cual')
     assert.strictEqual(typeof e.msTraducir, 'number')
     assert.strictEqual(e.forzado, false, 'hay que poder distinguir las frases troceadas')
-    assert.ok(Object.values(e).every(v => v !== null), `hay un null en ${JSON.stringify(e)}`)
+    // Ningún campo de tiempo puede quedarse en null, que es como llegaron las
+    // 21 frases de la primera prueba. Las dos excepciones son los campos que
+    // sólo existen si NOSOTROS cortamos el turno, y que **tienen que** ser
+    // null cuando nadie lo cortó: en `msHolgura` un cero se leería como «el
+    // servidor obedeció al instante», y en `motivoCorte` cualquier etiqueta
+    // sería un corte que no ocurrió. Las dos son medidas, no ausencias.
+    const sinLosDelCorte = { ...e, msHolgura: 0, motivoCorte: 'silencio' }
+    assert.ok(Object.values(sinLosDelCorte).every(v => v !== null),
+      `hay un null en ${JSON.stringify(e)}`)
+    assert.strictEqual(e.msHolgura, null, 'nadie cortó este turno')
+    assert.strictEqual(e.motivoCorte, null, 'nadie cortó este turno')
+    m.cerrar()
+  })
+
+  test('el .jsonl guarda las cuatro medidas del troceo (F031)', async () => {
+    // La segunda prueba en Windows se contó a mano sobre el archivo: cuántos
+    // trozos acababan a media oración, y cuánto tardaba el corte en aplicarse.
+    // Si estos cuatro campos no llegan al `.jsonl`, la próxima se cuenta igual.
+    const m = montar({ traducir: async () => ({ es: 'Y entonces', ms: 7 }) })
+    m.transcriptor.emit('frase', {
+      texto: 'E quindi', msTranscribir: 300,
+      msTurno: 8420, msHolgura: 260, acabaEnPuntuacion: false, motivoCorte: 'tope-duro',
+    })
+    await hasta(() => m.guardadas().length === 1, 'que la frase llegue al disco')
+
+    const e = m.guardadas()[0]
+    assert.strictEqual(e.msTurno, 8420, 'sin esto el exceso del turno no se puede medir')
+    assert.strictEqual(e.msHolgura, 260)
+    assert.strictEqual(e.acabaEnPuntuacion, false, 'ésta es la que hay que contar')
+    // El criterio «0 palabras partidas en trozos forzados CON silencio
+    // detectado» se lee de aquí: `msTurno` no distingue un corte en la pausa
+    // de uno encima de la voz, porque los dos caen casi en el mismo instante.
+    assert.strictEqual(e.motivoCorte, 'tope-duro',
+      'sin el motivo, un corte encima de la voz se cuenta igual que uno limpio')
+    m.cerrar()
+  })
+
+  test('una frase de una versión sin los campos nuevos no inventa medidas', async () => {
+    // El transcriptor de ejemplo y cualquier motor que no los emita —hoy
+    // `pipeline.js` y `geminiLive.js`—: mejor un null declarado que un cero
+    // que se contaría como medida.
+    //
+    // `acabaEnPuntuacion` es el que más muerde de los tres, porque su cero es
+    // `false` y `false` significa «acabó a media oración»: el campo ausente se
+    // leería en el archivo como el peor de los dos valores posibles, y de ese
+    // archivo sale el «% de trozos a media frase» de la prueba en Windows.
+    const m = montar({ traducir: async () => ({ es: 'Llegué.', ms: 7 }) })
+    m.transcriptor.emit('frase', { texto: 'Sono arrivata.', msTranscribir: 300 })
+    await hasta(() => m.guardadas().length === 1, 'que la frase llegue al disco')
+
+    const e = m.guardadas()[0]
+    assert.strictEqual(e.msTurno, null)
+    assert.strictEqual(e.msHolgura, null)
+    assert.strictEqual(e.acabaEnPuntuacion, null,
+      'sin el campo no se sabe, y «no se sabe» no es «a media oración»')
+    assert.strictEqual(e.motivoCorte, null,
+      'un motivo inventado contaría un corte que nunca se pidió')
+    m.cerrar()
+  })
+
+  test('un false medido SÍ se guarda como false, no como ausencia', async () => {
+    // La contraprueba del anterior: honrar la ausencia no puede borrar la
+    // medida. `null` y `false` tienen que significar cosas distintas en el
+    // archivo, porque el renderer cuenta con `=== false` y el recuento de la
+    // prueba en Windows se hará igual sobre el `.jsonl`.
+    const m = montar({ traducir: async () => ({ es: 'Y entonces', ms: 7 }) })
+    m.transcriptor.emit('frase', {
+      texto: 'E quindi', msTranscribir: 300, acabaEnPuntuacion: false,
+    })
+    await hasta(() => m.guardadas().length === 1, 'que la frase llegue al disco')
+
+    assert.strictEqual(m.guardadas()[0].acabaEnPuntuacion, false)
     m.cerrar()
   })
 

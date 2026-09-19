@@ -515,47 +515,218 @@ ese equipo, `ms = 56 + 6,34·caracteres`, R² 0,994 `[medido]`—, así que los 
 peor caso **no son culpa del modelo, son culpa del bloque de 892 caracteres**. Un arreglo
 resuelve los dos.
 
-Se corta el turno desde el cliente con `{"type":"ForceEndpoint"}` a los **8 s**
-(configurable), contados desde el primer parcial y sólo si el texto sigue creciendo —si
-lleva 700 ms sin crecer, quien va con retraso es el decodificador y no el hablante, porque
-el texto definitivo llega 201-257 ms después de que alguien calle `[medido]`.
+#### Primer intento: cortar por reloj. Funciona a medias, y se sabe por qué
 
-Simulado sobre esa misma sesión, traduciendo de verdad los trozos resultantes
-`[simulado]`:
+La primera versión cortaba el turno desde el cliente con `{"type":"ForceEndpoint"}` a los
+**8 s** contados desde el primer parcial, y sólo si el texto seguía creciendo: si llevaba
+700 ms sin crecer se daba por cerrándose solo.
 
-Las dos columnas van con **el reloj del HP**, que es donde se midió el antes. La primera
-versión de esta tabla cronometraba el «después» en el Mac de desarrollo y daba 9,1 s: eso
-comparaba peras con manzanas justo en la fila que da el titular, y se equivocaba a favor
-del cambio.
+Segunda prueba real en Windows, `sesion-2.jsonl`, 20 frases, contadas sobre el archivo
+`[medido]`:
 
-| | antes | con tope de 8 s |
+| | |
+|---|---|
+| frases troceadas por nosotros | 13 de 20 |
+| **hueco máximo entre frases** | **10,6 s**, con un tope de 8 s |
+| hueco mediano | 9,1 s |
+| trozos forzados que **no** acaban en puntuación | **10 de 13** |
+| cortes a media palabra en el archivo | 0 de 13 |
+
+Tres lecturas, y ninguna es «el tope está mal elegido»:
+
+1. **El exceso del turno, que la simulación no modeló.** Entre el tope (8 s) y el hueco
+   que ve el usuario (10,577 s) hay **2,6 s** `[medido]`: el primer parcial, el cierre del
+   turno y la traducción del trozo. Con 8 s de tope se pasa el techo de 10 s que
+   justificaba precisamente ese tope.
+
+   **Vocabulario, porque estas dos cosas se confundieron y costó una ronda de revisión:**
+   *holgura* es `msHolgura` y nada más —lo que tarda el servidor en obedecer un
+   `ForceEndpoint`—; *exceso del turno* es todo lo que va del tope a la burbuja. La
+   holgura es una pieza del exceso, no su total.
+
+   Recontado sobre el propio archivo, ese peor caso de 2,577 s se reparte en **1,260 s**
+   de cadena ya registrada (`msTranscribir` + `msTraducir`) y **1,317 s** de lo que no se
+   registraba: arrancar el turno hasta el primer parcial, más obedecer el corte
+   `[medido, sesion-2]`. De ahí salen `msTurno` y `msHolgura` de la capa 3: para no
+   volver a repartirlo por diferencia.
+2. **El disparo no cae en una pausa.** «700 ms sin que crezca el parcial» **no es
+   silencio**: los parciales llegan a ráfagas, así que el texto puede estar quieto con el
+   hablante hablando. Se estaba usando el reloj del decodificador como si fuera el del
+   hablante, y por eso 10 de 13 trozos acaban a media oración.
+3. **Media palabra es un riesgo real aunque en esa sesión no saliera.** Los 13 cortes
+   cayeron entre palabras `[medido]`, pero el servidor cierra el turno con **todo el
+   audio recibido**, no con el texto del último parcial: un `ForceEndpoint` enviado
+   mientras suena una palabra no tiene ninguna razón para respetarla. Trece cortes sin
+   que ocurra no es una garantía, es una muestra pequeña `[medido, n=13]`.
+
+#### Cómo se corta desde F031: que corte el hablante, no el reloj
+
+Tres capas, de la que menos daño hace a la que más.
+
+**1. Que el turno lo cierre el servidor, en la pausa de verdad.** La URL de conexión
+acepta parámetros de fin de turno y hasta ahora no se mandaba **ninguno** `[verificado en
+la referencia de la API de streaming, 19-09-2026]`:
+
+| parámetro | por defecto | se manda | por qué |
+|---|---|---|---|
+| `max_turn_silence` | 1.536 ms en U-3.5 Pro | **700 ms** `[por medir]` | una pausa normal de conversación cierra ya el turno; con 1.536 ms hay que callar siglo y medio de discurso para que el servidor se dé por enterado |
+| `end_of_turn_confidence_threshold` | 0,4 | **0,25** `[por medir]` | el servidor se conforma con menos certeza para dar el turno por acabado, o sea que cierra antes en las pausas que no son limpias |
+
+El objetivo de esta capa era que **`ForceEndpoint` casi no hiciera falta**: un corte que
+hace el servidor cae donde el hablante paró, y uno que hacemos nosotros cae donde marca
+el reloj.
+
+**Medido el 19-09-2026 contra el servicio real, esta capa hoy no hace nada** (ver la
+tabla de abajo): con 1.536 ms por defecto, con 700 ms y con 300 ms de `max_turn_silence`
+el servidor cerró **exactamente los mismos turnos**, sobre un audio con veinte pausas de
+700–1.100 ms. Los parámetros se mandan porque la referencia de la API los documenta con
+esos nombres `[verificado, 19-09-2026]` y no cuestan nada, pero **no se puede contar con
+ellos**: quien acota el hueco es la capa 2. Por qué el servidor los ignora —si hace falta
+`min_turn_silence`, si no aplican a `universal-3-5-pro`, o si se descartan en la URL— está
+`[por medir]`.
+
+**2. `ForceEndpoint` pasa a ser red de seguridad, no mecanismo.** Dispara sólo si se
+cumplen las dos condiciones:
+
+- el turno pasó del tope (**6 s**, configurable), **y**
+- los últimos **≥ 300 ms** del audio que **nosotros** enviamos están en silencio —energía
+  RMS por frame de 100 ms, calculada en el punto donde ya se convierte a PCM16, así que
+  no cuesta nada y es la única señal de silencio que tenemos de nuestro lado—.
+
+Con un **tope duro a los 8 s**: pasado eso se corta aunque siga habiendo voz. Sin él, un
+monólogo sin una sola pausa volvería al caso de los 65,6 s, y una palabra partida es
+mejor que un minuto de pantalla en blanco. Es el mismo juicio de producto de antes:
+10 s de pantalla vacía como techo `[por medir]`.
+
+**Por qué 6 s y 8 s, y no los 8 s y 9 s con los que se midió.** La primera elección salió
+del codo de la curva de cortes —8 s era donde el rendimiento marginal caía de 3,8 cortes
+por segundo (6→8) a 1,4 (8→10) `[simulado]`— y esa cuenta sigue siendo cierta. Lo que la
+deshace es la tabla de abajo: con 8 s y 9 s, **15 de los 17 cortes salieron por tope duro
+y sólo 2 por silencio** `[simulado]`. Entre los dos topes cabía **1 s de ventana**, así
+que la pausa casi nunca llegaba a tiempo y la capa 2 acababa comportándose como la capa 3
+—cortar por reloj—, que es justo lo que esta tarea existe para no hacer. Con 6 s y 8 s la
+ventana es de **2 s**: el doble de sitio para que el corte caiga en una pausa. Cuánto sube
+de verdad la proporción de cortes por silencio está `[por medir]`; la sonda contra el
+servicio **no se repitió** con los topes nuevos, para no gastar sesiones. El daño conocido
+de bajar el tope —más trozos que empiezan a media oración— es lo que trata F037, que va en
+la misma entrega.
+
+**El tope duro acota el PRIMER corte, no los reintentos**, y eso hay que leerlo aquí
+porque cambia el peor caso. El freno que evita mandar un `ForceEndpoint` diez veces por
+segundo cuenta **una ventana de tope** desde el último intento, no una de tope duro: si
+el servidor ignora el primer corte, el siguiente no se pide hasta 6 s después, o sea a
+los 14 s de turno. Está fijado por la prueba `el tope duro acota el PRIMER corte, no el
+reintento`; contra el servicio real el servidor obedeció los 17 cortes que se le pidieron
+`[simulado]`, así que ese peor caso no se ha visto todavía.
+
+El umbral de silencio es **RMS < 0,01** sobre muestras en `[-1,1]` `[por medir]`: el
+audio de sistema de una videollamada no baja a cero digital ni cuando nadie habla, así
+que el umbral no puede ser 0; cuánto vale el suelo de ruido real de los equipos del
+cliente no está medido.
+
+**3. Cada frase trae con qué medir el próximo intento.** Al `.jsonl` se añaden cuatro
+campos por frase:
+
+- `msTurno` — lo que duró el turno, del primer parcial al `end_of_turn`. Es la medida
+  directa del exceso del turno que faltaba.
+- `msHolgura` — del `ForceEndpoint` enviado al `end_of_turn` recibido; `null` si el turno
+  no se forzó. Dice cuánto tarda el servidor en obedecer, que es una de las piezas de
+  esos 2,6 s.
+- `acabaEnPuntuacion` — si el texto del trozo termina en `.`, `?`, `!` o `…`.
+- `motivoCorte` — `'silencio'` si el corte cayó en una pausa del audio que enviábamos,
+  `'tope-duro'` si cayó encima de la voz; `null` si nadie forzó el turno. Es el campo que
+  permite leer del archivo el criterio «0 palabras partidas en trozos forzados **con
+  silencio detectado**»: `msTurno` no los distingue —un corte por silencio a 7,9 s y uno
+  por tope duro a 8,0 s dan turnos casi iguales—. Se guarda el motivo del **último**
+  `ForceEndpoint` y no el del primero: si el primero cayó en una pausa y el servidor lo
+  ignoró, la palabra la parte el segundo, y anotar «silencio» contaría esa palabra
+  partida como corte limpio.
+
+Y la barra al detener dice **«N a media frase»** junto a los troceos. Sin esto la próxima
+prueba se vuelve a contar a mano sobre el archivo, que es como se contó ésta.
+
+Ese N es **sobre todas las frases de la reunión**, no sobre las troceadas: en `sesion-2`
+habría dicho «11 a media frase» de 20 `[medido]`, mientras que el 77 % que anda por la
+tarea es 10 de 13 **forzadas**. Son dos denominadores, y hay que decirlo porque durante la
+prueba en Windows se van a leer los dos números seguidos. El cruce fino se hace después
+sobre el `.jsonl`, que lleva `forzado` y `acabaEnPuntuacion` en cada frase.
+
+#### Medido contra el servicio, con voz sintética `[simulado]`
+
+Cuatro sesiones desde el Mac (`.arnes/medicion/medir_troceo.js`), el mismo monólogo de
+`say -v Alice` de 225 s —con veinte pausas de 700 a 1.100 ms, ninguna de 1.536 ms—, y el
+mismo audio para los tres primeros brazos:
+
+| | turnos | turno medio | turno máx | hueco máx | acaba en puntuación | forzados | palabras partidas |
+|---|---|---|---|---|---|---|---|
+| **a** · sin parámetros, sin red | 9 | 23,9 s | 49,6 s | **40,8 s** | 100% | 0 | 0 |
+| **b** · con los dos parámetros | 9 | 21,3 s | 49,3 s | **40,8 s** | 100% | 0 | 0 |
+| **c** · parámetros + red de seguridad (topes 8 s / 9 s) | 27 | 7,9 s | **9,5 s** | **10,4 s** | 55,6% | 17 | 1 |
+| **d** · sonda, `max_turn_silence` 300 ms, 75 s de audio | 3 | 26,6 s | 49,5 s | 23,2 s | 66,7% | 0 | 0 |
+
+Tres conclusiones, y la primera no es la que se esperaba:
+
+1. **Los parámetros de servidor no cambiaron nada.** a y b dieron los mismos nueve turnos
+   con los mismos textos, y la sonda con 300 ms tampoco movió nada. Es el brazo que
+   justificaba la capa 1, y sale en contra.
+2. **La red de seguridad sí acota el hueco:** el turno máximo pasa de 49,6 s a 9,5 s y el
+   hueco máximo de 40,8 s a 10,4 s, sin ninguna traducción por medio.
+3. **Y se paga en cortes:** 17 de 27 turnos cortados, el 44% acaba a media oración y
+   **una palabra partida** («perché c'è» salió como «perché ciò» justo en un corte). Es
+   el precio que ya se conocía, ahora con el mecanismo nuevo y contra el servicio.
+
+**El reparto de los 17 cortes es el dato que cambió los topes:** `{tope-duro: 15,
+silencio: 2}` `[simulado]`. La red de seguridad estaba cortando por reloj casi siempre,
+porque entre el tope (8 s) y el tope duro (9 s) sólo había 1 s para que llegara la pausa.
+De ahí los valores nuevos, 6 s y 8 s, y de ahí también el campo `motivoCorte`: sin él ese
+reparto sólo se puede contar con el instrumento del arnés, nunca desde el `.jsonl` de una
+reunión de verdad.
+
+**Los cuatro brazos se midieron con los topes viejos (8 s / 9 s).** No se repitió la
+medición al bajarlos, para no gastar sesiones contra el servicio; lo que la tabla fija es
+la **mecánica** —que los parámetros de servidor no mueven nada y que la red de seguridad
+sí acota el hueco—, no las cifras que saldrán con 6 s y 8 s. Esas están `[por medir]`.
+
+`msHolgura` —lo que tarda el servidor en obedecer un `ForceEndpoint`— queda medida por
+primera vez: **328 ms de media, 506 ms como máximo** `[simulado]`. Es **una** de las
+piezas del exceso del turno de `sesion-2`, no su total.
+
+#### El hueco que va a salir en Windows con estos valores
+
+Dos cifras, según por dónde se corte el turno, y las mismas que están en el comentario de
+`TOPE_DURO_TURNO_MS`. El **exceso del turno no escala con el tope** —es arranque, más
+obediencia del servidor, más cadena de traducción—, así que se le suma al tope que toque:
+
+| corte | tope que manda | hueco esperado |
 |---|---|---|
-| hueco máximo | **65,6 s** `[medido]` | **9,5 s** `[simulado, reloj del HP]` |
-| espera hasta la 1ª burbuja | 51,5 s | 9,9 s |
-| traducir p95 | 3.628 ms `[medido]` | ~962 ms |
-| traducir p50 | 497 ms `[medido]` | ~614 ms — **empeora** |
+| **por silencio**, en la pausa | 6-7 s | **≈ 9 s** `[estimado a partir de lo medido]` |
+| **por tope duro**, encima de la voz | 8 s | **≈ 10,6 s** `[estimado a partir de lo medido]` |
 
-**El precio, y hay que conocerlo:** 14 de 38 trozos acaban a media frase, y en 5 de ellos
-Marian cierra la frase por su cuenta —dos se la inventan con todas las letras—. Se cambian
-117 ms de mediana por 2,7 s de p95, que es el cambio que se quiere, pero no es gratis.
+Los 2,6 s que se suman son los que en `sesion-2` separaron el tope de lo que el usuario
+llegó a ver `[medido]`. Sumando las piezas medidas por separado (0,9 s hasta el primer
+parcial `[medido]`, 0,33 s de obediencia del servidor `[simulado]`, ~0,5 s de traducir un
+trozo de 6 s con la regresión del HP `[estimado]`) salen ≈ 1,7 s de exceso, o sea un hueco
+menor; se adopta la cifra alta, que es la que viene de una sesión real. Y si el servidor
+ignorara el primer corte, el segundo no llega hasta los 14 s de turno: ≈ 16,6 s
+`[estimado a partir de lo medido]`.
 
-Por qué 8 s y no otro: por debajo, a 6 s, se dobla el daño (22 cortes en vez de 14) para
-ganar 1,9 s; por encima, a 12 s, se ahorran 5 cortes y cuesta 4,1 s de pantalla en blanco.
-Que **10 s sea el techo tolerable** de pantalla vacía es un juicio de producto, no una
-medida `[por medir]`; si el cliente dice otra cosa, el tope es un parámetro.
+**Conclusión operativa, y hay que leerla entera antes de la prueba en Windows.** Los topes
+bajaron de 8/9 s a 6/8 s, así que el hueco esperado baja de ≈ 11,6 s a ≈ 10,6 s en el peor
+camino y a ≈ 9 s cuando el corte cae en una pausa. **El criterio «el hueco máximo real baja
+de 10 s» sigue sin estar garantizado**: se cumple si la mayoría de los cortes caen por
+silencio —que es lo que los 2 s de ventana buscan— y no se cumple en los que lleguen al
+tope duro. Cuál de los dos manda en habla real está `[por medir]`, y el `.jsonl` de la
+prueba ya trae `motivoCorte` para poder contarlo en vez de discutirlo. Bajar más los topes
+no es gratis: multiplica los trozos a media oración justo antes de que F037 sepa tratarlos.
+Los dos topes son configurables por sesión (`topeTurnoMs`, `topeDuroTurnoMs`).
 
-Y con el reloj correcto ese argumento queda **al filo**: 9,9 s contra un techo de 10 s es
-un margen de **0,1 s, no de 0,6**. O sea que 8 s es el tope más alto que aún cabe, no una
-elección holgada — y si el hueco real en Windows sale peor que lo simulado, hay que bajarlo.
+Todo esto es `[simulado]`: un TTS hace pausas regulares y no se interrumpe, se repite ni
+se solapa con nadie. Sirve para decir qué hace el servidor con un parámetro y qué acota
+la red de seguridad; no sirve para el porcentaje de frases a media oración de una reunión
+de verdad.
 
-El vídeo de la prueba es el peor caso posible: una narración sin pausas. Una reunión
-dialogada, con los turnos de 4,5 s que se midieron, casi no se trocea — y la marca
-`forzado` que ahora lleva cada frase del `.jsonl` está puesta para contestarlo con datos
-en la próxima prueba en vez de suponerlo.
-
-**Sin verificar:** que el servidor acepte `ForceEndpoint` y que el turno siguiente empiece
-limpio con las palabras que quedaban. Está implementado según su protocolo y probado sin
-red, pero no ejercitado contra el servicio `[por verificar]`.
+**Lo que queda por verificar contra el servicio:** el hueco máximo y el porcentaje a
+media frase con **habla real** en Windows, y por qué el servidor ignora `max_turn_silence`.
 
 ### El coste
 

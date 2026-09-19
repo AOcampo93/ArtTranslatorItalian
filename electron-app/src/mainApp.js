@@ -316,7 +316,9 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   // Se arregla por dos lados a la vez: la frase es de `s` —la sesión capturada
   // arriba, que no se vuelve null— y su promesa se apunta en `s.enVuelo`, para
   // que `pararSesion` pueda esperarla un momento en vez de perderla.
-  transcriptor.on('frase', ({ texto, msTranscribir, forzado }) => {
+  transcriptor.on('frase', ({
+    texto, msTranscribir, forzado, msTurno, msHolgura, acabaEnPuntuacion, motivoCorte,
+  }) => {
     const tarea = (async () => {
       const t0 = Date.now()
       let frase = null
@@ -334,6 +336,34 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
           // esta frase puede estar partida. Queda en el archivo para poder
           // contar en la próxima reunión real cuántas se parten de verdad.
           forzado: Boolean(forzado),
+          // Las cuatro medidas de F031. La segunda prueba en Windows hubo que
+          // contarla a mano sobre el `.jsonl` —y la cifra que más importaba,
+          // los 2,6 s de exceso del turno, sólo se pudo estimar restando
+          // marcas de tiempo—. Con esto la próxima se lee del archivo:
+          //
+          //  · `msTurno`: lo que duró el turno de verdad.
+          //  · `msHolgura`: del corte pedido al turno cerrado; `null` si no se
+          //    forzó, porque un cero ahí sería «obedeció al instante».
+          //  · `acabaEnPuntuacion`: el «a media frase», ya contado.
+          //  · `motivoCorte`: `'silencio'` o `'tope-duro'`; `null` si no se
+          //    forzó. Es lo que separa «se cortó en una pausa» de «se cortó
+          //    encima de la voz», y sin él el criterio «0 palabras partidas en
+          //    trozos forzados con silencio detectado» vuelve a no poderse
+          //    contar sobre el archivo.
+          //
+          // Los tres van con `?? null` por el mismo motivo, y el tercero es el
+          // que más muerde: `Boolean(undefined)` es `false`, o sea «esta frase
+          // acabó a media oración», que es una medida que nadie ha tomado. El
+          // `.jsonl` es de donde va a salir el «% de trozos a media frase» de
+          // la prueba en Windows, y un motor que no calcule el campo —hoy
+          // ninguno de los enchufados, pero `pipeline.js` y `geminiLive.js`
+          // emiten `frase` sin él— dejaría ese porcentaje en 100% sin que
+          // nadie lo note. El renderer ya cuenta con `=== false` por esto
+          // mismo; si aquí se rellena el hueco, esa defensa no sirve de nada.
+          msTurno: msTurno ?? null,
+          msHolgura: msHolgura ?? null,
+          acabaEnPuntuacion: acabaEnPuntuacion ?? null,
+          motivoCorte: motivoCorte ?? null,
         }
       } catch (err) {
         // Este `catch` abraza SOLO la traducción, que es el único fallo que este

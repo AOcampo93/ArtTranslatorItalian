@@ -50,11 +50,28 @@
  * entre frases fue de 4,8 s de mediana, pero **dos veces llegó a 33,6 s y a
  * 65,6 s**, y después cayeron 436 y 892 caracteres de golpe.  [medido]
  *
- * Por eso este módulo vigila el turno y lo corta él con `ForceEndpoint`
- * (`_quizaForzarFin`). El efecto de arrastre es igual de importante: el tiempo
- * de Marian crece con la longitud —sobre esas mismas 21 frases, 6,34 ms por
- * carácter con R² 0,994 [medido]—, así que trocear el turno también mata la
- * cola de latencia de la traducción. Un arreglo, dos problemas.
+ * El efecto de arrastre es igual de importante: el tiempo de Marian crece con
+ * la longitud —sobre esas mismas 21 frases, 6,34 ms por carácter con R² 0,994
+ * [medido]—, así que trocear el turno también mata la cola de latencia de la
+ * traducción. Un arreglo, dos problemas.
+ *
+ * Desde F031 el troceo va en tres capas, y el orden importa porque cada una
+ * hace más daño que la anterior:
+ *
+ *  1. **El servidor cierra en la pausa.** Se le mandan `max_turn_silence` y
+ *     `end_of_turn_confidence_threshold` al conectar (`construirUrl`). Un
+ *     corte suyo caería donde el hablante paró. **Hoy no corta nada:** medido
+ *     el 19-09-2026 contra el servicio real, con 1.536 ms, con 700 ms y con
+ *     300 ms el servidor cerró exactamente los mismos turnos [simulado]. Se
+ *     mandan porque la referencia de la API los documenta y no cuestan nada,
+ *     pero quien acota el hueco es la capa 2. Ver `MAX_SILENCIO_TURNO_MS`.
+ *  2. **`ForceEndpoint` como red de seguridad** (`_quizaForzarFin`): sólo si
+ *     el turno se pasó del tope Y el audio que estamos enviando lleva ≥ 300 ms
+ *     en silencio. La segunda prueba real enseñó por qué hace falta la segunda
+ *     condición: cortando por reloj, 10 de 13 trozos acabaron a media oración
+ *     [medido, sesion-2.jsonl].
+ *  3. **Tope duro**, que corta aunque haya voz. El caso del monólogo sin
+ *     pausas no lo resuelve nada más.
  */
 
 'use strict'
@@ -92,58 +109,163 @@ const ESPERAS_MS = [1500, 6000, 20000, 40000]
 const MAX_CONEXIONES_MIN = 4
 
 /**
- * Tope de duración de un turno antes de trocearlo con `ForceEndpoint`.
+ * Silencio que se le pide al servidor para que cierre el turno **él**.
  *
- * De dónde salen los 8 s. Todo lo de abajo está simulado sobre la sesión real
- * de 21 frases, traduciendo de verdad con Marian los trozos que saldrían:
+ * Es la primera de las tres capas del troceo (F031): un corte que hace el
+ * servidor cae donde el hablante paró; uno que hacemos nosotros cae donde
+ * marca el reloj. El valor por defecto del servicio son 1.536 ms en U-3.5 Pro
+ * [verificado en la referencia de la API de streaming, 19-09-2026], y con eso
+ * hay que callarse siglo y medio para que el turno se dé por acabado: en la
+ * segunda prueba real, 13 de 20 frases las tuvimos que cortar nosotros
+ * [medido, sesion-2.jsonl].
  *
- *  · **No muerde a los turnos normales.** Los turnos de esa sesión duraron
- *    4,5 s de mediana, y ninguno de los que no era monólogo pasó de 10,6 s
- *    [medido]. Con 8 s se trocearían 6 de los 21: los tres monólogos (47,7 s,
- *    30,7 s y 60,4 s) y tres turnos de 9-10,6 s.
- *  · **Es el tope más alto que aún cabe por debajo de 10 s, y cabe por 0,1 s.**
- *    Lo que el usuario espera por una frase es el tope MÁS el primer parcial
- *    (881–980 ms [medido]), MÁS el cierre del turno (201–257 ms [medido]), MÁS
- *    la traducción del trozo. Cronometrado con el Marian del propio HP —y no
- *    con el de la máquina de desarrollo, que da medio segundo de regalo—:
- *    **9,5 s** de hueco máximo frente a los 65,6 s medidos, y **9,9 s** hasta
- *    la primera burbuja frente a 51,5 s [simulado]. Con 10 s ya no cabe (11,6 s
- *    y 12,1 s); con 6 s sobra sitio (7,4 s y 7,8 s) pero se parte el doble de
- *    frases. No es una elección holgada: es la última que entra.
+ * Los 700 ms son una pausa de conversación normal.
+ *
+ * **Ojo, y está medido:** contra el servicio real, el 19-09-2026, este
+ * parámetro no cambió nada. Con 1.536 ms, con 700 ms y con 300 ms salieron los
+ * mismos turnos sobre un audio con veinte pausas de 700-1.100 ms [simulado,
+ * voz sintética; ver PLAN.md §7bis]. Se manda porque la referencia de la API
+ * lo documenta así y no cuesta nada, pero **quien acota el hueco es
+ * `_quizaForzarFin()`**, no esto. Por qué lo ignora está [por medir].
+ */
+const MAX_SILENCIO_TURNO_MS = 700
+
+/**
+ * Cuánta certeza le basta al servidor para dar el turno por acabado.
+ *
+ * Por defecto 0,4 [verificado en la referencia de la API de streaming,
+ * 19-09-2026]. Se baja para que cierre también en las pausas que no son
+ * limpias —que son casi todas las de una reunión—, porque cada turno que
+ * cierra el servidor es un `ForceEndpoint` que no hace falta.
+ *
+ * Con la misma advertencia que el de arriba: bajarlo a 0,25 —y en la sonda a
+ * 0,1— no cambió ningún turno contra el servicio [simulado, 19-09-2026].
+ */
+const UMBRAL_CONFIANZA_FIN_TURNO = 0.25
+
+/**
+ * Tope a partir del cual se BUSCA una pausa para trocear el turno.
+ *
+ * No es el instante del corte: es el instante en que la red de seguridad
+ * empieza a mirar si el audio que enviamos está en silencio. El corte cae en
+ * la primera pausa a partir de aquí, o de golpe en `TOPE_DURO_TURNO_MS`.
+ *
+ * **Por qué 6 s, y no los 8 s que tuvo hasta ahora.** Lo medido no cambia de
+ * valor; cambia lo que se lee en ello:
+ *
+ *  · **No muerde a los turnos normales.** Los turnos de la primera sesión real
+ *    duraron 4,5 s de mediana, y ninguno de los que no era monólogo pasó de
+ *    10,6 s [medido].
+ *  · **Lo que el usuario espera por una frase** es el tope MÁS el primer
+ *    parcial (881–980 ms [medido]), MÁS el cierre del turno (201–257 ms
+ *    [medido]), MÁS la traducción del trozo. Cronometrado con el Marian del
+ *    propio HP: con 8 s de tope salían 9,5 s de hueco máximo frente a los
+ *    65,6 s medidos; con 6 s, 7,4 s [simulado].
  *  · **Los trozos le caen a Marian del tamaño que sabe llevar.** A la
- *    velocidad medida en ese audio (11,9 caracteres/s [medido]), 8 s son 88
- *    caracteres de mediana y 156 como mucho [simulado]; el p95 de traducción
- *    pasaría de los 3.628 ms medidos a unos 962 ms, estimados con la regresión
- *    del propio equipo (ms = 56 + 6,34·caracteres, R² 0,994 [medido]).
+ *    velocidad medida en ese audio (11,9 caracteres/s [medido]), 6 s son unos
+ *    71 caracteres, o sea ~510 ms de traducción con la regresión del propio
+ *    equipo (ms = 56 + 6,34·caracteres, R² 0,994 [medido])  [estimado].
  *
  * Y el precio, que también está medido: con 8 s, 14 de los 38 trozos acabarían
- * en mitad de una frase, y en 5 de ellos Marian cerró la frase por su cuenta
- * inventándose el final [simulado]. Bajar el tope a 6 s dobla ese daño (22
- * cortes) para ganar 2,1 s de hueco; subirlo a 12 s lo reduce a 9 cortes y
- * cuesta 4,3 s. El rendimiento marginal cae de 3,8 cortes por segundo (6→8) a
- * 1,4 (8→10): los 8 s son el codo de esa curva.
+ * en mitad de una frase; con 6 s son 22 [simulado]. Contando sólo cortes, 8 s
+ * era el codo de la curva —el rendimiento marginal cae de 3,8 cortes por
+ * segundo (6→8) a 1,4 (8→10)—, y por eso el tope estuvo ahí hasta esta ronda.
+ *
+ * **Lo que deshizo ese argumento** es la medición del 19-09-2026 contra el
+ * servicio real: con el tope en 8 s y el tope duro en 9 s, **15 de los 17
+ * cortes salieron por tope duro y sólo 2 por silencio** [simulado]. Entre los
+ * dos topes cabía 1 s de ventana, así que la pausa casi nunca llegaba a
+ * tiempo y la capa 2 acababa comportándose como la capa 3 —cortar por reloj—,
+ * que es justo lo que F031 existe para no hacer. Con 6 s y 8 s la ventana es
+ * de 2 s: el doble de sitio para que el corte caiga en una pausa. Cuánto sube
+ * de verdad la proporción de cortes por silencio está [por medir]; la sonda
+ * contra el servicio no se repitió al cambiar los topes.
+ *
+ * El daño conocido de bajar el tope —más trozos que empiezan a media oración—
+ * es lo que trata F037, que va en la misma entrega.
  *
  * Que 10 s sea el techo tolerable para quien lee es un juicio de producto, no
  * una medida.  [por medir]
  *
  * Se puede cambiar por sesión (`topeTurnoMs`); con 0 se apaga el troceo.
  */
-const TOPE_TURNO_MS = 8000
+const TOPE_TURNO_MS = 6000
 
 /**
- * No se fuerza el fin de un turno cuyo texto lleve este rato sin crecer.
+ * Pasado esto se corta el turno aunque siga habiendo voz.
  *
- * Si el hablante ya calló, el turno se cierra solo: medido, el texto
- * definitivo llega 201–257 ms después del silencio [medido]. Por tanto 700 ms
- * sin texto nuevo y sin que haya llegado el definitivo significa que el
- * hablante SIGUE hablando y quien va con retraso es el decodificador. Forzar
- * un turno que ya se estaba cerrando no adelantaría nada y partiría la frase
- * por gusto.
+ * El troceo por silencio (abajo) depende de que el hablante haga una pausa, y
+ * el monólogo de la primera prueba demostró que puede no hacerla en 65,6 s
+ * [medido]. Sin este tope duro, la red de seguridad se convierte en una
+ * promesa que el peor caso no cumple, que es justo el caso para el que existe.
  *
- * El ritmo real al que llegan los parciales mientras alguien habla no está
- * medido contra el servicio.  [por medir]
+ * Una palabra partida es mejor que un minuto de pantalla en blanco: ése es el
+ * cambio que se acepta aquí, y sólo le toca a quien no hace ninguna pausa en
+ * ocho segundos.
+ *
+ * **Dos palabras que en este módulo NO son sinónimas**, porque la confusión ya
+ * costó una ronda de revisión:
+ *
+ *  · **holgura** es `msHolgura` y nada más: lo que tarda el servidor en
+ *    obedecer un `ForceEndpoint`. Medida por primera vez el 19-09-2026, 328 ms
+ *    de media y 506 ms como máximo [simulado].
+ *  · **exceso del turno** es todo lo que va del tope hasta que el usuario ve
+ *    la burbuja. La holgura es una de sus piezas, no su total.
+ *
+ * **Cuánto vale el exceso del turno, que es lo que decide el hueco.** En
+ * `sesion-2` el hueco máximo fue de 10,577 s con el tope en 8 s [medido], o
+ * sea **2,6 s de exceso**. Recontado sobre ese mismo archivo, ese peor caso se
+ * reparte en 1,260 s de la cadena que ya estaba en el `.jsonl`
+ * (`msTranscribir` + `msTraducir`) y 1,317 s de lo que no estaba —arrancar el
+ * turno hasta el primer parcial, más obedecer el corte— [medido, sesion-2].
+ * Por eso F031 añade `msTurno` y `msHolgura`: para no volver a repartirlo por
+ * diferencia.
+ *
+ * El exceso no escala con el tope, así que con el tope duro en 8 s el hueco
+ * esperado es **≈ 10,6 s** [estimado a partir de lo medido]: la misma cifra y
+ * el mismo desglose que están en PLAN.md §7bis. Sigue por encima del techo de
+ * 10 s, y eso está dicho allí con todas las letras. Lo que baja de verdad el
+ * hueco es que el corte caiga en una pausa antes del tope duro: un corte por
+ * silencio a los 6-7 s deja el hueco en ≈ 9 s [estimado a partir de lo medido].
+ *
+ * **Y este tope acota el PRIMER corte, no los reintentos.** El freno de
+ * `_quizaForzarFin()` cuenta `topeTurnoMs` desde el último intento, no desde
+ * el tope duro: si el servidor ignora ese primer `ForceEndpoint`, el siguiente
+ * no sale hasta 6 s después —14 s de turno, o sea ≈ 16,6 s de hueco
+ * [estimado a partir de lo medido]—. La escalera está fijada por la prueba
+ * «el tope duro acota el PRIMER corte, no el reintento»; contra el servicio
+ * real el servidor obedeció los 17 cortes que se le pidieron [simulado], así
+ * que ese peor caso no se ha visto nunca todavía.
  */
-const MARGEN_SILENCIO_MS = 700
+const TOPE_DURO_TURNO_MS = 8000
+
+/**
+ * Cuánto silencio propio hay que haber enviado para que el corte sea limpio.
+ *
+ * La versión anterior usaba «700 ms sin que crezca el parcial» como sustituto
+ * de pausa, y ahí estaba el fallo: los parciales llegan a ráfagas, así que el
+ * texto puede estar quieto con el hablante hablando. Se usaba el reloj del
+ * decodificador como si fuera el del hablante, y salieron 10 de 13 trozos a
+ * media oración [medido, sesion-2.jsonl].
+ *
+ * El audio lo enviamos nosotros, así que el silencio se puede mirar donde se
+ * convierte a PCM16 y sale gratis. Tres frames de 100 ms es lo mínimo que
+ * distingue una pausa de un hueco entre dos sílabas; cuánto dura una pausa
+ * real en una reunión del cliente no está medido.  [por medir]
+ */
+const MS_SILENCIO_PARA_FORZAR = 300
+
+/**
+ * Por debajo de esta energía (RMS sobre muestras en [-1,1]) el frame es
+ * silencio.
+ *
+ * No puede ser cero: el audio de sistema de una videollamada no baja a cero
+ * digital ni cuando nadie habla —ruido de línea, respiración, el propio
+ * códec—. 0,01 son unos −40 dBFS, muy por encima de un suelo de ruido y muy
+ * por debajo de cualquier voz. El suelo real de los equipos del cliente no
+ * está medido.  [por medir]
+ */
+const UMBRAL_SILENCIO_RMS = 0.01
 
 /** Tras `Terminate`, el acuse tardó 1.067–1.224 ms medidos. Se espera de sobra. */
 const ESPERA_TERMINATION_MS = 4000
@@ -185,6 +307,27 @@ function aPcm16 (muestras) {
   return b
 }
 
+/** Energía de un frame, para saber si lo que estamos enviando es silencio. */
+function rmsDe (muestras) {
+  if (!muestras?.length) return 0
+  let suma = 0
+  for (let i = 0; i < muestras.length; i++) suma += muestras[i] * muestras[i]
+  return Math.sqrt(suma / muestras.length)
+}
+
+/**
+ * Si el texto del trozo termina una oración.
+ *
+ * Se mira el ORIGINAL en italiano y no la traducción: es lo que el servidor
+ * decidió cerrar, y por tanto lo que dice si el corte cayó en un sitio
+ * razonable. Las comillas y los paréntesis van después del punto, así que se
+ * saltan; un trozo que acaba en coma o en conjunción no cuenta, que es
+ * exactamente el caso que hay que contar en la próxima prueba.
+ */
+function acabaEnPuntuacion (texto) {
+  return /[.!?…]["»'’)\]]*$/.test(String(texto || '').trim())
+}
+
 /**
  * Construye la URL con sus parámetros.
  *
@@ -192,6 +335,13 @@ function aPcm16 (muestras) {
  * de proyecto llegan al modelo, y es lo que hace que «il gestionale» o «Rossi
  * Logistica» se transcriban bien. Los topes son suyos: 100 términos y ~1500
  * caracteres.
+ *
+ * Y aquí viaja la primera capa del troceo: los dos parámetros de fin de turno.
+ * Hasta F031 no se mandaba ninguno, así que el servidor trabajaba con sus
+ * valores por defecto —1.536 ms de silencio— y todo el troceo recaía en
+ * nuestro `ForceEndpoint`, que corta por reloj y no por pausa. El servicio
+ * también los admite en caliente con `UpdateConfiguration`; aquí no hace falta
+ * porque no cambian durante la reunión.
  */
 function construirUrl ({ idioma, glosario, contexto, modo }) {
   const p = new URLSearchParams({
@@ -199,6 +349,8 @@ function construirUrl ({ idioma, glosario, contexto, modo }) {
     encoding: 'pcm_s16le',
     speech_model: MODELO,
     mode: modo || 'balanced',
+    max_turn_silence: String(MAX_SILENCIO_TURNO_MS),
+    end_of_turn_confidence_threshold: String(UMBRAL_CONFIANZA_FIN_TURNO),
   })
   // Sin `language_code` el modelo alterna idiomas por su cuenta. Se fija el
   // italiano porque la reunión es en italiano; si el cliente mezcla inglés
@@ -223,7 +375,9 @@ class AssemblyLiveTranscriber extends EventEmitter {
    */
   constructor ({
     apiKey, idioma = 'it', glosario = [], contexto = '', modo = 'balanced', crearSocket,
-    topeTurnoMs = TOPE_TURNO_MS, margenSilencioMs = MARGEN_SILENCIO_MS,
+    topeTurnoMs = TOPE_TURNO_MS, topeDuroTurnoMs = TOPE_DURO_TURNO_MS,
+    msSilencioParaForzar = MS_SILENCIO_PARA_FORZAR,
+    umbralSilencioRms = UMBRAL_SILENCIO_RMS,
     esperaAperturaMs = ESPERA_APERTURA_MS,
   } = {}) {
     super()
@@ -232,7 +386,9 @@ class AssemblyLiveTranscriber extends EventEmitter {
     this.opciones = { idioma, glosario, contexto, modo }
     this._crearSocket = crearSocket
     this._topeTurnoMs = topeTurnoMs
-    this._margenSilencioMs = margenSilencioMs
+    this._topeDuroTurnoMs = topeDuroTurnoMs
+    this._msSilencioParaForzar = msSilencioParaForzar
+    this._umbralSilencioRms = umbralSilencioRms
     this._esperaAperturaMs = esperaAperturaMs
 
     this._ws = null
@@ -255,6 +411,9 @@ class AssemblyLiveTranscriber extends EventEmitter {
     this._quitarSalidas = null
     this._turno = null           // turno en curso; ver _apuntarParcial()
     this._ultimoAudioEn = null   // cuándo se le dio al socket el último audio
+    // Milisegundos seguidos de silencio en el audio que NOSOTROS enviamos. Es
+    // la señal que autoriza a cortar el turno; ver `_apuntarSilencio()`.
+    this._msSilencioEnviado = 0
 
     this.stats = {
       frases: 0, reconexiones: 0, segundosAudio: 0,
@@ -418,8 +577,11 @@ class AssemblyLiveTranscriber extends EventEmitter {
       this._ws = ws
       this._abiertaEn = Date.now()
       // Sesión nueva, turnos nuevos: arrastrar el turno de la anterior forzaría
-      // el primero del relevo nada más abrir.
+      // el primero del relevo nada más abrir. Y con el turno se suelta el
+      // silencio acumulado: el del socket anterior no dice nada del turno que
+      // este servidor está a punto de abrir.
       this._turno = null
+      this._msSilencioEnviado = 0
       this._vaciarPendiente()
       return true
     } finally {
@@ -452,11 +614,44 @@ class AssemblyLiveTranscriber extends EventEmitter {
           // próxima reunión de verdad: es el precio del troceo, y hasta ahora
           // sólo está medido en simulación.
           const forzado = Boolean(this._turno?.ultimoIntentoEn)
+          // Las cuatro medidas de F031, que se escriben en el `.jsonl`:
+          //
+          //  · `msTurno` es lo que duró el turno, del primer parcial al fin.
+          //    Es `null` si el fin llegó sin ningún parcial antes —pasa con las
+          //    frases muy cortas—: no se sabe cuándo empezó, y un cero ahí
+          //    mentiría en la dirección buena para nosotros.
+          //  · `msHolgura` se cuenta desde el PRIMER `ForceEndpoint`, no desde
+          //    el último: lo que hay que medir es lo que el usuario espera
+          //    desde que decidimos cortar, y un reintento es parte de esa
+          //    espera, no un cronómetro nuevo.
+          //  · `acabaEnPuntuacion` es el «a media frase» que hasta ahora había
+          //    que contar a mano sobre el archivo.
+          //  · `motivoCorte` dice POR QUÉ se cortó: `'silencio'` si el audio
+          //    que enviábamos llevaba la pausa pedida, `'tope-duro'` si se
+          //    cortó encima de la voz. `null` si nadie forzó el turno. Es la
+          //    única forma de leer del archivo el criterio «0 palabras
+          //    partidas en trozos forzados CON silencio detectado»: `msTurno`
+          //    no lo distingue —un corte por silencio a 7,9 s y uno por tope
+          //    duro a 8,0 s dan turnos casi iguales—, y hasta esta ronda el
+          //    motivo sólo salía en el evento `troceo`, que en producción no
+          //    escucha nadie.
+          //
+          //    Al contrario que `msHolgura`, se queda con el ÚLTIMO intento y
+          //    no con el primero, y la diferencia importa: si el primer corte
+          //    salió en una pausa pero el servidor lo ignoró, y el segundo
+          //    salió por tope duro encima de la voz, la palabra que se parta
+          //    la parte el segundo. Guardar aquí «silencio» contaría esa
+          //    palabra partida como corte limpio, o sea mentiría justo en la
+          //    dirección que nos conviene.
+          const msTurno = this._turno ? ahora - this._turno.abiertoEn : null
+          const msHolgura = this._turno?.forzadoEn ? ahora - this._turno.forzadoEn : null
+          const motivoCorte = this._turno?.motivoCorte ?? null
           this._turno = null
           if (!texto) return
           this.stats.frases++
           this.emit('frase', {
             texto, orden: m.turn_order, palabras: m.words, msTranscribir, forzado,
+            msTurno, msHolgura, acabaEnPuntuacion: acabaEnPuntuacion(texto), motivoCorte,
           })
         } else {
           if (!texto) return
@@ -528,24 +723,32 @@ class AssemblyLiveTranscriber extends EventEmitter {
    *
    * Lo que se guarda no es «ha llegado un parcial», es **el texto ha
    * crecido**: el servidor puede repetir el mismo parcial mientras nadie
-   * habla, y si eso contara como señal de vida el vigilante trocearía
-   * silencios.
+   * habla, y entonces el audio que lo produjo no es el último que oyó, que es
+   * lo que mide `_msTranscribir()`.
+   *
+   * Hasta F031 esto también alimentaba al vigilante del troceo —«el texto
+   * lleva 700 ms sin crecer» hacía de pausa—, y ahí estaba el fallo: los
+   * parciales llegan a ráfagas y eso no es silencio. El silencio ahora se
+   * mide en el audio que enviamos (`_apuntarSilencio()`), así que de aquí
+   * salió la marca de tiempo del crecimiento, que ya no la usaba nadie.
    */
   _apuntarParcial (texto, ahora) {
     if (!this._turno) {
       this._turno = {
         abiertoEn: ahora,
-        ultimoCrecimientoEn: ahora,
         audioDelUltimoCrecimiento: this._ultimoAudioEn,
         ultimoTexto: texto,
         ultimoIntentoEn: null,
+        // El primero de los intentos, que es desde donde se mide `msHolgura`.
+        forzadoEn: null,
+        // El motivo del ÚLTIMO corte pedido, que es el que llega a la frase.
+        motivoCorte: null,
       }
       return
     }
     const t = this._turno
     if (texto === t.ultimoTexto) return
     t.ultimoTexto = texto
-    t.ultimoCrecimientoEn = ahora
     t.audioDelUltimoCrecimiento = this._ultimoAudioEn
   }
 
@@ -577,17 +780,37 @@ class AssemblyLiveTranscriber extends EventEmitter {
    * las palabras que vengan después entran en el turno siguiente. Recortar el
    * audio en vez de esto perdería lo que se dijera en el corte.
    *
-   * Dos condiciones, y las dos importan:
+   * Desde F031 es una RED DE SEGURIDAD, no el mecanismo: quien debe cerrar el
+   * turno es el servidor, en la pausa del hablante, y para eso se le mandan
+   * `max_turn_silence` y `end_of_turn_confidence_threshold` al conectar. Esto
+   * sólo entra cuando el turno ya se pasó de largo.
+   *
+   * Tres condiciones, en este orden:
    *
    *  · Que lleve abierto más que el tope. Se cuenta desde el primer parcial,
    *    que llega 881–980 ms después de que empiece a hablar [medido], así que
    *    el turno real es algo más largo que lo que se mide aquí.
-   *  · Que el texto siga creciendo. Si lleva parado más de `margenSilencio`,
-   *    el turno ya se está cerrando solo y forzarlo sólo partiría la frase.
+   *  · Que los últimos `msSilencioParaForzar` del audio que hemos enviado sean
+   *    silencio. Esto es lo que sustituye al «el texto lleva un rato sin
+   *    crecer» de la versión anterior, que no era silencio sino el ritmo del
+   *    decodificador: el servidor cierra el turno con TODO el audio recibido,
+   *    así que un corte con voz en curso parte la palabra que suene.
+   *  · O, si no hay pausa ninguna, que se haya pasado del tope duro. El
+   *    monólogo de 65,6 s demostró que la pausa puede no llegar nunca
+   *    [medido], y una red de seguridad que sólo funciona con el caso fácil no
+   *    es una red de seguridad.
    *
    * Si el servidor ignorara el mensaje, el turno volvería a pasarse del tope
    * y se reintentaría: `ultimoIntentoEn` es lo que evita mandarlo diez veces
-   * por segundo mientras tanto.
+   * por segundo mientras tanto. Ese mismo freno es el que decide cuándo puede
+   * actuar el tope duro, y a propósito: un reintento inmediato «porque ahora
+   * sí toca el duro» sería la ráfaga que el freno existe para impedir.
+   *
+   * La consecuencia hay que decirla entera, porque es la que se paga: el tope
+   * duro acota **el primer corte**, no los siguientes. Con los valores de
+   * producción, un `ForceEndpoint` que el servidor ignore no se repite hasta
+   * 6 s después —turno de 14 s—, no a los 8 s. Prueba: «el tope duro acota el
+   * PRIMER corte, no el reintento».
    */
   _quizaForzarFin () {
     const t = this._turno
@@ -596,12 +819,33 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
     const ahora = Date.now()
     if (ahora - (t.ultimoIntentoEn ?? t.abiertoEn) < this._topeTurnoMs) return
-    if (ahora - t.ultimoCrecimientoEn > this._margenSilencioMs) return
+
+    const msAbierto = ahora - t.abiertoEn
+    const enSilencio = this._msSilencioEnviado >= this._msSilencioParaForzar
+    const porTopeDuro = this._topeDuroTurnoMs > 0 && msAbierto >= this._topeDuroTurnoMs
+    if (!enSilencio && !porTopeDuro) return
+
+    // El motivo distingue el corte limpio del corte a la fuerza, que es la
+    // diferencia entre «el troceo funciona» y «el troceo funciona a costa de
+    // partir palabras». Sin él, los dos se cuentan igual en `turnosForzados`.
+    //
+    // `enSilencio` manda sobre `porTopeDuro` cuando se cumplen los dos: si
+    // había la pausa pedida, el corte es limpio aunque además se hubiera
+    // pasado del tope duro.
+    const motivo = enSilencio ? 'silencio' : 'tope-duro'
 
     t.ultimoIntentoEn = ahora
+    if (t.forzadoEn == null) t.forzadoEn = ahora
+    // Se queda el último y no el primero: es el corte que estaba en vuelo
+    // cuando el servidor cerró, o sea el que pudo partir la palabra.
+    t.motivoCorte = motivo
     this.stats.turnosForzados++
     this._ws.send(JSON.stringify({ type: 'ForceEndpoint' }))
-    this.emit('troceo', { msAbierto: ahora - t.abiertoEn, caracteres: t.ultimoTexto.length })
+    this.emit('troceo', {
+      msAbierto,
+      caracteres: t.ultimoTexto.length,
+      motivo,
+    })
   }
 
   // ── Audio ───────────────────────────────────────────────────────────
@@ -614,13 +858,31 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
     for (let i = 0; i < muestras.length; i++) this._resto.push(muestras[i])
     while (this._resto.length >= MUESTRAS_TROZO) {
-      this._enviar(aPcm16(this._resto.splice(0, MUESTRAS_TROZO)))
+      const frame = this._resto.splice(0, MUESTRAS_TROZO)
+      // Se mira la energía AQUÍ, donde el frame ya está formado y todavía en
+      // coma flotante: es el único punto en el que sabemos qué audio estamos
+      // mandando, y recorrer 1.600 muestras cada 100 ms no cuesta nada.
+      this._apuntarSilencio(frame)
+      this._enviar(aPcm16(frame))
     }
     // El audio llega en bloques de 100 ms, así que el vigilante mira diez
     // veces por segundo sin necesidad de un temporizador propio: uno más que
     // habría que acordarse de apagar al cerrar.
     this._quizaForzarFin()
     this._quizaRelevar()
+  }
+
+  /**
+   * Lleva la cuenta del silencio seguido que hemos enviado.
+   *
+   * Es una racha, no una media: un solo frame con voz la pone a cero. Si se
+   * promediara, una pausa de 200 ms entre dos palabras sonaría igual que una
+   * pausa de verdad y volveríamos a cortar en mitad de la frase, que es el
+   * fallo que F031 arregla.
+   */
+  _apuntarSilencio (frame) {
+    if (rmsDe(frame) < this._umbralSilencioRms) this._msSilencioEnviado += MS_TROZO
+    else this._msSilencioEnviado = 0
   }
 
   _enviar (pcm) {
@@ -803,7 +1065,10 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
 module.exports = { AssemblyLiveTranscriber, SAMPLE_RATE, MODELO, CIERRES }
 module.exports._internos = {
-  aPcm16, construirUrl, MUESTRAS_TROZO, MS_TROZO, MS_TROZO_MIN, MS_TROZO_MAX,
+  aPcm16, rmsDe, acabaEnPuntuacion, construirUrl,
+  MUESTRAS_TROZO, MS_TROZO, MS_TROZO_MIN, MS_TROZO_MAX,
   MAX_CONEXIONES_MIN, ESPERAS_MS, MAX_BUFFER_S, RELEVAR_A_LOS_MS, TOPE_SESION_MS,
-  TOPE_TURNO_MS, MARGEN_SILENCIO_MS, ESPERA_APERTURA_MS, ESPERA_TERMINATION_MS,
+  TOPE_TURNO_MS, TOPE_DURO_TURNO_MS, MS_SILENCIO_PARA_FORZAR, UMBRAL_SILENCIO_RMS,
+  MAX_SILENCIO_TURNO_MS, UMBRAL_CONFIANZA_FIN_TURNO,
+  ESPERA_APERTURA_MS, ESPERA_TERMINATION_MS,
 }

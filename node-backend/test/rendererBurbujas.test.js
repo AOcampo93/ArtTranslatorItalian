@@ -170,6 +170,7 @@ function montar ({ api = null } = {}) {
        // evalúa una sola vez y se copia el número, así que una prueba podría
        // ponerse verde leyendo un cero viejo. Pasó.
        cortadas: () => frasesCortadas,
+       aMedia: () => frasesAMediaFrase,
      }`)
 
   return {
@@ -212,6 +213,46 @@ describe('el troceo en la barra al detener', () => {
     assert.match(b.barra(), /2 troceadas/, `la barra dice "${b.barra()}"`)
     assert.match(b.barra(), /21 frases/, 'y no puede perder lo que ya decía')
     assert.match(b.barra(), /\$0\.0234/)
+  })
+
+  test('la barra dice cuántas frases acabaron a media frase (F031)', async () => {
+    // Es el precio del troceo, y en la segunda prueba real hubo que contarlo a
+    // mano sobre el `.jsonl`: 10 de 13 trozos forzados [medido]. Un número que
+    // se calcula después de la reunión no sirve para decidir durante la
+    // reunión si el tope está bien puesto.
+    const b = montar({ api: apiQueDevuelve({
+      ok: true, frases: 4, costeUsd: 0.01, stats: { turnosForzados: 2 },
+    }) })
+    b.pintarFrase({ it: 'E quindi', es: 'Y entonces', msTranscribir: 200, msTraducir: 50, forzado: true, acabaEnPuntuacion: false })
+    b.pintarFrase({ it: 'Sono arrivata.', es: 'Llegué.', msTranscribir: 200, msTraducir: 50, acabaEnPuntuacion: true })
+    b.pintarFrase({ it: 'in Francia', es: 'en Francia', msTranscribir: 200, msTraducir: 50, forzado: true, acabaEnPuntuacion: false })
+
+    assert.strictEqual(b.aMedia(), 2)
+    await b.pulsarParar()
+    assert.match(b.barra(), /2 a media frase/, `la barra dice "${b.barra()}"`)
+  })
+
+  test('el cero se dice en voz alta, como «sin troceos»', async () => {
+    // Callarlo haría indistinguible «ninguna quedó a medias» de «esta versión
+    // no lo mide», que es la ambigüedad que ya costó una prueba.
+    const b = montar({ api: apiQueDevuelve({
+      ok: true, frases: 2, costeUsd: 0.01, stats: { turnosForzados: 0 },
+    }) })
+    b.pintarFrase({ it: 'Sono arrivata.', es: 'Llegué.', msTranscribir: 200, msTraducir: 50, acabaEnPuntuacion: true })
+    await b.pulsarParar()
+    assert.match(b.barra(), /0 a media frase/, `la barra dice "${b.barra()}"`)
+  })
+
+  test('una frase sin el campo no se cuenta como frase a medias', async () => {
+    // El modo de ejemplo pinta frases sin `acabaEnPuntuacion`. Contarlas como
+    // cortadas inventaría el número que la prueba en Windows tiene que leer.
+    const b = montar({ api: apiQueDevuelve({
+      ok: true, frases: 1, costeUsd: 0.01, stats: { turnosForzados: 0 },
+    }) })
+    b.pintarFrase({ it: 'Mm.', es: 'Mm.', msTranscribir: 200, msTraducir: 50 })
+    assert.strictEqual(b.aMedia(), 0)
+    await b.pulsarParar()
+    assert.match(b.barra(), /0 a media frase/, `la barra dice "${b.barra()}"`)
   })
 
   test('si se pidieron cortes y NINGUNO se aplicó, la barra lo dice', async () => {
@@ -272,11 +313,16 @@ describe('el troceo en la barra al detener', () => {
     const b = montar({ api: apiQueDevuelve({
       ok: true, frases: 3, costeUsd: 0.01, stats: { turnosForzados: 0 },
     }) })
-    b.pintarFrase({ it: 'a', es: 'a', msTranscribir: 200, msTraducir: 50, forzado: true })
+    b.pintarFrase({
+      it: 'a', es: 'a', msTranscribir: 200, msTraducir: 50,
+      forzado: true, acabaEnPuntuacion: false,
+    })
     assert.strictEqual(b.cortadas(), 1)
+    assert.strictEqual(b.aMedia(), 1)
 
     await b.pulsarEscuchar()              // reunión nueva
     assert.strictEqual(b.cortadas(), 0, 'el contador tiene que empezar de cero')
+    assert.strictEqual(b.aMedia(), 0, 'y el de las frases a medias, también')
     assert.deepStrictEqual(b.retardos, [], 'y el p50 no puede mezclar dos reuniones')
 
     await b.pulsarParar()

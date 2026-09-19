@@ -394,6 +394,20 @@ function apuntarRetardo (ms) {
 let frasesCortadas = 0
 
 /**
+ * Cuántas burbujas no acaban en punto, interrogación ni exclamación.
+ *
+ * Es el precio del troceo, y hasta ahora había que sacarlo del `.jsonl` a
+ * mano: así se contaron los 10 de 13 trozos a media oración de la segunda
+ * prueba `[medido]`. Un número que hay que calcular a mano después no se mira
+ * durante la reunión, que es cuando sirve para decidir si el tope va bien.
+ *
+ * Se cuenta con `=== false` a propósito: una frase sin el campo —el modo de
+ * ejemplo, o una versión vieja del proceso principal— no es una frase a media
+ * oración, y contarla como tal inventaría un número.
+ */
+let frasesAMediaFrase = 0
+
+/**
  * Al empezar una reunión nueva, las medidas de la anterior no valen.
  *
  * Sin esto, la segunda reunión de la misma ventana enseñaría al detenerse los
@@ -402,6 +416,7 @@ let frasesCortadas = 0
 function reiniciarMedidas () {
   retardos.length = 0
   frasesCortadas = 0
+  frasesAMediaFrase = 0
 }
 
 /**
@@ -434,7 +449,11 @@ function resumenAlDetener (r) {
   // número que miente —y es el mismo criterio que el de los troceos: dos casos
   // distintos no pueden verse igual en la barra—.
   const enVuelo = r.enVuelo > 0 ? ` · ${r.enVuelo} aún traduciéndose` : ''
-  return `Detenido · ${r.frases} frases${enVuelo} · ${troceo} · $${r.costeUsd}`
+  // Se dice siempre, también cuando es cero, por el mismo motivo que «sin
+  // troceos»: el cero es el resultado que se busca y callarlo lo haría
+  // indistinguible de «esta versión no lo mide».
+  return `Detenido · ${r.frases} frases${enVuelo} · ${troceo}`
+    + ` · ${frasesAMediaFrase} a media frase · $${r.costeUsd}`
 }
 
 // ── Burbujas ──────────────────────────────────────────────────────────
@@ -451,7 +470,7 @@ function pintarParcial (texto) {
   abajo()
 }
 
-function pintarFrase ({ it, es, ms, msTranscribir, msTraducir, forzado }) {
+function pintarFrase ({ it, es, ms, msTranscribir, msTraducir, forzado, acabaEnPuntuacion }) {
   $('#vacio')?.classList.add('oculto')
   burbujaParcial?.remove()
   burbujaParcial = null
@@ -468,6 +487,7 @@ function pintarFrase ({ it, es, ms, msTranscribir, msTraducir, forzado }) {
     ? msTranscribir + msTraducir
     : ms
   if (forzado) frasesCortadas++
+  if (acabaEnPuntuacion === false) frasesAMediaFrase++
 
   const pie = crear('div', 'pie')
   // El desglose importa: con él se ve si el retardo viene de la red o del
