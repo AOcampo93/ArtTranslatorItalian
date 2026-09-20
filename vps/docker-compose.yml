@@ -16,11 +16,11 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=coolify"
       # Router HTTPS
-      - "traefik.http.routers.arttranslator-informes.rule=Host(`arttranslator.81.17.100.181.sslip.io`)"
+      - "traefik.http.routers.arttranslator-informes.rule=Host(`arturoocampo.com`) && PathPrefix(`/informes`)"
       - "traefik.http.routers.arttranslator-informes.entrypoints=https"
       - "traefik.http.routers.arttranslator-informes.tls.certresolver=letsencrypt"
       # Router HTTP: solo redirige a HTTPS, no sirve nada por sí mismo
-      - "traefik.http.routers.arttranslator-informes-http.rule=Host(`arttranslator.81.17.100.181.sslip.io`)"
+      - "traefik.http.routers.arttranslator-informes-http.rule=Host(`arturoocampo.com`) && PathPrefix(`/informes`)"
       - "traefik.http.routers.arttranslator-informes-http.entrypoints=http"
       - "traefik.http.routers.arttranslator-informes-http.middlewares=arttranslator-informes-redirect"
       - "traefik.http.middlewares.arttranslator-informes-redirect.redirectscheme.scheme=https"
