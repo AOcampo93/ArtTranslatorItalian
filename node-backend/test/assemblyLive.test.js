@@ -236,7 +236,33 @@ describe('frases y parciales', () => {
     t.on('error', e => errores.push(e.message))
     await t.start()
     sockets[0].recibe({ type: 'Error', error: 'Unauthorized Connection: Too many concurrent sessions' })
-    assert.match(errores[0], /Too many concurrent sessions/)
+    assert.match(errores[0], /demasiadas sesiones/)
+    await t.stop()
+  })
+
+  // F021: el texto del servidor no está pensado para pantalla — se traduce
+  // lo que se conoce ("Too many concurrent sessions") y todo lo demás pasa
+  // por `sanear()`, para que ni una clave ni una cabecera de la petición
+  // lleguen crudas hasta el usuario.
+  test('"Too many concurrent sessions" se traduce al castellano y no llega en inglés', async () => {
+    const { t, sockets } = montar()
+    const errores = []
+    t.on('error', e => errores.push(e.message))
+    await t.start()
+    sockets[0].recibe({ type: 'Error', error: 'Unauthorized Connection: Too many concurrent sessions' })
+    assert.doesNotMatch(errores[0], /Too many concurrent sessions/i, 'no debe quedar en inglés')
+    assert.match(errores[0], /demasiadas sesiones de transcripción/)
+    await t.stop()
+  })
+
+  test('un error del servidor con forma de clave sale saneado', async () => {
+    const { t, sockets } = montar()
+    const errores = []
+    t.on('error', e => errores.push(e.message))
+    await t.start()
+    sockets[0].recibe({ type: 'Error', error: 'invalid credentials, key sk-ant-api03-CLAVEFALSA12345678 rejected' })
+    assert.ok(!errores[0].includes('sk-ant-api03-CLAVEFALSA12345678'), `se coló la clave: ${errores[0]}`)
+    assert.match(errores[0], /sk-ant-\*\*\*\*/)
     await t.stop()
   })
 })

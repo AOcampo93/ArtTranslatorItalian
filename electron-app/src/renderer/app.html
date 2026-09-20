@@ -346,6 +346,16 @@
       </div>
     </section>
 
+    <section class="tarjeta">
+      <h2>Informe de la reunión</h2>
+      <p class="ayuda" id="txtInformes">Qué se manda al equipo para revisar cómo funciona la app.</p>
+      <div class="modo" id="modoInformes">
+        <div class="op" data-valor="no"><b>No mandar nada</b><span>El informe se queda solo en este equipo.</span></div>
+        <div class="op" data-valor="metricas"><b>Solo métricas</b><span>Tiempos y tamaños, nunca lo que se dijo.</span></div>
+        <div class="op sel" data-valor="completo"><b>Completo</b><span>Incluye la transcripción, para revisar la calidad (beta).</span></div>
+      </div>
+    </section>
+
     <div class="fila">
       <button id="btnGuardarAjustes">Guardar</button>
       <button class="sec" id="btnCerrarAjustes">Cerrar</button>
@@ -614,28 +624,58 @@ function pintarPregunta ({ id, it, es }) {
   const otra = crear('button', 'sec'); otra.textContent = 'Otra'
   otra.onclick = () => { r.className = 'respuesta cargando'; r.textContent = 'Preparando…'; api?.otraRespuesta(id) }
 
-  acc.append(copiar, otra)
-  p.append(q, qes, r, acc)
+  // F021: el detalle técnico (saneado en el proceso principal) va APARTE de
+  // la burbuja, plegado por defecto, y solo aparece si un fallo trae uno.
+  const verDetalle = crear('button', 'sec verDetalle oculto'); verDetalle.textContent = 'Ver detalle'
+  const detalle = crear('div', 'detalleError oculto')
+  verDetalle.onclick = () => {
+    const ahoraOculto = detalle.classList.toggle('oculto')
+    verDetalle.textContent = ahoraOculto ? 'Ver detalle' : 'Ocultar detalle'
+  }
+
+  acc.append(copiar, otra, verDetalle)
+  p.append(q, qes, r, acc, detalle)
   $('#listaPreguntas').prepend(p)
 }
 
 /**
- * `texto` puede venir a null con un `error`: el modelo falló, se quedó sin
- * cupo o tardó demasiado. Eso hay que pintarlo — dejar «Preparando…» es el
- * peor final posible, porque parece que aún está en camino y el usuario espera
- * una respuesta que no va a llegar. El botón «Otra» sigue sirviendo.
+ * `texto` puede venir a `null` con `{ tipo, mensaje, detalle }` (F021): el
+ * modelo falló, se quedó sin cupo, no tiene crédito o tardó demasiado. Eso
+ * hay que pintarlo — dejar «Preparando…» es el peor final posible, porque
+ * parece que aún está en camino y el usuario espera una respuesta que no va
+ * a llegar. El botón «Otra» sigue sirviendo.
+ *
+ * `mensaje` es la única frase que entra en la burbuja: ya viene en castellano,
+ * dice qué pasó y qué hacer, y nunca lleva JSON ni la clave de nadie —eso lo
+ * garantiza `clasificarError()`/`sanear()` en el proceso principal, antes de
+ * que esto exista—. `detalle`, si lo hay, es texto técnico YA SANEADO: se
+ * enseña solo si el usuario pulsa «Ver detalle», nunca en la burbuja misma.
  */
-function pintarRespuesta ({ id, texto, error }) {
+function pintarRespuesta ({ id, texto, mensaje, detalle }) {
   const p = $(`.pregunta[data-id="${id}"]`)
   if (!p) return
   const r = p.querySelector('.respuesta')
+  const verDetalle = p.querySelector('.verDetalle')
+  const cajaDetalle = p.querySelector('.detalleError')
+
   if (!texto) {
     r.className = 'respuesta mal'
-    r.textContent = `Sin respuesta: ${error || 'el modelo no contestó'}. Pulsa «Otra» para reintentar.`
+    r.textContent = `${mensaje || 'El modelo no contestó.'} Pulsa «Otra» para reintentar.`
+    if (detalle) {
+      cajaDetalle.textContent = detalle
+      cajaDetalle.classList.add('oculto')      // siempre arranca plegado
+      verDetalle.textContent = 'Ver detalle'
+      verDetalle.classList.remove('oculto')
+    } else {
+      verDetalle.classList.add('oculto')
+      cajaDetalle.classList.add('oculto')
+    }
     return
   }
   r.className = 'respuesta'
   r.textContent = texto          // SOLO italiano, sin glosa: así lo pidió el cliente
+  verDetalle.classList.add('oculto')
+  cajaDetalle.classList.add('oculto')
 }
 
 /** Por qué este panel no va a dar respuestas. Se queda puesto: es un ajuste. */
@@ -826,10 +866,44 @@ $('#btnParar').onclick = async () => {
   $('#btnParar').disabled = false
 }
 
-$('#btnAjustes').onclick = () => $('#ajustes').classList.remove('oculto')
+// ── Informe de la reunión (F039b): no | metricas | completo ───────────
+let modoInformesElegido = 'completo'
+
+function pintarModoInformes (modo) {
+  modoInformesElegido = modo
+  for (const op of $('#modoInformes')?.querySelectorAll('.op') || []) {
+    op.classList.toggle('sel', op.dataset.valor === modo)
+  }
+}
+
+$('#modoInformes')?.querySelectorAll('.op').forEach(op => {
+  op.onclick = () => pintarModoInformes(op.dataset.valor)
+})
+
+$('#btnAjustes').onclick = async () => {
+  $('#ajustes').classList.remove('oculto')
+  // El estado se relee cada vez que se abre: puede haber cambiado desde otra
+  // pantalla (o el archivo de token puede haber aparecido/desaparecido).
+  const estado = api ? await api.estadoClaves() : null
+  if (estado) {
+    pintarModoInformes(estado.informes || 'completo')
+    const txt = $('#txtInformes')
+    if (txt) {
+      txt.textContent = estado.informesDisponibles
+        ? 'Qué se manda al equipo para revisar cómo funciona la app.'
+        : 'La subida está desactivada en este equipo (falta la configuración de subida); el informe se queda local pase lo que elijas aquí.'
+    }
+  }
+}
 $('#btnCerrarAjustes').onclick = () => $('#ajustes').classList.add('oculto')
 $('#btnGuardarAjustes').onclick = async () => {
-  await api?.guardarClaves({ stt: $('#kSTT').value, llm: $('#kLLM').value })
+  // Solo se manda la clave que el usuario escribió: los campos se vacían tras
+  // cada guardado, y mandar '' borraba la clave ya guardada al pulsar Guardar
+  // solo para cambiar el modo de informes.
+  const claves = { informes: modoInformesElegido }
+  if ($('#kSTT').value.trim()) claves.stt = $('#kSTT').value.trim()
+  if ($('#kLLM').value.trim()) claves.llm = $('#kLLM').value.trim()
+  await api?.guardarClaves(claves)
   $('#kSTT').value = $('#kLLM').value = ''
   $('#ajustes').classList.add('oculto')
 }

@@ -32,6 +32,7 @@
 const { app, BrowserWindow, ipcMain, safeStorage, shell, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 
 const BACK = path.join(__dirname, '..', '..', 'node-backend', 'src')
 const { AssemblyLiveTranscriber } = require(path.join(BACK, 'assemblyLive'))
@@ -41,7 +42,8 @@ const db = require(path.join(BACK, 'db'))
 const { Autosave } = require(path.join(BACK, 'autosave'))
 const { partirTurno, arrastrar, acabaCerrada } = require(path.join(BACK, 'frases'))
 const { MotorRespuestas, MotorResumen } = require(path.join(BACK, 'respuestas'))
-const { crearLlamador } = require(path.join(BACK, 'llm'))
+const { crearLlamador, clasificarError, sanear } = require(path.join(BACK, 'llm'))
+const { ColaDeInformes } = require(path.join(BACK, 'informes'))
 
 let ventana = null
 let sesion = null          // { transcriptor, traductor, autosave, inicio, ... }
@@ -71,6 +73,51 @@ function leerClaves () {
     const bruto = fs.readFileSync(RUTA_CLAVES())
     return JSON.parse(safeStorage.decryptString(bruto))
   } catch { return {} }
+}
+
+// ── Informes a la nube (F039b) ──────────────────────────────────────────
+//
+// El token de subida vive FUERA del repo, a propósito (§10 del plan): es un
+// secreto de servicio que viaja incrustado en el paquete de Windows, no una
+// clave del usuario que pase por `safeStorage`. `verificar-paquete.sh`
+// comprueba que este archivo va en el paquete y que nunca entra a git.
+const RUTA_TOKEN_INFORMES = () => path.join(__dirname, 'informes.token.json')
+
+/** `null` si el archivo falta o está mal formado: la subida queda desactivada, no rota. */
+function leerTokenInformes () {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(RUTA_TOKEN_INFORMES(), 'utf8'))
+    return cfg && cfg.token && cfg.url ? cfg : null
+  } catch { return null }
+}
+
+/**
+ * El nombre de máquina saneado al alfabeto que exige `X-Maquina` en el
+ * contrato de subida (`vps/servidor.js`): sólo así el receptor no lo rechaza
+ * con 400. `os.hostname()` puede traer espacios, acentos o un `.local` con
+ * puntos de sobra; lo que no encaje en el alfabeto se convierte en `-`.
+ */
+function maquinaSaneada () {
+  const cruda = os.hostname() || 'desconocida'
+  const saneada = cruda.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 64)
+  return saneada || 'desconocida'
+}
+
+let colaInformes = null
+/**
+ * Una sola cola para toda la vida del proceso: dos instancias leyendo y
+ * escribiendo el mismo `cola-informes.json` a la vez sí podrían pisarse.
+ */
+function obtenerColaInformes () {
+  if (colaInformes) return colaInformes
+  const cfg = leerTokenInformes()
+  colaInformes = new ColaDeInformes({
+    directorioDatos: path.join(app.getPath('userData'), 'informes'),
+    token: cfg?.token,
+    url: cfg?.url,
+    obtenerModo: () => leerClaves().informes || 'completo', // beta: por defecto "completo"
+  })
+  return colaInformes
 }
 
 // ── Ventana ───────────────────────────────────────────────────────────
@@ -137,7 +184,12 @@ function montarMotores ({ perfil, ctx, claveLlm }) {
     try {
       llamar = crearLlamador({ clave: claveLlm })
     } catch (err) {
-      motivo = err.message
+      // F021: `err.message` nunca cruza tal cual a la pantalla. Aquí en
+      // concreto `crearLlamador` sólo lanza dos mensajes fijos —sin clave
+      // configurada, o clave con un prefijo que no se reconoce—, ninguno con
+      // la clave dentro, pero pasa igual por `clasificarError` porque este es
+      // uno de los puntos de la auditoría y no puede haber un segundo criterio.
+      motivo = clasificarError(err).mensaje
     }
   }
   if (!llamar) {
@@ -163,8 +215,9 @@ function montarMotores ({ perfil, ctx, claveLlm }) {
 
   const motor = new MotorRespuestas({ llamar, bloqueContexto })
   motor.on('pregunta', p => aRenderer('app:pregunta', { id: p.id, it: p.it, es: p.es }))
-  // La respuesta puede venir con `texto: null` y un error: se reenvía tal cual
-  // para que la tarjeta lo diga en vez de quedarse en «Preparando…».
+  // La respuesta puede venir con `texto: null` y `{ tipo, mensaje, detalle }`
+  // (F021, `respuestas.js` ya lo clasifica y sanea): se reenvía tal cual para
+  // que la tarjeta lo diga en vez de quedarse en «Preparando…».
   motor.on('respuesta', r => aRenderer('app:respuesta', r))
 
   const resumen = new MotorResumen({ llamar, bloqueContexto })
@@ -340,7 +393,10 @@ async function traducirOAvisar (texto, turno, extra) {
   try {
     return await traducirLinea(texto, turno, extra)
   } catch (err) {
-    aRenderer('app:estado', { clase: 'aviso', texto: `no se pudo traducir: ${err.message}` })
+    // F021: Marian corre en local y no tiene claves que filtrar, pero un
+    // fallo suyo puede traer una ruta o un mensaje nativo de ONNX que tampoco
+    // pinta nada en pantalla — mismo trato que el resto de esta auditoría.
+    aRenderer('app:estado', { clase: 'aviso', texto: `no se pudo traducir: ${sanear(err.message)}` })
     return null
   }
 }
@@ -370,8 +426,10 @@ function guardarYPintar (s, frase, idProvisional = null) {
   } catch (err) {
     // La traducción salió bien y lo que falló fue guardarla, que es justo lo
     // que §0.3 promete. Se dice con su nombre y con la clase de fallo grave.
+    // El log SÍ lleva el mensaje tal cual (F021 no le quita nada a lo que se
+    // queda dentro del proceso); lo que cruza a la pantalla va saneado.
     console.error('[autoguardado] no se pudo escribir la frase:', err.message)
-    aRenderer('app:estado', { clase: 'mal', texto: `no se pudo guardar la frase: ${err.message}` })
+    aRenderer('app:estado', { clase: 'mal', texto: `no se pudo guardar la frase: ${sanear(err.message)}` })
   } finally {
     if (!estabaAbierto) s.autosave.cerrar()
   }
@@ -715,8 +773,12 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
     aRenderer('app:estado', { clase, texto })
   })
 
+  // F021: `assemblyLive.js` ya traduce y sanea lo que sabe del servidor, pero
+  // esta es la última puerta antes del renderer — el punto único por el que
+  // pasan las tres capas de errores de ese módulo (protocolo, cierre,
+  // reconexión), así que sanea otra vez, sin coste si ya venía limpio.
   transcriptor.on('error', err =>
-    aRenderer('app:estado', { clase: 'aviso', texto: err.message }))
+    aRenderer('app:estado', { clase: 'aviso', texto: sanear(err.message) }))
 
   await transcriptor.start()
   return { ok: true }
@@ -770,6 +832,24 @@ async function pararSesion (motivo = 'el usuario paró', graciaMs = GRACIA_EN_VU
       lineCount: s.frases,
     })
     db.vaciar()
+
+    // F039b: sólo se encola si hay a quién mandarle algo (`informes.token.json`
+    // presente). `encolar` es una escritura pequeña, síncrona, como el propio
+    // autoguardado; `enviarPendientes` se lanza SIN `await` a propósito: un
+    // VPS lento o caído no puede retrasar ni el resumen de la reunión ni el
+    // cierre de la ventana. Errores de red los traga `enviarPendientes` por su
+    // cuenta (queda en cola para el siguiente intento); lo único que se
+    // atrapa aquí es un fallo al leer el token o al escribir la cola misma.
+    try {
+      if (leerTokenInformes()) {
+        const reunion = path.basename(s.autosave.ruta, '.jsonl').replace(/^sesion-/, '')
+        const cola = obtenerColaInformes()
+        cola.encolar(s.autosave.ruta, { maquina: maquinaSaneada(), version: app.getVersion(), reunion })
+        cola.enviarPendientes().catch(() => {})
+      }
+    } catch (err) {
+      console.error('[informes] no se pudo encolar la subida:', err.message)
+    }
   } catch (err) {
     console.error('[sesión] al cerrar:', err.message)
   }
@@ -804,21 +884,41 @@ ipcMain.on('app:audio', (_e, muestras) => {
  */
 ipcMain.handle('app:otraRespuesta', (_e, id) => {
   if (!sesion?.motor) {
-    aRenderer('app:respuesta', { id, texto: null, error: 'no hay reunión en marcha' })
+    aRenderer('app:respuesta', {
+      id, texto: null, tipo: 'desconocido',
+      mensaje: 'La reunión ya no está en marcha; vuelve a empezarla para pedir otra respuesta.',
+      detalle: '',
+    })
     return { ok: false }
   }
   return { ok: sesion.motor.reintentar(id) }
 })
 
 ipcMain.handle('app:guardarClaves', (_e, claves) => {
+  // F021: `err` aquí sale de `safeStorage`/`fs`, no de un proveedor, pero
+  // pasa por `sanear()` igual — es la misma frontera proceso-principal →
+  // renderer que las demás, y no puede haber una excepción sin motivo.
   try { return { ok: true, guardadas: guardarClaves(claves) } }
-  catch (err) { return { ok: false, motivo: err.message } }
+  catch (err) { return { ok: false, motivo: sanear(err.message) } }
 })
 
-/** Dice CUÁLES hay, nunca su valor. */
+/**
+ * Dice CUÁLES claves hay, nunca su valor. El ajuste de informes (F039b) no es
+ * un secreto —es una elección de consentimiento— así que este sí viaja tal
+ * cual, con su valor por defecto ("completo", en beta) si el usuario nunca lo
+ * tocó. `informesDisponibles` dice si HAY a quién subir algo: sin
+ * `informes.token.json` la subida está desactivada pase lo que pase el
+ * usuario elija, y Ajustes tiene que poder decirlo.
+ */
 ipcMain.handle('app:estadoClaves', () => {
   const c = leerClaves()
-  return { stt: !!c.stt, llm: !!c.llm, cifradoDisponible: safeStorage.isEncryptionAvailable() }
+  return {
+    stt: !!c.stt,
+    llm: !!c.llm,
+    cifradoDisponible: safeStorage.isEncryptionAvailable(),
+    informes: c.informes || 'completo',
+    informesDisponibles: Boolean(leerTokenInformes()),
+  }
 })
 
 /**
@@ -893,7 +993,9 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
     r.coste = { valor: `$${t.costeAproximadoUsd(0.45)}` }
   } catch (err) {
     r.red = r.red || { mal: true, valor: 'falló' }
-    r.extremo = { mal: true, valor: err.message.slice(0, 60) }
+    // F021: se sanea ANTES de recortar — recortar primero podría partir una
+    // clave a la mitad y dejar fuera del patrón lo que sobrevive al `slice`.
+    r.extremo = { mal: true, valor: sanear(err.message).slice(0, 60) }
   }
   return r
 })
@@ -929,6 +1031,10 @@ ipcMain.handle('app:abrirCarpeta', (_e, ruta) => shell.showItemInFolder(ruta))
 app.whenReady().then(async () => {
   await db.init()
   crearVentana()
+  // F039b: cualquier informe que se quedara pendiente de una reunión anterior
+  // (sin red, VPS caído) se reintenta aquí. Sin `await`: el arranque de la
+  // ventana no puede esperar a una subida.
+  obtenerColaInformes().enviarPendientes().catch(() => {})
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) crearVentana()
   })
@@ -945,4 +1051,9 @@ app.on('before-quit', ev => {
   pararSesion('la aplicación se cerró').finally(() => app.exit(0))
 })
 
-module.exports = { _internos: { guardarClaves, leerClaves, empezarSesion, pararSesion } }
+module.exports = {
+  _internos: {
+    guardarClaves, leerClaves, empezarSesion, pararSesion,
+    leerTokenInformes, maquinaSaneada, obtenerColaInformes,
+  },
+}

@@ -241,27 +241,50 @@ describe('la respuesta va solo en italiano; la pregunta también en español', (
 // ── Criterio 4: un fallo del LLM se dice ────────────────────────────────────
 
 describe('un fallo del LLM se dice, no deja «Preparando…» para siempre', () => {
-  test('si la llamada falla, llega una respuesta con el motivo', async () => {
-    const { llamar } = llmFalso(new Error('OpenAI 429: rate limit'))
+  test('si la llamada falla, llega una respuesta con tipo, mensaje y detalle (F021)', async () => {
+    // El cuerpo tiene forma de lo que de verdad devuelve un proveedor: la
+    // burbuja no puede acabar mostrando esto crudo (F021, medido con Google).
+    const { llamar } = llmFalso(new Error('openai 429: {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota"}}'))
     const m = new MotorRespuestas({ llamar })
 
     const { respuesta } = await preguntarYEsperar(m, 'Hai già parlato con il fornitore del magazzino')
 
     assert.strictEqual(respuesta.texto, null)
-    assert.match(respuesta.error, /rate limit/)
     assert.strictEqual(respuesta.id, 'q1')
+    assert.strictEqual(respuesta.tipo, 'sin_credito')
+    assert.match(respuesta.mensaje, /OpenAI/)
+    assert.match(respuesta.mensaje, /crédito/)
+    assert.doesNotMatch(respuesta.mensaje, /[{}]/, 'nada de JSON en la burbuja')
+    assert.strictEqual(respuesta.error, undefined, 'el campo viejo ya no se usa')
     assert.strictEqual(m.stats.fallos, 1)
     assert.strictEqual(m.stats.respondidas, 0)
   })
 
-  test('una respuesta vacía del modelo también se dice', async () => {
+  test('la clave del usuario no sale ni en mensaje ni en detalle (401 real de OpenAI)', async () => {
+    const claveEnElCuerpo = 'sk-proj-oQ8fALGO1234REAL5678SEISUNOMASOCHO'
+    const { llamar } = llmFalso(new Error(
+      `openai 401: {"error":{"message":"Incorrect API key provided: ${claveEnElCuerpo}."}}`
+    ))
+    const m = new MotorRespuestas({ llamar })
+
+    const { respuesta } = await preguntarYEsperar(m, 'Hai già parlato con il fornitore del magazzino')
+
+    assert.strictEqual(respuesta.tipo, 'clave_invalida')
+    assert.ok(!respuesta.mensaje.includes(claveEnElCuerpo))
+    assert.ok(!respuesta.detalle.includes(claveEnElCuerpo), `se coló en el detalle: ${respuesta.detalle}`)
+    assert.match(respuesta.detalle, /sk-proj-\*\*\*\*/)
+  })
+
+  test('una respuesta vacía del modelo también se dice, como fallo desconocido con detalle aparte', async () => {
     const { llamar } = llmFalso('   ')
     const m = new MotorRespuestas({ llamar })
 
     const { respuesta } = await preguntarYEsperar(m, 'Hai già parlato con il fornitore del magazzino')
 
     assert.strictEqual(respuesta.texto, null)
-    assert.match(respuesta.error, /vacía/)
+    assert.strictEqual(respuesta.tipo, 'desconocido')
+    assert.match(respuesta.mensaje, /desconocido/)
+    assert.match(respuesta.detalle, /vacía/, 'el detalle técnico sigue disponible aparte')
   })
 
   test('si falla el bloque de contexto, también se dice', async () => {
@@ -276,7 +299,7 @@ describe('un fallo del LLM se dice, no deja «Preparando…» para siempre', () 
     const { respuesta } = await preguntarYEsperar(m, 'Hai già parlato con il fornitore del magazzino')
 
     assert.strictEqual(respuesta.texto, null)
-    assert.match(respuesta.error, /base de datos/)
+    assert.match(respuesta.detalle, /base de datos/)
   })
 
   test('«Otra» sobre una pregunta ya olvidada responde con un motivo', async () => {
@@ -291,7 +314,7 @@ describe('un fallo del LLM se dice, no deja «Preparando…» para siempre', () 
 
     assert.strictEqual(r.id, 'q99')
     assert.strictEqual(r.texto, null)
-    assert.match(r.error, /antigua/)
+    assert.match(r.mensaje, /antigua/)
     assert.strictEqual(llamadas.length, 0, 'no se gasta una llamada por un id que ya no existe')
   })
 })

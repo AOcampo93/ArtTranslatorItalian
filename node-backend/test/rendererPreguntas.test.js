@@ -150,26 +150,77 @@ describe('el panel de preguntas', () => {
     assert.strictEqual(r.classList.contains('mal'), false)
   })
 
-  test('un fallo del modelo SE PINTA: no se queda en «Preparando…»', () => {
+  test('un fallo del modelo SE PINTA: no se queda en «Preparando…» (F021: solo `mensaje`, nunca JSON)', () => {
     const p = montarPanel()
     p.pintarPregunta({ id: 'q1', it: 'Hai finito il report', es: '¿Has terminado?' })
-    p.pintarRespuesta({ id: 'q1', texto: null, error: 'OpenAI 429: rate limit' })
+    p.pintarRespuesta({
+      id: 'q1', texto: null,
+      tipo: 'sin_credito',
+      mensaje: 'OpenAI no tiene crédito: hay que recargar la cuenta.',
+      detalle: 'openai 429: {"error":{"type":"insufficient_quota"}}',
+    })
 
     const r = p.tarjeta('q1').querySelector('.respuesta')
     assert.strictEqual(r.classList.contains('cargando'), false, 'sigue diciendo que prepara')
     assert.ok(r.classList.contains('mal'))
-    assert.match(r.textContent, /rate limit/)
+    assert.match(r.textContent, /crédito/)
     assert.match(r.textContent, /Otra/, 'hay que decirle qué puede hacer')
+    assert.doesNotMatch(r.textContent, /[{}]/, 'la burbuja no lleva JSON del proveedor')
+    assert.doesNotMatch(r.textContent, /insufficient_quota/, 'el nombre de campo del proveedor no va en la burbuja')
   })
 
-  test('un fallo sin motivo también se pinta', () => {
+  test('el detalle técnico va APARTE, plegado, y solo aparece si lo hay', () => {
+    const p = montarPanel()
+    p.pintarPregunta({ id: 'q1', it: 'Hai finito il report' })
+    p.pintarRespuesta({
+      id: 'q1', texto: null, tipo: 'desconocido',
+      mensaje: 'Ocurrió un error desconocido al pedir la respuesta.',
+      detalle: 'openai 500: internal server error',
+    })
+
+    const t = p.tarjeta('q1')
+    const verDetalle = t.querySelector('.verDetalle')
+    const caja = t.querySelector('.detalleError')
+
+    assert.strictEqual(verDetalle.classList.contains('oculto'), false, 'hay detalle: el botón se enseña')
+    assert.strictEqual(caja.classList.contains('oculto'), true, 'empieza plegado')
+    assert.strictEqual(caja.textContent, 'openai 500: internal server error')
+
+    verDetalle.onclick()
+    assert.strictEqual(caja.classList.contains('oculto'), false, 'un clic lo despliega')
+    verDetalle.onclick()
+    assert.strictEqual(caja.classList.contains('oculto'), true, 'y otro lo vuelve a plegar')
+  })
+
+  test('sin detalle, el botón «Ver detalle» no se enseña', () => {
+    const p = montarPanel()
+    p.pintarPregunta({ id: 'q1', it: 'Hai finito il report' })
+    p.pintarRespuesta({ id: 'q1', texto: null, mensaje: 'Sin conexión a Internet.' })
+
+    const t = p.tarjeta('q1')
+    assert.strictEqual(t.querySelector('.verDetalle').classList.contains('oculto'), true)
+    assert.strictEqual(t.querySelector('.detalleError').classList.contains('oculto'), true)
+  })
+
+  test('una respuesta buena esconde el «Ver detalle» de un fallo anterior', () => {
+    const p = montarPanel()
+    p.pintarPregunta({ id: 'q1', it: 'Hai finito il report' })
+    p.pintarRespuesta({ id: 'q1', texto: null, mensaje: 'Sin conexión a Internet.', detalle: 'ECONNREFUSED' })
+    p.pintarRespuesta({ id: 'q1', texto: 'Sì, l\'ho finito ieri.' })
+
+    const t = p.tarjeta('q1')
+    assert.strictEqual(t.querySelector('.verDetalle').classList.contains('oculto'), true)
+    assert.strictEqual(t.querySelector('.detalleError').classList.contains('oculto'), true)
+  })
+
+  test('un fallo sin mensaje también se pinta, con un motivo genérico', () => {
     const p = montarPanel()
     p.pintarPregunta({ id: 'q1', it: 'Hai finito il report' })
     p.pintarRespuesta({ id: 'q1', texto: null })
 
     const r = p.tarjeta('q1').querySelector('.respuesta')
     assert.ok(r.classList.contains('mal'))
-    assert.match(r.textContent, /Sin respuesta/)
+    assert.match(r.textContent, /no contestó/)
   })
 
   test('una respuesta para una tarjeta que no existe no rompe nada', () => {
@@ -192,14 +243,14 @@ describe('el panel de preguntas', () => {
   })
 
   test('«Copiar» no copia un aviso de fallo al portapapeles', () => {
-    // Se copia para pegarlo en el chat de la reunión: copiar «Sin respuesta:
-    // rate limit» es peor que no copiar nada.
+    // Se copia para pegarlo en el chat de la reunión: copiar el aviso de
+    // fallo es peor que no copiar nada.
     const p = montarPanel()
     p.pintarPregunta({ id: 'q1', it: 'Hai finito il report' })
     const copiar = p.tarjeta('q1').querySelector('.acciones').hijos[0]
 
     copiar.onclick()                                   // aún «Preparando…»
-    p.pintarRespuesta({ id: 'q1', texto: null, error: 'sin red' })
+    p.pintarRespuesta({ id: 'q1', texto: null, mensaje: 'Sin conexión a Internet.' })
     copiar.onclick()                                   // ahora un fallo
     assert.deepStrictEqual(p.copiado, [])
 
@@ -211,7 +262,7 @@ describe('el panel de preguntas', () => {
   test('«Otra» vuelve a poner «Preparando…» y pide otra redacción', () => {
     const p = montarPanel()
     p.pintarPregunta({ id: 'q1', it: 'Hai finito il report' })
-    p.pintarRespuesta({ id: 'q1', texto: null, error: 'sin red' })
+    p.pintarRespuesta({ id: 'q1', texto: null, mensaje: 'Sin conexión a Internet.' })
 
     const otra = p.tarjeta('q1').querySelector('.acciones').hijos[1]
     otra.onclick()

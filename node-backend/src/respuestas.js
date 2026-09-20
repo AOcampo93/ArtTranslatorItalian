@@ -42,6 +42,7 @@
 const { EventEmitter } = require('events')
 const { analizar } = require('./questionDetector')
 const { promptRespuesta, promptResumen } = require('../../shared/prompts')
+const { clasificarError } = require('./llm')
 
 /** Tope de la respuesta. Es funcional: se lee de un vistazo mientras esperan. */
 const MAX_CARACTERES = 500
@@ -183,10 +184,14 @@ class MotorRespuestas extends EventEmitter {
   reintentar (id) {
     const p = this._vistas.find(v => v.id === id)
     if (!p) {
+      // No es un fallo del LLM: no hay nada técnico que contar aparte, así
+      // que `detalle` va vacío en vez de repetir el mensaje.
       this.emit('respuesta', {
         id,
         texto: null,
-        error: 'esa pregunta ya es demasiado antigua para redactarla otra vez',
+        tipo: 'desconocido',
+        mensaje: 'Esa pregunta ya es demasiado antigua para redactarla otra vez.',
+        detalle: '',
       })
       return false
     }
@@ -233,12 +238,12 @@ class MotorRespuestas extends EventEmitter {
       this.stats.fallos++
       // Se dice que no hay respuesta, en vez de dejar «Preparando…» para
       // siempre: el usuario está en mitad de una reunión y necesita saber que
-      // esto no va a llegar.
-      this.emit('respuesta', {
-        id: pregunta.id,
-        texto: null,
-        error: err.message,
-      })
+      // esto no va a llegar. F021: nunca `err.message` crudo — puede ser el
+      // JSON entero del proveedor, o traer la clave a medio redactar (el 401
+      // de OpenAI). `clasificarError` decide QUÉ pasó y QUÉ hacer; `detalle`
+      // ya viene saneado para el «ver detalle» plegado.
+      const { tipo, mensaje, detalle } = clasificarError(err)
+      this.emit('respuesta', { id: pregunta.id, texto: null, tipo, mensaje, detalle })
     }
   }
 

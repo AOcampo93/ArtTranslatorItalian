@@ -77,6 +77,7 @@
 'use strict'
 
 const { EventEmitter } = require('events')
+const { sanear } = require('./llm')
 
 const HOST = 'wss://streaming.assemblyai.com/v3/ws'
 const MODELO = 'universal-3-5-pro'
@@ -295,6 +296,26 @@ const CIERRES = {
   3007: 'trozo de audio fuera del tamaño permitido',
   3008: 'la sesión llegó al tope de 3 horas',
   3009: 'demasiadas sesiones simultáneas',
+}
+
+/**
+ * F021: lo que manda el servidor en un `Error` del protocolo, o el motivo
+ * de un cierre sin código conocido, no está pensado para pantalla — puede
+ * traer cabeceras de la petición o texto que no dice nada a quien no conoce
+ * la API. Los casos que SÍ se han visto se traducen a algo accionable; el
+ * resto, cuando menos, pasa por `sanear()` antes de salir de este módulo.
+ * Es el mismo trato que F021 le da a los cuerpos de error del LLM.
+ */
+function traducirErrorServidor (bruto) {
+  const texto = String(bruto || '').trim()
+  if (!texto) return 'error sin detalle'
+  if (/too many concurrent sessions/i.test(texto)) {
+    return 'demasiadas sesiones de transcripción abiertas a la vez; espera un momento y reintenta'
+  }
+  if (/unauthorized/i.test(texto)) {
+    return 'credenciales rechazadas'
+  }
+  return sanear(texto)
 }
 
 /** Float32 [-1,1] a PCM16 little-endian. */
@@ -671,8 +692,10 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
       case 'Error':
         // El caso que de verdad muerde: sin plaza libre no hay transcripción,
-        // y suele significar que una sesión anterior quedó sin cerrar.
-        this.emit('error', new Error(`AssemblyAI: ${m.error || 'error sin detalle'}`))
+        // y suele significar que una sesión anterior quedó sin cerrar. F021:
+        // `m.error` es texto del servidor sin pensar en pantalla — se
+        // traduce lo que se conoce y se sanea el resto antes de emitirlo.
+        this.emit('error', new Error(`AssemblyAI: ${traducirErrorServidor(m.error)}`))
         return
     }
   }
@@ -682,7 +705,10 @@ class AssemblyLiveTranscriber extends EventEmitter {
     this._ws = null
     if (this._cerrandoAdrede || !this._corriendo) return
 
-    const explicado = CIERRES[codigo] || motivo || 'sin motivo'
+    // F021: el `motivo` de un código NO catalogado en `CIERRES` es texto
+    // crudo del servidor, así que pasa por `traducirErrorServidor()` igual
+    // que el `Error` del protocolo — es la misma clase de fuga.
+    const explicado = CIERRES[codigo] || (motivo ? traducirErrorServidor(motivo) : 'sin motivo')
     this.emit('error', new Error(`la conexión se cortó (${codigo}: ${explicado})`))
     await this._reconectar()
   }
@@ -708,7 +734,9 @@ class AssemblyLiveTranscriber extends EventEmitter {
         if (abierta) this.emit('estado', 'escuchando')
         return
       } catch (err) {
-        this.emit('error', new Error(`reintento fallido: ${err.message}`))
+        // F021: `err.message` puede traer texto del servidor sin sanear —
+        // por eso pasa por la misma función que el resto de este módulo.
+        this.emit('error', new Error(`reintento fallido: ${sanear(err.message)}`))
       }
     }
     this._reconectando = false
@@ -975,7 +1003,9 @@ class AssemblyLiveTranscriber extends EventEmitter {
         })
       }
     } catch (err) {
-      this.emit('error', new Error(`al cerrar la sesión: ${err.message}`))
+      // F021: mismo trato — este `err` puede venir de un `close` con motivo
+      // del servidor.
+      this.emit('error', new Error(`al cerrar la sesión: ${sanear(err.message)}`))
     } finally {
       try { ws.close() } catch { /* ya estaba */ }
       this._cerrandoAdrede = false
@@ -1065,7 +1095,7 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
 module.exports = { AssemblyLiveTranscriber, SAMPLE_RATE, MODELO, CIERRES }
 module.exports._internos = {
-  aPcm16, rmsDe, acabaEnPuntuacion, construirUrl,
+  aPcm16, rmsDe, acabaEnPuntuacion, construirUrl, traducirErrorServidor,
   MUESTRAS_TROZO, MS_TROZO, MS_TROZO_MIN, MS_TROZO_MAX,
   MAX_CONEXIONES_MIN, ESPERAS_MS, MAX_BUFFER_S, RELEVAR_A_LOS_MS, TOPE_SESION_MS,
   TOPE_TURNO_MS, TOPE_DURO_TURNO_MS, MS_SILENCIO_PARA_FORZAR, UMBRAL_SILENCIO_RMS,

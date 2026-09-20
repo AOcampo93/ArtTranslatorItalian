@@ -152,12 +152,17 @@ function montar ({ traducir, traza = [], alCerrarSocket, autoguardadoRoto = fals
   // las usa por `require` y aquí no hay `require` dentro del `new Function`.
   // Fingirlas convertiría estas pruebas en una comprobación de los dobles.
   const { partirTurno, arrastrar, acabaCerrada } = require('../src/frases')
+  // F021: este tramo incluye `traducirOAvisar` y `guardarYPintar`, que ahora
+  // pasan sus avisos por `sanear()` antes de `aRenderer` — sin inyectarla,
+  // cualquier fallo simulado lanzaría un `ReferenceError` silenciado por el
+  // `.catch` de la cadena, y estas pruebas dejarían de ver el aviso.
+  const { sanear } = require('../src/llm')
   const fabrica = new Function(
     'transcriptor', 'traductor', 'autosave', 'idSesion', 'motor', 'resumen',
     'aRenderer', 'db', 'console', 'sesion',
-    'partirTurno', 'arrastrar', 'acabaCerrada', codigo)
+    'partirTurno', 'arrastrar', 'acabaCerrada', 'sanear', codigo)
   const salida = fabrica(transcriptor, traductor, autosave, 7, motor, resumen,
-    aRenderer, db, consola, null, partirTurno, arrastrar, acabaCerrada)
+    aRenderer, db, consola, null, partirTurno, arrastrar, acabaCerrada, sanear)
 
   return {
     transcriptor,

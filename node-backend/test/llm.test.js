@@ -15,7 +15,7 @@
 const { test, describe } = require('node:test')
 const assert = require('node:assert')
 
-const { crearLlamador, proveedorDeClave, MODELOS, LISTA_DE_MODELOS, _internos } = require('../src/llm')
+const { crearLlamador, proveedorDeClave, MODELOS, LISTA_DE_MODELOS, clasificarError, sanear, _internos } = require('../src/llm')
 
 const CLAVE = {
   anthropic: 'sk-ant-api03-CLAVEFALSA1234',
@@ -239,5 +239,213 @@ describe('un 404 es accionable, no sólo un número', () => {
       assert.doesNotMatch(err.message, /v1\/models/)
       return true
     })
+  })
+})
+
+// ── F021: sanear() tacha cualquier cosa con forma de clave ──────────────────
+
+describe('sanear() tacha cualquier cosa con forma de clave', () => {
+  test('sk-, sk-ant- y sk-proj- se tachan sin perder el prefijo que dice de quién es', () => {
+    assert.strictEqual(sanear('clave: sk-abcdefghijklmnop'), 'clave: sk-****')
+    assert.strictEqual(sanear('clave: sk-ant-api03-abcdefgh'), 'clave: sk-ant-****')
+    assert.strictEqual(sanear('clave: sk-proj-abcdefgh1234'), 'clave: sk-proj-****')
+  })
+
+  test('el 401 real de OpenAI, con la clave dentro, sale sin ella y legible', () => {
+    // Cuerpo real de OpenAI (acortado): la clave viaja DENTRO del texto,
+    // parcialmente redactada por ellos pero con formato de clave completo.
+    const cuerpo = 'Incorrect API key provided: sk-proj-oQ8xxxxxxxxxxxxxxxxxxxxABCD. ' +
+      'You can find your API key at https://platform.openai.com/account/api-keys.'
+    const limpio = sanear(cuerpo)
+    assert.ok(!limpio.includes('sk-proj-oQ8'), `la clave se coló: ${limpio}`)
+    assert.match(limpio, /sk-proj-\*\*\*\*/)
+    assert.match(limpio, /Incorrect API key provided/, 'el resto del texto sigue legible')
+  })
+
+  test('AIza… de Gemini se tacha', () => {
+    assert.strictEqual(sanear('AIzaSyABCDEFGH12345678'), 'AIza****')
+  })
+
+  test('lo que va tras "Bearer " se tacha entero', () => {
+    assert.strictEqual(sanear('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def'), 'Authorization: Bearer ****')
+  })
+
+  test('32 hexadecimales seguidos —formato de AssemblyAI— se tachan', () => {
+    const clave = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4'   // 32 hex
+    assert.strictEqual(clave.length, 32)
+    assert.strictEqual(sanear(`clave: ${clave}`), 'clave: ****')
+  })
+
+  test('un texto sin nada con forma de clave no cambia', () => {
+    assert.strictEqual(sanear('rate limit exceeded'), 'rate limit exceeded')
+  })
+
+  test('null y undefined no revientan', () => {
+    assert.strictEqual(sanear(null), '')
+    assert.strictEqual(sanear(undefined), '')
+  })
+})
+
+// ── F021: clasificarError() — cuerpos REALES de cada proveedor ──────────────
+
+describe('clasificarError() traduce el error técnico a una frase accionable', () => {
+  test('400 de Gemini "API key not valid": clave_invalida, y la clave no sale', async () => {
+    const cuerpoReal = JSON.stringify({
+      error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT' },
+    })
+    const { fetchImpl } = fetchFalso(falloCon(400, cuerpoReal))
+    const llamar = crearLlamador({ clave: CLAVE.gemini, fetchImpl })
+
+    await assert.rejects(() => llamar('s', 'u'), err => {
+      const c = clasificarError(err)
+      assert.strictEqual(c.tipo, 'clave_invalida')
+      assert.match(c.mensaje, /Gemini/)
+      assert.match(c.mensaje, /no es válida/)
+      assert.match(c.mensaje, /Ajustes/)
+      assert.doesNotMatch(c.mensaje, /[{}]/, 'la burbuja no lleva JSON')
+      assert.ok(!c.detalle.includes(CLAVE.gemini))
+      return true
+    })
+  })
+
+  test('401 de OpenAI con "Incorrect API key provided: sk-proj-…": clave_invalida, y la clave NO sale ni en mensaje ni en detalle', async () => {
+    // Es el caso medido en producción: OpenAI devuelve la clave con formato
+    // real (aunque parcialmente redactada por ellos) dentro del 401.
+    const claveEnElCuerpo = 'sk-proj-oQ8fALGO1234REAL5678SEISUNOMASOCHO'
+    const cuerpoReal = JSON.stringify({
+      error: {
+        message: `Incorrect API key provided: ${claveEnElCuerpo}. You can find your API key at https://platform.openai.com/account/api-keys.`,
+        type: 'invalid_request_error', param: null, code: 'invalid_api_key',
+      },
+    })
+    const { fetchImpl } = fetchFalso(falloCon(401, cuerpoReal))
+    const llamar = crearLlamador({ clave: CLAVE.openai, fetchImpl })
+
+    await assert.rejects(() => llamar('s', 'u'), err => {
+      // El `Error` interno SÍ lleva la clave del cuerpo —`motivoDelFallo`
+      // copia 200 caracteres tal cual, y ahí es donde OpenAI la mete—: es la
+      // materia prima que el log necesita. Lo que no puede pasar es que
+      // llegue así a `clasificarError()`.
+      assert.ok(err.message.includes(claveEnElCuerpo), 'la prueba no está probando el caso real si el Error ya viene limpio')
+
+      const c = clasificarError(err)
+      assert.strictEqual(c.tipo, 'clave_invalida')
+      assert.match(c.mensaje, /OpenAI/)
+      assert.match(c.mensaje, /no es válida/)
+      assert.ok(!c.mensaje.includes(claveEnElCuerpo), `la clave se coló en el mensaje: ${c.mensaje}`)
+      assert.ok(!c.detalle.includes(claveEnElCuerpo), `la clave se coló en el detalle: ${c.detalle}`)
+      assert.match(c.detalle, /sk-proj-\*\*\*\*/, 'el detalle sigue siendo legible, solo sin la clave')
+      assert.doesNotMatch(c.mensaje, /[{}]/, 'nada de JSON en la burbuja')
+      return true
+    })
+  })
+
+  test('429 insufficient_quota: sin_credito, no clave_invalida', async () => {
+    const cuerpoReal = JSON.stringify({
+      error: {
+        message: 'You exceeded your current quota, please check your plan and billing details.',
+        type: 'insufficient_quota', param: null, code: 'insufficient_quota',
+      },
+    })
+    const { fetchImpl } = fetchFalso(falloCon(429, cuerpoReal))
+    const llamar = crearLlamador({ clave: CLAVE.openai, fetchImpl })
+
+    await assert.rejects(() => llamar('s', 'u'), err => {
+      const c = clasificarError(err)
+      assert.strictEqual(c.tipo, 'sin_credito')
+      assert.match(c.mensaje, /OpenAI/)
+      assert.match(c.mensaje, /crédito/)
+      return true
+    })
+  })
+
+  test('401 authentication_error de Anthropic: clave_invalida', async () => {
+    const cuerpoReal = JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } })
+    const { fetchImpl } = fetchFalso(falloCon(401, cuerpoReal))
+    const llamar = crearLlamador({ clave: CLAVE.anthropic, fetchImpl })
+
+    await assert.rejects(() => llamar('s', 'u'), err => {
+      const c = clasificarError(err)
+      assert.strictEqual(c.tipo, 'clave_invalida')
+      assert.match(c.mensaje, /Anthropic/)
+      return true
+    })
+  })
+
+  test('ENOTFOUND/ECONNREFUSED: sin_red', async () => {
+    const enotfound = new Error('getaddrinfo ENOTFOUND api.openai.com')
+    enotfound.code = 'ENOTFOUND'
+    assert.deepStrictEqual(clasificarError(enotfound).tipo, 'sin_red')
+
+    const econnrefused = new Error('connect ECONNREFUSED 127.0.0.1:443')
+    econnrefused.code = 'ECONNREFUSED'
+    assert.strictEqual(clasificarError(econnrefused).tipo, 'sin_red')
+    assert.strictEqual(clasificarError(econnrefused).mensaje, 'Sin conexión a Internet.')
+
+    // Y el camino real: `crearLlamador` ya envuelve cualquier fallo de fetch.
+    const { fetchImpl } = fetchFalso(new Error('getaddrinfo ENOTFOUND api.anthropic.com'))
+    const llamar = crearLlamador({ clave: CLAVE.anthropic, fetchImpl })
+    await assert.rejects(() => llamar('s', 'u'), err => {
+      assert.strictEqual(clasificarError(err).tipo, 'sin_red')
+      return true
+    })
+  })
+
+  test('AbortError por plazo: sin_respuesta, nombrando al proveedor', async () => {
+    const expirado = new Error('The operation was aborted due to timeout')
+    expirado.name = 'TimeoutError'
+    const { fetchImpl } = fetchFalso(expirado)
+    const llamar = crearLlamador({ clave: CLAVE.anthropic, fetchImpl, plazoMs: 3000 })
+
+    await assert.rejects(() => llamar('s', 'u'), err => {
+      const c = clasificarError(err)
+      assert.strictEqual(c.tipo, 'sin_respuesta')
+      assert.match(c.mensaje, /Anthropic/)
+      assert.match(c.mensaje, /no respondió a tiempo/)
+      assert.match(c.mensaje, /reintentará/)
+      return true
+    })
+
+    // Un AbortError crudo, sin pasar por `crearLlamador`, también se reconoce.
+    const abort = new Error('aborted')
+    abort.name = 'AbortError'
+    assert.strictEqual(clasificarError(abort).tipo, 'sin_respuesta')
+  })
+
+  test('404 de modelo: modelo_inexistente, nombra el modelo y dónde mirar', async () => {
+    const { fetchImpl } = fetchFalso(falloCon(404, 'This model models/gemini-3.5-flash-lite is no longer available.'))
+    const llamar = crearLlamador({ clave: CLAVE.gemini, fetchImpl })
+
+    await assert.rejects(() => llamar('s', 'u'), err => {
+      const c = clasificarError(err)
+      assert.strictEqual(c.tipo, 'modelo_inexistente')
+      assert.match(c.mensaje, /Gemini/)
+      assert.match(c.mensaje, /gemini-3\.5-flash-lite/)
+      assert.match(c.mensaje, /v1beta\/models/)
+      return true
+    })
+  })
+
+  test('un código desconocido dice que es desconocido, y el detalle va aparte', async () => {
+    const { fetchImpl } = fetchFalso(falloCon(500, 'internal server error, try again'))
+    const llamar = crearLlamador({ clave: CLAVE.openai, fetchImpl })
+
+    await assert.rejects(() => llamar('s', 'u'), err => {
+      const c = clasificarError(err)
+      assert.strictEqual(c.tipo, 'desconocido')
+      assert.match(c.mensaje, /desconocido/)
+      assert.doesNotMatch(c.mensaje, /internal server error/, 'el texto técnico no va en la burbuja')
+      assert.match(c.detalle, /internal server error/, 'pero sí está disponible aparte')
+      return true
+    })
+  })
+
+  test('falta la clave / clave no reconocida: config, no red, y se clasifican igual', () => {
+    assert.strictEqual(clasificarError(new Error('falta la clave del modelo de lenguaje')).tipo, 'clave_invalida')
+    const c = clasificarError(new Error(
+      'no se reconoce esa clave: se esperaba una de Anthropic (sk-ant-), OpenAI (sk-) o Google (AIza)'
+    ))
+    assert.strictEqual(c.tipo, 'clave_invalida')
+    assert.match(c.mensaje, /Ajustes/)
   })
 })

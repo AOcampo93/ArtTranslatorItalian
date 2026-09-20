@@ -153,6 +153,124 @@ async function motivoDelFallo (resp, prov, modelo) {
          `mira los que siguen vivos con ${LISTA_DE_MODELOS[prov]}`
 }
 
+/**
+ * ## F021 — de un `Error` técnico a una frase que el usuario puede actuar
+ *
+ * **El problema medido:** la burbuja de respuesta volcaba el JSON entero de
+ * Google —`code`, `message`, `status`, `@type`, `details`— y el 401 de OpenAI
+ * trae la clave PARCIALMENTE REDACTADA en su propio texto
+ * («Incorrect API key provided: sk-proj-…»), que acababa pintado y copiable.
+ * `[medido]`
+ *
+ * **Por qué esto vive en `llm.js` y no en el renderer:** el texto crudo del
+ * proveedor no debe cruzar NUNCA la frontera del proceso principal. Que
+ * `clasificarError` viva junto a quien construye esos mensajes es lo que
+ * garantiza que la única forma de fabricar un fallo del LLM sea también la
+ * única forma de clasificarlo: no hay un segundo sitio que se pueda olvidar.
+ *
+ * **Por qué no cambia lo que lanza `crearLlamador`:** `llm.test.js` ya prueba
+ * que el `Error` interno lleva el proveedor y el código (`openai 401: …`) sin
+ * la clave — eso es la materia prima. `clasificarError` es la traducción de
+ * esa materia prima a algo que un usuario no técnico puede leer y actuar, y
+ * vive aparte para que ninguno de los dos pierda su trabajo: uno cuenta la
+ * verdad completa (al log), el otro cuenta lo que hace falta (a la pantalla).
+ */
+const NOMBRE_PROVEEDOR = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini' }
+
+/** Cuerpos reales que dicen «la clave está mal», más allá del 401 genérico. */
+const RE_CLAVE_INVALIDA = /api[ _-]?key.{0,20}not valid|incorrect api key|invalid api key|authentication_error|invalid x-api-key/i
+/** Lo que un 429 de verdad dice cuando el problema es DINERO, no ritmo. */
+const RE_SIN_CREDITO = /insufficient_quota|exceeded.{0,30}quota|billing|credit/i
+
+/**
+ * @param {Error} err  lo que lanzó `llamar()`, o un error de red/plazo crudo
+ * @returns {{ tipo: 'clave_invalida'|'sin_credito'|'sin_red'|'sin_respuesta'|'modelo_inexistente'|'desconocido', mensaje: string, detalle: string }}
+ */
+function clasificarError (err) {
+  const msg = String(err?.message ?? err ?? '')
+  const detalle = sanear(msg)
+
+  // Config, no red: `crearLlamador` lanza esto ANTES de tocar la red, cuando
+  // no hay clave o su prefijo no se reconoce. No lleva el formato
+  // "proveedor código: cuerpo" de más abajo, así que se saca aparte.
+  if (/^falta la clave/i.test(msg)) {
+    return { tipo: 'clave_invalida', mensaje: 'Falta la clave del modelo de lenguaje. Añádela en Ajustes.', detalle }
+  }
+  if (/^no se reconoce esa clave/i.test(msg)) {
+    return {
+      tipo: 'clave_invalida',
+      mensaje: 'La clave que pegaste no se reconoce: usa una de Anthropic, OpenAI o Google. Revísala en Ajustes.',
+      detalle,
+    }
+  }
+
+  // Sin red: el `catch` de `crearLlamador` ya reduce cualquier fallo de fetch
+  // a "no se pudo hablar con X" para no reenviar la URL (que con Gemini
+  // llevaría la clave); un `ENOTFOUND`/`ECONNREFUSED` que llegue crudo —de
+  // otro camino que no pase por ahí— se reconoce por su código.
+  if (err?.code === 'ENOTFOUND' || err?.code === 'ECONNREFUSED' || /no se pudo hablar con/i.test(msg)) {
+    return { tipo: 'sin_red', mensaje: 'Sin conexión a Internet.', detalle }
+  }
+
+  // Sin respuesta: se agotó el plazo. El nombre del proveedor, si lo lleva el
+  // mensaje ("openai no respondió en 20 s"), se usa para nombrarlo; si no
+  // —un `AbortError` que llega por otro camino—, se dice en general.
+  if (err?.name === 'AbortError' || err?.name === 'TimeoutError' || /no respondió en/i.test(msg)) {
+    const prov = msg.match(/^(\w+) no respondió en/i)?.[1]?.toLowerCase()
+    const quien = NOMBRE_PROVEEDOR[prov] || 'El modelo'
+    return { tipo: 'sin_respuesta', mensaje: `${quien} no respondió a tiempo; se reintentará.`, detalle }
+  }
+
+  // El formato que arma `crearLlamador`: "proveedor código: cuerpo".
+  const m = msg.match(/^(\w+)\s+(\d{3}):?\s*([\s\S]*)$/)
+  if (!m) {
+    return { tipo: 'desconocido', mensaje: 'Ocurrió un error desconocido al pedir la respuesta. El detalle técnico está más abajo.', detalle }
+  }
+  const [, provCrudo, statusTexto, cuerpo] = m
+  const prov = provCrudo.toLowerCase()
+  const status = Number(statusTexto)
+  const quien = NOMBRE_PROVEEDOR[prov] || provCrudo
+
+  if (status === 404) {
+    const modelo = cuerpo.match(/modelo\s+"([^"]+)"/)?.[1] || 'configurado'
+    const lista = LISTA_DE_MODELOS[prov] ? `opciones: ${LISTA_DE_MODELOS[prov]}` : 'consulta la documentación del proveedor'
+    return { tipo: 'modelo_inexistente', mensaje: `El modelo ${modelo} no existe en ${quien}; ${lista}.`, detalle }
+  }
+  if (status === 401 || RE_CLAVE_INVALIDA.test(cuerpo)) {
+    return { tipo: 'clave_invalida', mensaje: `La clave de ${quien} no es válida. Revísala en Ajustes.`, detalle }
+  }
+  if (status === 429 && RE_SIN_CREDITO.test(cuerpo)) {
+    return { tipo: 'sin_credito', mensaje: `${quien} no tiene crédito: hay que recargar la cuenta.`, detalle }
+  }
+  return {
+    tipo: 'desconocido',
+    mensaje: `${quien} devolvió un error desconocido (código ${status}). El detalle técnico está más abajo.`,
+    detalle,
+  }
+}
+
+/**
+ * Tacha todo lo que tenga forma de clave, para que NINGÚN texto de proveedor
+ * llegue crudo a un log, a un `.jsonl` o a la pantalla.
+ *
+ * Los prefijos con guion (`sk-ant-`, `sk-proj-`) se tachan ANTES que el `sk-`
+ * genérico: si el genérico corriera primero se comería el prefijo que dice de
+ * quién es la clave, y el «ver detalle» perdería la única pista inocua que
+ * vale la pena conservar (qué proveedor, no qué clave).
+ */
+function sanear (texto) {
+  let t = String(texto ?? '')
+  t = t.replace(/sk-ant-[A-Za-z0-9_-]{8,}/g, 'sk-ant-****')
+  t = t.replace(/sk-proj-[A-Za-z0-9_-]{8,}/g, 'sk-proj-****')
+  t = t.replace(/sk-(?!ant-|proj-)[A-Za-z0-9_-]{8,}/g, 'sk-****')
+  t = t.replace(/AIza[A-Za-z0-9_-]{8,}/g, 'AIza****')
+  t = t.replace(/Bearer\s+\S+/gi, 'Bearer ****')
+  // Formato de la clave de AssemblyAI: 32 hexadecimales seguidos, sin prefijo
+  // que valga la pena conservar.
+  t = t.replace(/\b[0-9a-fA-F]{32}\b/g, '****')
+  return t
+}
+
 // ── Un armador de petición por proveedor ────────────────────────────────────
 // Cada uno devuelve { url, opciones } y sabe sacar el texto de su respuesta.
 
@@ -258,8 +376,10 @@ function crearLlamador ({ clave, proveedor, modelo, fetchImpl, plazoMs = PLAZO_M
       // El mensaje de red puede traer la URL; con Gemini eso bastaba para
       // filtrar la clave si viajara en la query. No se reenvía tal cual.
       const seAgotó = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+      // El proveedor va DENTRO del mensaje (no solo en el `Error` sin tocar)
+      // porque `clasificarError` lo lee de ahí para nombrarlo en el aviso.
       throw new Error(seAgotó
-        ? `el modelo no respondió en ${Math.round(plazoMs / 1000)} s`
+        ? `${prov} no respondió en ${Math.round(plazoMs / 1000)} s`
         : `no se pudo hablar con ${prov}`)
     }
 
@@ -270,5 +390,8 @@ function crearLlamador ({ clave, proveedor, modelo, fetchImpl, plazoMs = PLAZO_M
   }
 }
 
-module.exports = { crearLlamador, proveedorDeClave, MODELOS, LISTA_DE_MODELOS, MAX_TOKENS, PLAZO_MS }
-module.exports._internos = { quitarVallas, API, motivoDelFallo }
+module.exports = {
+  crearLlamador, proveedorDeClave, MODELOS, LISTA_DE_MODELOS, MAX_TOKENS, PLAZO_MS,
+  clasificarError, sanear,
+}
+module.exports._internos = { quitarVallas, API, motivoDelFallo, NOMBRE_PROVEEDOR }
