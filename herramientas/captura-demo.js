@@ -47,9 +47,13 @@ async function main () {
   // gráfica (el caso normal de quien construye esto: macOS, en un
   // contenedor). `capturePage()` funciona igual sobre un `BrowserWindow`
   // offscreen.
+  // F035: 440×900 y no 1120×780 — la app ya no es una ventana ancha de dos
+  // columnas, es angosta y alta, pegada al borde de la pantalla. Las
+  // capturas tienen que enseñar la app tal como el cliente la va a ver, no
+  // la geometría vieja.
   const ventana = new BrowserWindow({
-    width: 1120,
-    height: 780,
+    width: 440,
+    height: 900,
     show: false,
     backgroundColor: '#0B0F14',
     webPreferences: { offscreen: true, contextIsolation: true, nodeIntegration: false },

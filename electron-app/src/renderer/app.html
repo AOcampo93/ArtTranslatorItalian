@@ -13,6 +13,20 @@
    */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+  /* ── Barra de desplazamiento discreta (F034) ───────────────────────
+     Pedido del cliente: nada de la barra ancha y gris de Chromium en
+     Windows. Un selector global y no uno por zona: hay tres sitios con
+     scroll hoy (conversación, preguntas, preparación) y varios más
+     (perfiles, conversaciones, ajustes, el chip de contexto) que no pueden
+     quedarse con la barra por defecto sólo porque nadie los listó aquí. */
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 999px; }
+  *::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.32); }
+  /* Sin flechas de subir/bajar en los extremos: son las que más chocan con un
+     fondo oscuro y las que menos se usan con rueda o trackpad. */
+  *::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
   :root {
     --bg: #0B0F14; --sup: #11161D; --sup2: #161C25; --linea: #222A35;
     --tx: #E6EDF3; --tx2: #8B949E; --tx3: #565F6B;
@@ -30,20 +44,45 @@
   }
 
   /* ── Barra superior ─────────────────────────────────────────────── */
+  /* F035: a 440 px de ancho no cabe todo en una sola fila (piloto, estado,
+     retardo, Detener, ajustes). `flex-wrap` deja que lo que sobre baje a una
+     segunda línea COMO PÍLDORA ENTERA — eso es legible — en vez de partir el
+     texto de cada una a media palabra, que es lo que pasaba sin esto. */
   header {
-    display: flex; align-items: center; gap: 12px;
-    padding: 10px 14px; border-bottom: 1px solid var(--linea);
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+    padding: 8px 12px; border-bottom: 1px solid var(--linea);
     background: var(--sup); flex: none; -webkit-app-region: drag;
   }
   header button, header select { -webkit-app-region: no-drag; }
   .marca { font-weight: 600; font-size: 13px; letter-spacing: -.01em; }
-  .estado { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx2); }
+  .estado { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx2); white-space: nowrap; }
   .punto { width: 8px; height: 8px; border-radius: 50%; background: var(--tx3); flex: none; }
   .punto.vivo { background: var(--ok); animation: latir 1.6s ease-in-out infinite; }
   .punto.mal  { background: var(--mal); }
   .punto.aviso { background: var(--aviso); }
   @keyframes latir { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
   .hueco { flex: 1; }
+
+  /* ── Piloto «AL AIRE» (F034) ────────────────────────────────────────
+     Pedido del cliente: un testigo tipo radio que diga, de un vistazo,
+     si la app está oyendo la reunión — rojo con pulso mientras escucha,
+     ámbar (sin pulso: aún no hay nada que "esté al aire") al conectar,
+     gris apagado el resto del tiempo. */
+  .alaire {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 700; letter-spacing: .05em;
+    color: var(--tx3); white-space: nowrap;
+  }
+  .piloto { width: 7px; height: 7px; border-radius: 50%; background: var(--tx3); flex: none; }
+  .piloto.vivo { background: var(--mal); animation: latirLento 2.4s ease-in-out infinite; }
+  .piloto.conectando { background: var(--aviso); }
+  @keyframes latirLento { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+  /* El pulso es movimiento en pantalla, no información: quien pidió menos
+     animación del sistema no necesita verlo parpadear para saber que está
+     al aire, el color ya lo dice. */
+  @media (prefers-reduced-motion: reduce) {
+    .piloto.vivo { animation: none; }
+  }
 
   .chip {
     font-size: 11px; padding: 3px 8px; border-radius: 999px;
@@ -55,7 +94,7 @@
   /* El retardo en vivo: el cliente lo pidió para poder comparar con la
      versión local cuando exista. Es la cadena entera —oír + traducir—, no
      una sola pierna. */
-  .retardo { font-family: var(--mono); font-size: 11.5px; color: var(--tx2); }
+  .retardo { font-family: var(--mono); font-size: 11.5px; color: var(--tx2); white-space: nowrap; }
   .retardo b { color: var(--tx); font-weight: 600; }
   .retardo.lento b { color: var(--aviso); }
 
@@ -67,23 +106,36 @@
   button:disabled { background: var(--sup2); color: var(--tx3); cursor: default; }
   button.sec { background: transparent; border: 1px solid var(--linea); color: var(--tx2); font-weight: 500; }
   button.sec:hover:not(:disabled) { border-color: var(--tx3); color: var(--tx); }
-  button.parar { background: var(--mal); color: #2B0907; }
+  /* Grande a propósito (F034): es el único botón que hay que poder pulsar
+     sin apuntar mientras se está leyendo la burbuja, no escribiendo. Vive en
+     la cabecera, fuera de las zonas con scroll, así que nunca queda tapado
+     por el desplazamiento de la conversación o de las preguntas. */
+  button.parar { background: var(--mal); color: #2B0907; padding: 8px 20px; font-size: 13.5px; }
   button.icono { background: none; border: none; color: var(--tx2); font-size: 17px; padding: 4px 8px; }
   button.icono:hover { color: var(--tx); }
 
-  /* ── Zona principal ─────────────────────────────────────────────── */
-  main { flex: 1; display: flex; min-height: 0; }
+  /* ── Zona principal, en columna (F035) ──────────────────────────────
+     Pedido del cliente: la ventana es angosta y alta, así que ya no caben
+     dos columnas lado a lado — transcripción ARRIBA y preguntas ABAJO, con
+     un reparto 60/40 del alto disponible. Se hace con `flex-grow` (6 y 4) y
+     no con un `%` fijo: así el reparto se mantiene si la ventana cambia de
+     alto, sin recalcular nada. */
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
   #conversacion {
-    flex: 1; overflow-y: auto; padding: 16px 14px 20px;
+    flex: 6 1 0; overflow-y: auto; padding: 14px 12px 16px;
     display: flex; flex-direction: column; gap: 10px; min-width: 0;
   }
 
   /* ── Burbujas ───────────────────────────────────────────────────── */
   .burbuja {
-    max-width: 78%; align-self: flex-start;
+    /* 92% y no el 78% de la versión de dos columnas: a 440 px de ancho un
+       78% deja apenas sitio para un par de palabras por línea, y la burbuja
+       tiene que envolver el texto, no partirlo en escalones. */
+    max-width: 92%; align-self: flex-start;
     background: var(--burbuja); border-radius: 14px 14px 14px 4px;
     padding: 9px 13px; animation: entrar .18s ease-out;
+    overflow-wrap: break-word;
   }
   @keyframes entrar { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
 
@@ -116,18 +168,20 @@
   .vacio { margin: auto; text-align: center; color: var(--tx3); font-size: 13px; max-width: 320px; }
   .vacio b { display: block; color: var(--tx2); font-size: 14px; margin-bottom: 6px; font-weight: 600; }
 
-  /* ── Zona de preguntas ──────────────────────────────────────────── */
+  /* ── Zona de preguntas, debajo (F035) ─────────────────────────────
+     40% del alto, con `border-top` en vez de `border-left`: ya no es la
+     columna de la derecha, es el panel de abajo. */
   #preguntas {
-    width: 330px; flex: none; border-left: 1px solid var(--linea);
+    width: auto; flex: 4 1 0; border-left: none; border-top: 1px solid var(--linea);
     background: var(--sup); display: flex; flex-direction: column; min-height: 0;
   }
   .titulo {
-    padding: 9px 13px; font-size: 11px; font-weight: 600; letter-spacing: .06em;
+    padding: 7px 12px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
     text-transform: uppercase; color: var(--tx3); border-bottom: 1px solid var(--linea);
-    display: flex; align-items: center; gap: 7px;
+    display: flex; align-items: center; gap: 7px; flex: none;
   }
   .cuenta { background: var(--sup2); border-radius: 999px; padding: 1px 7px; font-size: 10px; }
-  #listaPreguntas { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  #listaPreguntas { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 
   .pregunta { background: var(--sup2); border-radius: 10px; padding: 10px 12px; border-left: 2px solid var(--aviso); }
   /* La PREGUNTA sí lleva las dos lenguas: el usuario necesita saber qué le han
@@ -156,17 +210,28 @@
   .acciones { display: flex; gap: 6px; margin-top: 7px; }
   .acciones button { font-size: 11px; padding: 4px 9px; }
 
-  /* ── Contexto general, colapsado por defecto ────────────────────── */
-  #contexto { border-top: 1px solid var(--linea); background: var(--sup); flex: none; }
+  /* ── Contexto general, colapsado en un chip (F035) ─────────────────
+     Pedido del cliente: a 440 px de ancho, una barra entera de "De qué se
+     está hablando" ya no cabe como sección propia sin robarle alto a la
+     transcripción y a las preguntas. Es un `<details>` igual que antes —el
+     comportamiento de abrir/cerrar no cambia—, pero el `summary` colapsado
+     se ve y se comporta como un chip pequeño, no como una barra a lo ancho. */
+  #contexto { border-top: none; background: transparent; flex: none; }
   #contexto summary {
-    padding: 8px 14px; cursor: pointer; font-size: 11px; font-weight: 600;
-    letter-spacing: .06em; text-transform: uppercase; color: var(--tx3);
-    list-style: none; display: flex; align-items: center; gap: 8px;
+    display: inline-flex; align-items: center; gap: 6px; margin: 6px 0 0 12px;
+    padding: 3px 9px; cursor: pointer; font-size: 10px; font-weight: 600;
+    letter-spacing: .05em; text-transform: uppercase; color: var(--tx3);
+    background: var(--sup2); border: 1px solid var(--linea); border-radius: 999px;
+    list-style: none; max-width: calc(100% - 24px);
   }
   #contexto summary::-webkit-details-marker { display: none; }
-  #contexto summary::before { content: '▸'; font-size: 10px; transition: transform .15s; }
+  #contexto summary::before { content: '▸'; font-size: 9px; transition: transform .15s; flex: none; }
   #contexto[open] summary::before { transform: rotate(90deg); }
-  #contexto .cuerpo { padding: 0 14px 12px; font-size: 13px; color: var(--tx2); max-height: 130px; overflow-y: auto; }
+  #contexto .cuerpo {
+    margin: 4px 12px 0; padding: 8px 10px; font-size: 12.5px; color: var(--tx2);
+    max-height: 130px; overflow-y: auto; background: var(--sup); border: 1px solid var(--linea);
+    border-radius: 8px;
+  }
 
   /* ── Pantalla de preparación ────────────────────────────────────── */
   #preparar { flex: 1; overflow-y: auto; padding: 22px; }
@@ -278,9 +343,11 @@
   /* Selector de perfil del paso 1: elegir de la lista o crear uno nuevo. */
   .sel-existente { margin-bottom: 11px; }
 
+  /* F035: la ventana en vivo ya es angosta por diseño (`main#envivo` arriba
+     va siempre en columna), así que esta regla ya sólo hace falta para las
+     pantallas de un solo formulario ancho (inicio, perfiles…), que siguen
+     usando una rejilla de dos columnas por encima de los 820 px. */
   @media (max-width: 820px) {
-    main { flex-direction: column; }
-    #preguntas { width: auto; border-left: none; border-top: 1px solid var(--linea); max-height: 45%; }
     .accesos { grid-template-columns: 1fr; }
   }
 </style>
@@ -288,12 +355,11 @@
 <body>
 
 <header>
-  <span class="marca">Traductor IT → ES</span>
-  <span class="chip nube" id="chipModo">Nube</span>
+  <span class="alaire"><span class="piloto" id="piloto"></span>AL AIRE</span>
   <div class="estado"><span class="punto" id="punto"></span><span id="txtEstado">Sin iniciar</span></div>
-  <span class="hueco"></span>
   <span class="retardo oculto" id="retardo">retardo <b>—</b></span>
-  <button class="sec oculto" id="btnParar">Detener</button>
+  <span class="hueco"></span>
+  <button class="parar oculto" id="btnParar">Detener</button>
   <button class="icono" id="btnAjustes" title="Ajustes">⚙</button>
 </header>
 
@@ -510,9 +576,18 @@ const api = window.app || null
 const DEMO = !api
 
 // ── Estado de pantalla ────────────────────────────────────────────────
+/**
+ * El mismo `clase` que ya llega de `mainApp.js` (`vivo`/`aviso`/`mal`/``)
+ * decide también el piloto «AL AIRE» de la cabecera (F034): rojo con pulso
+ * mientras se escucha de verdad, ámbar sin pulso mientras se conecta o se
+ * reconecta, y apagado el resto — nunca un segundo mapa de estados que
+ * pudiera desentonar con el texto de al lado.
+ */
 function estado (clase, texto) {
   $('#punto').className = 'punto' + (clase ? ' ' + clase : '')
   $('#txtEstado').textContent = texto
+  const piloto = $('#piloto')
+  if (piloto) piloto.className = 'piloto' + (clase === 'vivo' ? ' vivo' : clase === 'aviso' ? ' conectando' : '')
 }
 
 // El p50 del rótulo de arriba. Lo que entra aquí tiene que ser la CADENA

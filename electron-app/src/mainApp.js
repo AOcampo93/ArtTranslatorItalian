@@ -29,7 +29,7 @@
 
 'use strict'
 
-const { app, BrowserWindow, ipcMain, safeStorage, shell, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, safeStorage, shell, dialog, screen } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -45,6 +45,7 @@ const { MotorRespuestas, MotorResumen } = require(path.join(BACK, 'respuestas'))
 const { crearLlamador, clasificarError, sanear } = require(path.join(BACK, 'llm'))
 const { ColaDeInformes } = require(path.join(BACK, 'informes'))
 const { percentil, duracionMs, costeStt, costeLlm } = require(path.join(BACK, 'coste'))
+const { calcularBounds, leerEstado, guardarEstado } = require(path.join(BACK, 'ventanaEstado'))
 
 let ventana = null
 let sesion = null          // { transcriptor, traductor, autosave, inicio, ... }
@@ -121,13 +122,35 @@ function obtenerColaInformes () {
   return colaInformes
 }
 
+// F035: dónde se guarda la posición/tamaño que el usuario deja al mover o
+// redimensionar la ventana. En el directorio de datos, como las claves y las
+// reuniones: sobrevive a una actualización de la app.
+const RUTA_VENTANA = () => path.join(app.getPath('userData'), 'ventana.json')
+
+/**
+ * Cuánto se espera tras un `resize`/`move` antes de guardar (F035).
+ *
+ * Windows dispara estos eventos varias veces por segundo mientras se arrastra
+ * el borde; escribir a disco en cada uno sería un `writeFileSync` por frame
+ * de arrastre. 400 ms después del último evento es indistinguible para el
+ * usuario y evita ese machaqueo.
+ */
+const GUARDAR_VENTANA_DEBOUNCE_MS = 400
+
 // ── Ventana ───────────────────────────────────────────────────────────
 function crearVentana () {
+  // F035: angosta (440 px), del alto entero del área de trabajo, pegada al
+  // borde derecho — o donde el usuario la haya dejado la última vez. El
+  // cálculo vive en `ventanaEstado.js`, aparte de Electron, para poder
+  // probarlo con un doble de `screen` sin abrir ninguna ventana.
+  const workArea = screen.getPrimaryDisplay().workArea
+  const guardado = leerEstado(RUTA_VENTANA())
+  const bounds = calcularBounds({ workArea, guardado })
+
   ventana = new BrowserWindow({
-    width: 1120,
-    height: 780,
-    minWidth: 720,
-    minHeight: 520,
+    ...bounds,
+    minWidth: 380,
+    minHeight: 480,
     backgroundColor: '#0B0F14',
     title: 'Traductor Italiano',
     webPreferences: {
@@ -136,6 +159,21 @@ function crearVentana () {
       nodeIntegration: false,
     },
   })
+
+  // Se guarda con el mismo criterio en las dos vías por las que la ventana
+  // puede cambiar de sitio: `resize` (el borde) y `move` (arrastrar por la
+  // cabecera). `getBounds()` y no los argumentos del evento: da la geometría
+  // YA asentada, y es la misma forma que espera `calcularBounds` al releerla.
+  let reloj = null
+  const guardarMasTarde = () => {
+    clearTimeout(reloj)
+    reloj = setTimeout(() => {
+      if (!ventana || ventana.isDestroyed()) return
+      guardarEstado(RUTA_VENTANA(), ventana.getBounds())
+    }, GUARDAR_VENTANA_DEBOUNCE_MS)
+  }
+  ventana.on('resize', guardarMasTarde)
+  ventana.on('move', guardarMasTarde)
 
   // §0.1 — que la sala no vea las respuestas sugeridas al compartir pantalla.
   ventana.setContentProtection(true)
