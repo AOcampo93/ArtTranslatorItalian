@@ -21,6 +21,12 @@ const { crearServidor, _internos } = require('../servidor')
 const { saneaCabecera, permiteSubida, esIpConfiable, ipCliente, partesFecha, TOPE_BYTES, MAX_SUBIDAS_MIN } = _internos
 
 const TOKEN = 'token-de-prueba-no-es-un-secreto-real'
+const USUARIO_VISTA = 'admin-prueba'
+const CLAVE_VISTA = 'clave-de-prueba-no-es-real'
+
+function basicAuth (usuario, clave) {
+  return { Authorization: `Basic ${Buffer.from(`${usuario}:${clave}`).toString('base64')}` }
+}
 
 function cabecerasValidas (extra = {}) {
   return {
@@ -72,7 +78,7 @@ function peticion ({ puerto, metodo = 'POST', ruta = '/informes', cabeceras = {}
         res.on('data', (t) => trozos.push(t))
         res.on('end', () => {
           asentado = true
-          resolve({ status: res.statusCode, cuerpo: Buffer.concat(trozos).toString('utf8') })
+          resolve({ status: res.statusCode, cuerpo: Buffer.concat(trozos).toString('utf8'), cabeceras: res.headers })
         })
       }
     )
@@ -264,11 +270,16 @@ test('400: X-Maquina con intento de traversal se rechaza (no llega a tocar disco
   }
 })
 
-test('405: GET /informes no está permitido', async () => {
+test('404: GET /informes sin vista privada configurada (F039c cambia el contrato: antes era 405)', async () => {
+  // Antes de F039c, GET /informes solo podía ser 405 (la única ruta era
+  // POST). Ahora esa misma ruta sirve la vista privada, así que sin
+  // INFORMES_USUARIO/INFORMES_CLAVE tiene que comportarse como si no
+  // existiera (404) — ver el criterio "sin esas variables la vista no
+  // existe" en el resto de las pruebas de la vista, más abajo.
   const { servidor, puerto } = await arrancar()
   try {
     const resp = await peticion({ puerto, metodo: 'GET', ruta: '/informes' })
-    assert.strictEqual(resp.status, 405)
+    assert.strictEqual(resp.status, 404)
   } finally {
     await cerrar(servidor)
   }
@@ -411,5 +422,98 @@ test('dos servidores en el mismo proceso no comparten cupo de subidas (cada uno 
   } finally {
     await cerrar(a.servidor)
     await cerrar(b.servidor)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// F039c: prefijo /informes, vista privada y despliegue por Coolify.
+//
+// Política del 20-09-2026 ("dejemos las pruebas para lo esencial"): una
+// prueba por criterio, el camino que motivó la tarea. Sin baterías ni
+// mutaciones adicionales — el freno de la vista (>10 fallos/min → 429)
+// reutiliza el mismo mecanismo que `permiteSubida`, ya probado arriba con
+// sus dos orillas, así que no se repite aquí.
+// ---------------------------------------------------------------------------
+
+test('F039c 201: la subida funciona igual con y sin el prefijo /informes (Traefik puede quitarlo o no)', async () => {
+  const { servidor, puerto } = await arrancar()
+  try {
+    const conPrefijo = await peticion({ puerto, ruta: '/informes', cabeceras: cabecerasValidas({ 'X-Reunion': 'con-prefijo' }), cuerpo: Buffer.from('{}') })
+    assert.strictEqual(conPrefijo.status, 201)
+
+    const sinPrefijo = await peticion({ puerto, ruta: '/', cabeceras: cabecerasValidas({ 'X-Reunion': 'sin-prefijo' }), cuerpo: Buffer.from('{}') })
+    assert.strictEqual(sinPrefijo.status, 201)
+
+    // Mismo mecanismo (`quitaPrefijo`) sirve /salud: se comprueba de paso,
+    // sin gastar una prueba aparte.
+    const saludConPrefijo = await peticion({ puerto, metodo: 'GET', ruta: '/informes/salud' })
+    assert.strictEqual(saludConPrefijo.status, 200)
+    const saludSinPrefijo = await peticion({ puerto, metodo: 'GET', ruta: '/salud' })
+    assert.strictEqual(saludSinPrefijo.status, 200)
+  } finally {
+    await cerrar(servidor)
+  }
+})
+
+test('F039c vista privada: 401 sin credenciales (con WWW-Authenticate) y 200 con las buenas, listando el archivo subido', async () => {
+  const { servidor, puerto } = await arrancar({ usuarioVista: USUARIO_VISTA, claveVista: CLAVE_VISTA })
+  try {
+    const subida = await peticion({ puerto, cabeceras: cabecerasValidas({ 'X-Reunion': 'para-la-vista' }), cuerpo: Buffer.from('{}') })
+    assert.strictEqual(subida.status, 201)
+    const { id } = JSON.parse(subida.cuerpo)
+
+    const sinCredenciales = await peticion({ puerto, metodo: 'GET', ruta: '/informes/' })
+    assert.strictEqual(sinCredenciales.status, 401)
+    assert.match(sinCredenciales.cabeceras['www-authenticate'] || '', /Basic/)
+
+    const credencialesMalas = await peticion({ puerto, metodo: 'GET', ruta: '/informes/', cabeceras: basicAuth(USUARIO_VISTA, 'clave-incorrecta') })
+    assert.strictEqual(credencialesMalas.status, 401)
+
+    const conCredenciales = await peticion({ puerto, metodo: 'GET', ruta: '/informes/', cabeceras: basicAuth(USUARIO_VISTA, CLAVE_VISTA) })
+    assert.strictEqual(conCredenciales.status, 200)
+    assert.ok(conCredenciales.cuerpo.includes(id), 'la vista tiene que listar el archivo recién subido')
+
+    // Criterio F039c "freno de autenticación": >10 fallos/min/IP -> 429. Se
+    // reutiliza esta misma IP en vez de gastar una prueba aparte: ya lleva 2
+    // fallos (sin credenciales, credenciales malas); 8 más suman 10, así que
+    // la petición número 11 —aunque traiga las credenciales buenas— topa con
+    // el freno antes de mirarlas (`fallosAuthRecientes` se consulta antes de
+    // comprobar la credencial, así que el propio freno nunca se cuenta a sí
+    // mismo como un fallo más).
+    for (let i = 0; i < 8; i++) {
+      const fallo = await peticion({ puerto, metodo: 'GET', ruta: '/informes/', cabeceras: basicAuth(USUARIO_VISTA, 'clave-incorrecta') })
+      assert.strictEqual(fallo.status, 401)
+    }
+    const bloqueadaPorFreno = await peticion({ puerto, metodo: 'GET', ruta: '/informes/', cabeceras: basicAuth(USUARIO_VISTA, CLAVE_VISTA) })
+    assert.strictEqual(bloqueadaPorFreno.status, 429)
+  } finally {
+    await cerrar(servidor)
+  }
+})
+
+test('F039c descarga: un intento de traversal no sale de /datos/informes (400 o 404, nunca el archivo)', async () => {
+  const { servidor, puerto } = await arrancar({ usuarioVista: USUARIO_VISTA, claveVista: CLAVE_VISTA })
+  try {
+    const auth = basicAuth(USUARIO_VISTA, CLAVE_VISTA)
+    // '..%2F..%2Fservidor.js' decodifica a '../../servidor.js': el '/' que
+    // resulta lo rechaza rutaSegura antes de tocar el disco.
+    const resp = await peticion({ puerto, metodo: 'GET', ruta: '/informes/2026-09-20/..%2F..%2Fservidor.js', cabeceras: auth })
+    assert.ok([400, 404].includes(resp.status), `esperaba 400 o 404, llegó ${resp.status}`)
+    assert.ok(!resp.cuerpo.includes('crearServidor'), 'no debe devolver el contenido de servidor.js')
+  } finally {
+    await cerrar(servidor)
+  }
+})
+
+test('F039c sin INFORMES_USUARIO/INFORMES_CLAVE: la vista no existe (404) y la subida sigue funcionando (201)', async () => {
+  const { servidor, puerto } = await arrancar() // arrancar() por defecto no pasa usuarioVista/claveVista
+  try {
+    const vista = await peticion({ puerto, metodo: 'GET', ruta: '/informes/' })
+    assert.strictEqual(vista.status, 404)
+
+    const subida = await peticion({ puerto, cabeceras: cabecerasValidas({ 'X-Reunion': 'sin-vista' }), cuerpo: Buffer.from('{}') })
+    assert.strictEqual(subida.status, 201)
+  } finally {
+    await cerrar(servidor)
   }
 })

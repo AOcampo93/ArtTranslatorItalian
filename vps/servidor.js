@@ -1,18 +1,23 @@
 'use strict'
 
 /**
- * Receptor de informes de reuniones (F039a).
+ * Receptor de informes de reuniones (F039a) + vista privada y despliegue
+ * bajo `https://arturoocampo.com/informes` (F039c).
  *
  * Recibe por HTTPS (el TLS lo termina Traefik delante de este contenedor) el
- * `.jsonl` de cada reunión y lo escribe en disco. No hay listado ni descarga
- * por HTTP a propósito: los informes contienen texto de reuniones reales y
- * la única vía de lectura es `ssh` (ver `descargar.sh`), nunca una URL.
+ * `.jsonl` de cada reunión y lo escribe en disco. Coolify sirve esta app bajo
+ * una ruta de un dominio compartido; según cómo quede el router de Traefik,
+ * la petición puede llegar con el prefijo `/informes` intacto o ya quitado
+ * — `quitaPrefijo` normaliza los dos casos a la misma ruta interna, así que
+ * el resto del código no distingue uno de otro (criterio F039c: "POST con y
+ * sin prefijo llega al mismo manejador").
  *
- * Deliberadamente sin dependencias: es un servicio de una sola ruta, no un
- * framework — el espíritu del límite original de ~150 líneas, no la cifra
- * literal (la ronda 2 de revisión añadió el freno por IP real detrás de
- * proxy y el try/catch de la escritura, y con eso ya no cabe en 150). Todo
- * lo que necesita ya está en `http`, `fs`, `path` y `crypto`.
+ * F039c añade una vista privada de solo lectura (listar y descargar por HTTP
+ * Basic) porque revisar los informes por `ssh`/`rsync` a mano no escala con
+ * el volumen de reuniones. Sigue sin haber framework ni dependencias: es más
+ * ruta que antes, pero la misma lógica simple (auth, saneado de ruta, límite
+ * de tasa) que ya tenía la subida. Todo lo que necesita ya está en `http`,
+ * `fs`, `path` y `crypto`.
  */
 
 const http = require('http')
@@ -22,7 +27,9 @@ const crypto = require('crypto')
 
 const TOPE_BYTES = 20 * 1024 * 1024 // 20 MiB — tope del contrato de subida
 const MAX_SUBIDAS_MIN = 30 // subidas por IP y minuto
+const MAX_FALLOS_AUTH_MIN = 10 // fallos de HTTP Basic por IP y minuto, antes de 429 (vista privada)
 const VENTANA_MS = 60 * 1000
+const PREFIJO = '/informes'
 // X-Maquina, X-Version y X-Reunion se usan tal cual para construir un nombre
 // de archivo: el alfabeto cerrado es lo que evita que una cabecera se
 // convierta en una ruta. `..` se rechaza aparte, aunque el propio alfabeto ya
@@ -51,16 +58,61 @@ function saneaCabecera (valor) {
 }
 
 /**
+ * Puro: quita el prefijo `/informes` de la ruta si está, dejando siempre una
+ * ruta que empieza por `/`. Existe porque Coolify sirve esta app bajo una
+ * ruta de un dominio compartido y, según quede montado el router de Traefik,
+ * la petición puede llegar como `/informes/...` o ya sin ese trozo — el
+ * resto del código solo conoce la ruta normalizada, nunca cuál de las dos
+ * formas usó quien llamó.
+ */
+function quitaPrefijo (pathname) {
+  if (pathname === PREFIJO) return '/'
+  if (pathname.startsWith(PREFIJO + '/')) return pathname.slice(PREFIJO.length)
+  return pathname
+}
+
+/**
  * Comparación en tiempo constante que no depende de que `a` y `b` tengan la
  * misma longitud (si no, `timingSafeEqual` lanza). Se compara el HMAC de cada
  * valor con una clave fija de este proceso, así el resultado siempre tiene el
- * mismo tamaño y no hay atajo por longitud.
+ * mismo tamaño y no hay atajo por longitud. La usan tanto el token de subida
+ * como el usuario/clave de la vista privada.
  */
 const CLAVE_COMPARACION = crypto.randomBytes(32)
 function comparaConstante (a, b) {
   const ha = crypto.createHmac('sha256', CLAVE_COMPARACION).update(String(a)).digest()
   const hb = crypto.createHmac('sha256', CLAVE_COMPARACION).update(String(b)).digest()
   return crypto.timingSafeEqual(ha, hb)
+}
+
+/**
+ * Puro: separa las credenciales de una cabecera `Authorization: Basic ...`.
+ * `null` si falta, no es `Basic` o el base64 no trae un `:`.
+ */
+function credencialesBasic (cabecera) {
+  const valor = String(cabecera || '')
+  if (!valor.startsWith('Basic ')) return null
+  let decodificado
+  try {
+    decodificado = Buffer.from(valor.slice(6), 'base64').toString('utf8')
+  } catch {
+    return null
+  }
+  const separador = decodificado.indexOf(':')
+  if (separador === -1) return null
+  return { usuario: decodificado.slice(0, separador), clave: decodificado.slice(separador + 1) }
+}
+
+/** Puro: bytes legibles para la vista ("1.2 MB"), sin depender de ninguna librería. */
+function formateaTamano (bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Puro: escapa texto para insertarlo en HTML — defensivo, aunque los nombres ya pasaron `saneaCabecera` al subir. */
+function escapaHtml (valor) {
+  return String(valor).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
 /**
@@ -113,6 +165,84 @@ function permiteSubida (mapa, ip, ahora = Date.now()) {
   }
   entrada.n += 1
   return entrada.n <= MAX_SUBIDAS_MIN
+}
+
+/**
+ * Puro: cuántos fallos de HTTP Basic lleva `ip` en la ventana actual (0 si no
+ * hay ninguno o la ventana ya caducó). Se consulta ANTES de comprobar las
+ * credenciales, así una IP ya bloqueada recibe 429 sin que la petición
+ * llegue a decidir si el usuario/clave son correctos.
+ */
+function fallosAuthRecientes (mapa, ip, ahora = Date.now()) {
+  const entrada = mapa.get(ip)
+  if (!entrada || ahora - entrada.inicio >= VENTANA_MS) return 0
+  return entrada.n
+}
+
+/** Muta `mapa`: registra un fallo de HTTP Basic de `ip`. Solo se llama cuando la autenticación falla; un éxito no cuenta. */
+function registraFalloAuth (mapa, ip, ahora = Date.now()) {
+  const entrada = mapa.get(ip)
+  if (!entrada || ahora - entrada.inicio >= VENTANA_MS) {
+    mapa.set(ip, { n: 1, inicio: ahora })
+  } else {
+    entrada.n += 1
+  }
+}
+
+/**
+ * Lee `directorioBase` y arma la estructura de la vista: una entrada por
+ * fecha (más reciente primero), con sus archivos `.jsonl` (nombre, tamaño,
+ * hora de escritura). Nunca lanza: un directorio que no existe o no se
+ * puede leer da lista vacía, no un 500 — la vista tiene que sobrevivir a un
+ * `/datos/informes` recién creado y todavía sin nada dentro.
+ */
+function listaInformes (directorioBase) {
+  let fechas = []
+  try {
+    fechas = fs.readdirSync(directorioBase, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort()
+      .reverse()
+  } catch {
+    fechas = []
+  }
+  return fechas.map((fecha) => {
+    const dirDia = path.join(directorioBase, fecha)
+    let archivos = []
+    try {
+      archivos = fs.readdirSync(dirDia)
+        .filter((nombre) => nombre.endsWith('.jsonl'))
+        .map((nombre) => {
+          const info = fs.statSync(path.join(dirDia, nombre))
+          return { nombre, bytes: info.size, hora: info.mtime.toISOString().slice(11, 19) }
+        })
+        .sort((a, b) => a.nombre.localeCompare(b.nombre))
+    } catch {
+      archivos = []
+    }
+    return { fecha, archivos }
+  })
+}
+
+/**
+ * Puro: la ruta absoluta de un informe si `fecha`/`archivo` son seguros, o
+ * `null` si no. Tres capas, ninguna de sobra: la fecha tiene que tener forma
+ * de fecha, el nombre de archivo no puede llevar separador de ruta ni `..`
+ * (así una `X-Maquina` o `X-Reunion` con esos caracteres —ya imposibles al
+ * subir por `saneaCabecera`— tampoco colarían aquí si algún día cambia esa
+ * regla), y por último se resuelve la ruta final y se comprueba que sigue
+ * dentro de `directorioBase` — la red que no depende de haber acertado las
+ * dos anteriores.
+ */
+function rutaSegura (directorioBase, fecha, archivo) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return null
+  if (!archivo.endsWith('.jsonl')) return null
+  if (archivo.includes('..') || archivo.includes('/') || archivo.includes('\\')) return null
+  const base = path.resolve(directorioBase)
+  const destino = path.resolve(base, fecha, archivo)
+  if (!destino.startsWith(base + path.sep)) return null
+  return destino
 }
 
 function responde (res, status, cuerpo, tipo = 'application/json') {
@@ -227,12 +357,99 @@ function manejarInforme (req, res, { token, directorioBase, contadores }) {
 }
 
 /**
+ * Comprueba HTTP Basic contra `usuarioVista`/`claveVista` y aplica el freno
+ * de fallos. Responde ella misma (429 o 401 con `WWW-Authenticate`) y
+ * devuelve `false` cuando no deja pasar; el llamador solo sigue si devuelve
+ * `true`. `Cache-Control: no-store` va en las dos vías, autorizada o no:
+ * nada de lo que sirve la vista debe quedar en una caché intermedia.
+ */
+function autorizaVista (req, res, { usuarioVista, claveVista, contadoresFallosAuth }) {
+  res.setHeader('Cache-Control', 'no-store')
+  const ip = ipCliente(req)
+
+  if (fallosAuthRecientes(contadoresFallosAuth, ip) >= MAX_FALLOS_AUTH_MIN) {
+    responde(res, 429, { error: 'demasiados_intentos' })
+    return false
+  }
+
+  const credenciales = credencialesBasic(req.headers.authorization)
+  // Las dos comparaciones se hacen siempre, aunque la primera ya haya
+  // fallado: con `&&` de cortocircuito, un usuario correcto y una clave
+  // incorrecta tardarían un HMAC más que un usuario ya incorrecto, una
+  // diferencia de tiempo diminuta pero evitable sin coste.
+  const usuarioOk = credenciales ? comparaConstante(credenciales.usuario, usuarioVista) : false
+  const claveOk = credenciales ? comparaConstante(credenciales.clave, claveVista) : false
+  if (!usuarioOk || !claveOk) {
+    registraFalloAuth(contadoresFallosAuth, ip)
+    res.setHeader('WWW-Authenticate', 'Basic realm="Informes ArtTranslator"')
+    responde(res, 401, { error: 'credenciales_invalidas' })
+    return false
+  }
+  return true
+}
+
+/** Página HTML sencilla en castellano: una fecha por bloque, con sus archivos y enlace de descarga. */
+function paginaListado (grupos) {
+  const bloques = grupos.length === 0
+    ? '<p>Todavía no hay informes.</p>'
+    : grupos.map(({ fecha, archivos }) => {
+      const filas = archivos.length === 0
+        ? '<li>(sin archivos)</li>'
+        : archivos.map((a) => {
+          const href = `${PREFIJO}/${encodeURIComponent(fecha)}/${encodeURIComponent(a.nombre)}`
+          return `<li><a href="${href}">${escapaHtml(a.nombre)}</a> — ${formateaTamano(a.bytes)} — ${a.hora}</li>`
+        }).join('\n')
+      return `<h2>${escapaHtml(fecha)}</h2>\n<ul>\n${filas}\n</ul>`
+    }).join('\n')
+
+  return `<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Informes de reuniones</title></head>
+<body>
+<h1>Informes de reuniones</h1>
+${bloques}
+</body>
+</html>`
+}
+
+function manejarVistaListado (req, res, ctx) {
+  if (!autorizaVista(req, res, ctx)) return
+  responde(res, 200, paginaListado(listaInformes(ctx.directorioBase)), 'text/html; charset=utf-8')
+}
+
+function manejarDescarga (req, res, ctx) {
+  if (!autorizaVista(req, res, ctx)) return
+
+  let fecha, archivo
+  try {
+    fecha = decodeURIComponent(ctx.fecha)
+    archivo = decodeURIComponent(ctx.archivo)
+  } catch {
+    return responde(res, 400, { error: 'ruta_invalida' })
+  }
+
+  const destino = rutaSegura(ctx.directorioBase, fecha, archivo)
+  if (!destino) return responde(res, 400, { error: 'ruta_invalida' })
+
+  fs.stat(destino, (error, info) => {
+    if (error || !info.isFile()) return responde(res, 404, { error: 'no_encontrado' })
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson',
+      'Content-Length': info.size,
+      'Content-Disposition': `attachment; filename="${archivo.replace(/"/g, '')}"`,
+      'Cache-Control': 'no-store'
+    })
+    fs.createReadStream(destino).pipe(res)
+  })
+}
+
+/**
  * Fábrica: no arranca a escuchar por sí sola (lo hace quien la llama, con el
  * puerto que le toque — efímero en tests, `PUERTO` en producción). Cada
  * servidor tiene su propio mapa de límite de subidas: dos servidores de test
  * en el mismo proceso no se contaminan entre sí.
  */
-function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO } = {}) {
+function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO, usuarioVista = '', claveVista = '' } = {}) {
   if (!token) {
     throw new Error('INFORMES_TOKEN vacío: el receptor se niega a arrancar sin él')
   }
@@ -245,11 +462,19 @@ function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO } = {})
     throw new Error('INFORMES_TOKEN parece de ejemplo o demasiado corto: pon uno largo y aleatorio')
   }
 
+  // Sin INFORMES_USUARIO o INFORMES_CLAVE (o los dos), la vista privada no
+  // existe: ni una ruta de más responde con ella, para que "no configurada"
+  // y "no encontrada" sean indistinguibles desde fuera (criterio F039c).
+  const vistaActiva = Boolean(usuarioVista) && Boolean(claveVista)
+
   const contadores = new Map()
+  const contadoresFallosAuth = new Map()
   const limpieza = setInterval(() => {
     const ahora = Date.now()
-    for (const [ip, entrada] of contadores) {
-      if (ahora - entrada.inicio >= VENTANA_MS) contadores.delete(ip)
+    for (const mapa of [contadores, contadoresFallosAuth]) {
+      for (const [ip, entrada] of mapa) {
+        if (ahora - entrada.inicio >= VENTANA_MS) mapa.delete(ip)
+      }
     }
   }, VENTANA_MS * 5)
   limpieza.unref() // no debe mantener vivo el proceso, ni colgar `node --test`
@@ -262,8 +487,29 @@ function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO } = {})
       return responde(res, 400, { error: 'url_invalida' })
     }
 
-    if (url.pathname === '/salud') return manejarSalud(req, res)
-    if (url.pathname === '/informes') return manejarInforme(req, res, { token, directorioBase, contadores })
+    // Normalizado una sola vez: de aquí para abajo nadie mira si la
+    // petición traía `/informes` delante o no.
+    const ruta = quitaPrefijo(url.pathname)
+    const ctxVista = { directorioBase, usuarioVista, claveVista, contadoresFallosAuth }
+
+    if (ruta === '/salud') return manejarSalud(req, res)
+
+    if (ruta === '/') {
+      if (req.method === 'POST') return manejarInforme(req, res, { token, directorioBase, contadores })
+      if (req.method === 'GET') {
+        if (!vistaActiva) return responde(res, 404, { error: 'no_encontrado' })
+        return manejarVistaListado(req, res, ctxVista)
+      }
+      return responde(res, 405, { error: 'metodo_no_permitido' })
+    }
+
+    const partes = ruta.split('/').filter(Boolean)
+    if (partes.length === 2) {
+      if (!vistaActiva) return responde(res, 404, { error: 'no_encontrado' })
+      if (req.method !== 'GET') return responde(res, 405, { error: 'metodo_no_permitido' })
+      return manejarDescarga(req, res, { ...ctxVista, fecha: partes[0], archivo: partes[1] })
+    }
+
     return responde(res, 404, { error: 'no_encontrado' })
   })
 
@@ -278,7 +524,11 @@ if (require.main === module) {
     process.exit(1)
   }
   const puerto = Number(process.env.PUERTO) || 3000
-  const servidor = crearServidor({ token })
+  const servidor = crearServidor({
+    token,
+    usuarioVista: process.env.INFORMES_USUARIO || '',
+    claveVista: process.env.INFORMES_CLAVE || ''
+  })
   servidor.listen(puerto, '0.0.0.0', () => {
     console.log(`Receptor de informes escuchando en 0.0.0.0:${puerto}`)
   })
