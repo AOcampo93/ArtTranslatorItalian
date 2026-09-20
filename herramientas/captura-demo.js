@@ -115,6 +115,16 @@ async function main () {
   await esperar(2200)
   await capturar('envivo-demo')
 
+  // 7b) F041: la misma pantalla, ensanchada a 1100 px — a partir de 900 px la
+  // vista en vivo pasa a dos columnas (traducción a la izquierda, preguntas a
+  // la derecha). Se vuelve a 440 px después, porque el resto del guion asume
+  // la ventana angosta de F035.
+  ventana.setSize(1100, 900)
+  await esperar(200)
+  await capturar('envivo-demo-ancho')
+  ventana.setSize(440, 900)
+  await esperar(200)
+
   // 8) Conversaciones (acceso a reuniones anteriores).
   await ejecutar(`document.getElementById('btnParar')?.click()`)
   await esperar(400)   // F032: vuelta automática al panel de inicio, tras el resumen

@@ -696,3 +696,33 @@ describe('F032 — al terminar la reunión, vuelta automática al panel de inici
       'tiene que volver sola al panel de inicio, no a una pantalla muerta')
   })
 })
+
+describe('F041 — el italiano en vivo se ve mientras se traduce', () => {
+  // Lo que el cliente leyó como «se come palabras» eran hasta 19 s de hueco
+  // entre burbujas definitivas [medido]: la frase entera se pintaba de golpe
+  // al final del turno. `pintarParcial` ya recibía el italiano según llega
+  // (cada ~300 ms), pero eso solo sirve si se ve en la conversación — no en
+  // la barra de estado, que es donde el aviso decía que se estaba quedando.
+  test('pintarParcial pinta el italiano en la conversación, no en la barra', () => {
+    const b = montar()
+    const barraAntes = b.barra()
+
+    b.pintarParcial('Buongiorno a tu')
+
+    const burbujas = b.burbujas()
+    assert.strictEqual(burbujas.length, 1, 'el parcial tiene que verse como burbuja')
+    assert.strictEqual(burbujas[0].querySelector('.es').textContent, 'Buongiorno a tu')
+    assert.strictEqual(b.barra(), barraAntes, 'y la barra de estado no se toca')
+  })
+
+  test('al llegar la frase definitiva, sustituye a la parcial en su sitio', () => {
+    const b = montar()
+    b.pintarParcial('Buongiorno')
+
+    b.pintarFrase({ it: 'Buongiorno a tutti.', es: 'Buenos días a todos.', msTranscribir: 200, msTraducir: 50 })
+
+    const burbujas = b.burbujas()
+    assert.strictEqual(burbujas.length, 1, 'la parcial no puede quedar duplicada junto a la definitiva')
+    assert.strictEqual(b.es(0), 'Buenos días a todos.')
+  })
+})

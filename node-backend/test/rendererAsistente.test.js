@@ -96,14 +96,16 @@ function montar () {
     'n1', 'n2', 'n3', 'btnEscuchar', 'pistaEscuchar', 'pasos',
     'btnProbar', 'btnSaltar', 'btnSiguiente1', 'btnSiguiente2', 'btnSiguiente3',
     'btnSinContexto', 'pasoPerfil', 'pasoContexto', 'pasoComprobacion', 'pasoFinal',
-    'listaPerfilesPaso',
+    'listaPerfilesPaso', 'formPerfilPaso',
   ]) {
     const n = new Nodo('div')
     n.id = id
     // Los pasos 2, 3 y final arrancan con `class="oculto"` en el HTML real
     // (F032: "el siguiente aparece al cerrar el anterior"); el DOM de
     // mentira tiene que arrancar igual, o esta prueba no comprobaría nada.
-    if (['pasoContexto', 'pasoComprobacion', 'pasoFinal'].includes(id)) n.classList.add('oculto')
+    // F041: el formulario de perfil nuevo arranca oculto también — el
+    // cliente se quejó de que siempre estaba a la vista.
+    if (['pasoContexto', 'pasoComprobacion', 'pasoFinal', 'formPerfilPaso'].includes(id)) n.classList.add('oculto')
     raiz.append(n)
   }
   // `btnSiguiente3` empieza deshabilitado en el HTML real (`disabled` en el
@@ -117,11 +119,12 @@ function montar () {
   const api = null   // DEMO: sin proceso principal, como al abrir el HTML suelto
 
   const fabrica = new Function('$', 'crear', 'api', 'document', `${codigo}
-    return { mostrarPasoAsistente, reiniciarAsistente }`)
+    return { mostrarPasoAsistente, reiniciarAsistente, seleccionarPerfilPaso, pintarListaPerfilesPaso }`)
 
   return {
     raiz,
     paso: id => raiz.querySelector(`#${id}`).oculto === false,
+    formVisible: () => raiz.querySelector('#formPerfilPaso').oculto === false,
     ...fabrica($, crear, api, document),
   }
 }
@@ -212,5 +215,39 @@ describe('F032 — el asistente avanza por pasos, no todo a la vez', () => {
     assert.strictEqual(a.paso('pasoFinal'), false)
     assert.strictEqual(a.raiz.querySelector('#btnSiguiente3').disabled, true,
       'la próxima comprobación tiene que volver a hacerse')
+  })
+})
+
+describe('F041 — el formulario de perfil nuevo no sale hasta pulsar «Agregar perfil»', () => {
+  // Pedido del cliente tal cual: al preparar una reunión y elegir uno de los
+  // perfiles guardados, el formulario para escribir uno NUEVO salía siempre,
+  // encima, ya relleno con los datos del que se acababa de elegir. Ahora sólo
+  // aparece al crear uno — aquí, pulsando el botón que pinta
+  // `pintarListaPerfilesPaso()`.
+  test('elegir un perfil de la lista OCULTA el formulario', () => {
+    const a = montar()
+    a.seleccionarPerfilPaso({ id: 'p1', nombre: 'Omar Avila' })
+    assert.strictEqual(a.formVisible(), false, 'no hay nada que escribir: ya se eligió uno')
+  })
+
+  test('«+ Agregar perfil» (perfil nulo) MUESTRA el formulario', () => {
+    const a = montar()
+    a.seleccionarPerfilPaso({ id: 'p1', nombre: 'Omar Avila' })   // primero uno elegido: form oculto
+    assert.strictEqual(a.formVisible(), false)
+
+    a.seleccionarPerfilPaso(null)                                  // "+ Agregar perfil"
+
+    assert.strictEqual(a.formVisible(), true, 'crear uno nuevo sí necesita el formulario')
+    assert.strictEqual(a.raiz.querySelector('#pNombre').value, '',
+      'y arranca vacío, no con los datos del perfil anterior')
+  })
+
+  test('el botón de la lista dice «Agregar perfil», no «Crear»', () => {
+    const a = montar()
+    a.pintarListaPerfilesPaso([{ id: 'p1', nombre: 'Omar Avila' }])
+    const cont = a.raiz.querySelector('#listaPerfilesPaso')
+    const textos = cont.hijos.map(h => h.textContent)
+    assert.ok(textos.some(t => t.includes('Agregar perfil')),
+      `se esperaba un botón «+ Agregar perfil» entre: ${JSON.stringify(textos)}`)
   })
 })

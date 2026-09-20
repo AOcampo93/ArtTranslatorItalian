@@ -34,6 +34,11 @@
     --burbuja: #1C2532; --mia: #0E3A33;
     --sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
     --mono: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+    /* F041: pedido del cliente tras probar v0.6.0 — ningún elemento toca el
+       borde de la ventana. Un solo número y no uno distinto por zona: así una
+       zona nueva no se queda fuera del criterio sólo porque nadie la puso aquí,
+       que es justo el motivo que ya dejó el comentario de la barra de scroll. */
+    --gutter: 16px;
   }
 
   html, body { height: 100%; }
@@ -50,11 +55,17 @@
      texto de cada una a media palabra, que es lo que pasaba sin esto. */
   header {
     display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
-    padding: 8px 12px; border-bottom: 1px solid var(--linea);
-    background: var(--sup); flex: none; -webkit-app-region: drag;
+    padding: 10px var(--gutter); border-bottom: 1px solid var(--linea);
+    background: var(--sup); flex: none;
   }
-  header button, header select { -webkit-app-region: no-drag; }
-  .marca { font-weight: 600; font-size: 13px; letter-spacing: -.01em; }
+  /* F041: el arrastre de ventana vive SOLO en el texto de la marca, no en toda
+     la cabecera. Con la cabecera entera en `drag`, un doble clic que caía a un
+     par de píxeles de «Detener» —fácil con la ventana angosta de F035—
+     maximizaba la ventana en vez de pulsar el botón: Chromium trata cualquier
+     zona `drag` como si fuera la barra de título nativa, doble clic incluido,
+     aunque la ventana ya tenga marco. Reducir el área de arrastre a la marca
+     deja sitio de sobra alrededor de cada control para no rozarla sin querer. */
+  .marca { font-weight: 600; font-size: 13px; letter-spacing: -.01em; -webkit-app-region: drag; }
   .estado { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx2); white-space: nowrap; }
   .punto { width: 8px; height: 8px; border-radius: 50%; background: var(--tx3); flex: none; }
   .punto.vivo { background: var(--ok); animation: latir 1.6s ease-in-out infinite; }
@@ -123,7 +134,7 @@
   main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
   #conversacion {
-    flex: 6 1 0; overflow-y: auto; padding: 14px 12px 16px;
+    flex: 6 1 0; overflow-y: auto; padding: var(--gutter) var(--gutter) var(--gutter);
     display: flex; flex-direction: column; gap: 10px; min-width: 0;
   }
 
@@ -175,13 +186,25 @@
     width: auto; flex: 4 1 0; border-left: none; border-top: 1px solid var(--linea);
     background: var(--sup); display: flex; flex-direction: column; min-height: 0;
   }
+
+  /* F041: al ensanchar la ventana (>= 900 px) ya cabe la traducción a la
+     izquierda y las preguntas a la derecha, lado a lado — angosta sigue en
+     columna, que es la regla de arriba y no cambia. Mismo reparto 60/40 que ya
+     tenía `flex: 6 1 0` / `flex: 4 1 0`; sólo cambia el eje, así que el
+     separador pasa de `border-top` a `border-left`. */
+  @media (min-width: 900px) {
+    main#envivo { flex-direction: row; }
+    #conversacion { border-right: 1px solid var(--linea); }
+    #preguntas { border-top: none; border-left: 1px solid var(--linea); }
+  }
+
   .titulo {
-    padding: 7px 12px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
+    padding: 8px var(--gutter); font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
     text-transform: uppercase; color: var(--tx3); border-bottom: 1px solid var(--linea);
     display: flex; align-items: center; gap: 7px; flex: none;
   }
   .cuenta { background: var(--sup2); border-radius: 999px; padding: 1px 7px; font-size: 10px; }
-  #listaPreguntas { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+  #listaPreguntas { flex: 1; overflow-y: auto; padding: var(--gutter); display: flex; flex-direction: column; gap: 10px; }
 
   .pregunta { background: var(--sup2); border-radius: 10px; padding: 10px 12px; border-left: 2px solid var(--aviso); }
   /* La PREGUNTA sí lleva las dos lenguas: el usuario necesita saber qué le han
@@ -218,17 +241,17 @@
      se ve y se comporta como un chip pequeño, no como una barra a lo ancho. */
   #contexto { border-top: none; background: transparent; flex: none; }
   #contexto summary {
-    display: inline-flex; align-items: center; gap: 6px; margin: 6px 0 0 12px;
+    display: inline-flex; align-items: center; gap: 6px; margin: 6px 0 0 var(--gutter);
     padding: 3px 9px; cursor: pointer; font-size: 10px; font-weight: 600;
     letter-spacing: .05em; text-transform: uppercase; color: var(--tx3);
     background: var(--sup2); border: 1px solid var(--linea); border-radius: 999px;
-    list-style: none; max-width: calc(100% - 24px);
+    list-style: none; max-width: calc(100% - 2 * var(--gutter));
   }
   #contexto summary::-webkit-details-marker { display: none; }
   #contexto summary::before { content: '▸'; font-size: 9px; transition: transform .15s; flex: none; }
   #contexto[open] summary::before { transform: rotate(90deg); }
   #contexto .cuerpo {
-    margin: 4px 12px 0; padding: 8px 10px; font-size: 12.5px; color: var(--tx2);
+    margin: 4px var(--gutter) 0; padding: 8px 10px; font-size: 12.5px; color: var(--tx2);
     max-height: 130px; overflow-y: auto; background: var(--sup); border: 1px solid var(--linea);
     border-radius: 8px;
   }
@@ -239,7 +262,7 @@
   h1 { font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
   .sub { color: var(--tx2); font-size: 13px; margin-top: 5px; }
 
-  .tarjeta { background: var(--sup); border: 1px solid var(--linea); border-radius: 10px; padding: 15px; margin-top: 14px; }
+  .tarjeta { background: var(--sup); border: 1px solid var(--linea); border-radius: 10px; padding: var(--gutter); margin-top: 14px; }
   .tarjeta h2 { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
   .tarjeta h2 .n {
     width: 19px; height: 19px; border-radius: 50%; background: var(--sup2);
@@ -404,7 +427,12 @@
       <p class="ayuda">Elige un perfil guardado o crea uno nuevo. Sirve para que las respuestas
         sugeridas suenen a ti.</p>
       <div id="listaPerfilesPaso"></div>
-      <div class="rejilla">
+      <!-- F041: pedido del cliente — este formulario ya NO se ve siempre. Se
+           queda oculto mientras hay un perfil elegido de la lista, y sólo
+           aparece al crear uno nuevo (botón «+ Agregar perfil» de
+           `pintarListaPerfilesPaso`, o si todavía no hay ningún perfil
+           guardado). Lo controla `seleccionarPerfilPaso()`. -->
+      <div class="rejilla oculto" id="formPerfilPaso">
         <div><label>Nombre</label><input id="pNombre" placeholder="Omar Avila"></div>
         <div><label>Edad</label><input id="pEdad" type="number" min="16" max="99" placeholder="34"></div>
         <div class="ancho"><label>Ocupación</label><input id="pOcupacion" placeholder="Responsable técnico"></div>
@@ -1140,6 +1168,10 @@ function seleccionarPerfilPaso (p) {
   $('#pEdad').value = p?.edad || ''
   $('#pOcupacion').value = p?.ocupacion || ''
   $('#pContexto').value = p?.contexto || ''
+  // F041: el formulario sólo hace falta para escribir uno NUEVO (`p` nulo).
+  // Con un perfil de la lista elegido no hay nada que rellenar, así que
+  // enseñarlo era el «form que siempre sale» del que se quejó el cliente.
+  $('#formPerfilPaso')?.classList.toggle('oculto', Boolean(p))
   pintarListaPerfilesPaso(perfilesDelPaso)
   revisarListo()
 }
@@ -1163,8 +1195,10 @@ function pintarListaPerfilesPaso (perfiles) {
     fila.append(info, btn)
     cont.appendChild(fila)
   }
+  // F041: botón «Agregar perfil» — antes el formulario para uno nuevo estaba
+  // siempre a la vista; ahora hace falta pulsar aquí para que aparezca.
   const nuevo = crear('button', 'sec')
-  nuevo.textContent = '+ Crear un perfil nuevo'
+  nuevo.textContent = '+ Agregar perfil'
   nuevo.disabled = perfilSeleccionadoId === null
   nuevo.onclick = () => seleccionarPerfilPaso(null)
   cont.appendChild(nuevo)
@@ -1174,13 +1208,24 @@ function pintarListaPerfilesPaso (perfiles) {
  * Carga la lista al entrar al paso 1. El perfil ACTIVO se preselecciona: es
  * lo que permite arrancar una reunión sin volver a escribir nada, y también
  * lo que usa la conversación rápida.
+ *
+ * F041: con perfiles guardados y ninguno activo, el formulario arranca
+ * OCULTO — el usuario elige uno de la lista o pulsa «+ Agregar perfil». Sin
+ * ningún perfil todavía no hay nada que elegir, así que el formulario se
+ * enseña directo: obligar a pulsar un botón para llegar al único camino
+ * posible sería un paso de más, no un paso intuitivo.
  */
 async function cargarPerfilesPaso () {
-  if (!api) return
+  // Modo de ejemplo (sin `api`, F041): no hay ninguna lista que traer, así
+  // que el único camino es el formulario — se enseña directo, igual que con
+  // cero perfiles guardados de verdad.
+  if (!api) { $('#formPerfilPaso')?.classList.remove('oculto'); return }
   const perfiles = await api.listarPerfiles()
   const activo = perfiles.find(p => p.activo)
-  if (activo) seleccionarPerfilPaso(activo)
-  else pintarListaPerfilesPaso(perfiles)
+  if (activo) { seleccionarPerfilPaso(activo); return }
+  perfilSeleccionadoId = null
+  pintarListaPerfilesPaso(perfiles)
+  $('#formPerfilPaso')?.classList.toggle('oculto', perfiles.length > 0)
 }
 
 // ── Arrancar y parar ──────────────────────────────────────────────────
