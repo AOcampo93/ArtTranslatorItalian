@@ -460,9 +460,13 @@ async function traducirLinea (s, texto, turno, extra = {}) {
     it: texto, es: tr.es,
     ms: msTranscribir + msTraducir,   // el retardo es la cadena, no una pierna
     msTranscribir, msTraducir,
-    // F040: con qué se tradujo esta línea — 'llm' o 'marian' — para poder
-    // comparar latencia y calidad en la siguiente prueba.
+    // F040: con qué se tradujo esta línea — 'llm', 'marian' o 'ninguno' (F043,
+    // sin contenido que traducir) — para poder comparar latencia y calidad.
     traductor: tr.traductor,
+    // F043: por qué cayó a Marian, cuando no fue por elección — hoy solo
+    // 'respuesta-no-valida' (el LLM charló en vez de traducir). `null` en el
+    // resto de los casos, incluida la traducción normal por LLM.
+    motivo: tr.motivo ?? null,
     forzado: Boolean(turno.forzado),
     msTurno: turno.msTurno ?? null,
     msHolgura: turno.msHolgura ?? null,

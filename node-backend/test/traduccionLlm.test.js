@@ -13,6 +13,7 @@ const { test, describe } = require('node:test')
 const assert = require('node:assert')
 
 const { crearTraductorLlm } = require('../src/traduccionLlm')
+const { promptTraduccion } = require('../../shared/prompts')
 
 /** Un `respaldo` (Marian) de mentira que deja constancia de que se usó. */
 function marianDeMentira (es = 'traducción de Marian') {
@@ -99,7 +100,7 @@ describe('F040 — crearTraductorLlm', () => {
     const llamar = async () => ({ texto: '   ' })
     const t = crearTraductorLlm({ llamar, respaldo })
 
-    const r = await t.traducir('Qualcosa.')
+    const r = await t.traducir('Qualcosa da dire.')
 
     assert.strictEqual(r.es, 'respaldo por vacío')
     assert.strictEqual(r.traductor, 'marian')
@@ -125,5 +126,46 @@ describe('F040 — crearTraductorLlm', () => {
     } finally {
       console.warn = consolaOriginal
     }
+  })
+})
+
+describe('F043 — «Mm.» no llega al LLM, y una respuesta charlatana cae a Marian', () => {
+  test('«Mm.» y similares no llegan al LLM: se muestran tal cual, traductor "ninguno"', async () => {
+    const respaldo = marianDeMentira()
+    let llamadas = 0
+    const llamar = async () => { llamadas++; return { texto: 'no debería llamarse' } }
+    const t = crearTraductorLlm({ llamar, respaldo })
+
+    const r = await t.traducir('Mm.')
+
+    assert.strictEqual(r.es, 'Mm.')
+    assert.strictEqual(r.traductor, 'ninguno')
+    assert.strictEqual(llamadas, 0, 'sin contenido, no se gasta ni un token del LLM')
+    assert.strictEqual(respaldo.llamadas.length, 0, 'tampoco hace falta Marian: se enseña tal cual')
+  })
+
+  test('una respuesta charlatana del LLM (texto real de la prueba de v0.7.0) cae a Marian, y se marca en el .jsonl', async () => {
+    const respaldo = marianDeMentira('Mm.')
+    // Texto real medido: a «Mm.» el LLM contestó esto en vez de traducir.
+    const llamar = async () => ({
+      texto: 'No hay texto en italiano para traducir. Por favor, proporciona la frase que necesitas que traduzca.',
+    })
+    const t = crearTraductorLlm({ llamar, respaldo })
+
+    const r = await t.traducir('Mm mm, sì.')
+
+    assert.strictEqual(r.es, 'Mm.')
+    assert.strictEqual(r.traductor, 'marian')
+    // El campo que `mainApp.js` copia a la línea de la frase, y de ahí al
+    // `.jsonl` de la sesión (F043): así se distingue un fallback "elegido"
+    // (sin clave) de uno forzado por una respuesta que no era traducción.
+    assert.strictEqual(r.motivo, 'respuesta-no-valida')
+    assert.deepStrictEqual(respaldo.llamadas, ['Mm mm, sì.'])
+  })
+
+  test('el prompt de traducción trata "lei"/"Lei" como "ella" salvo tratamiento formal evidente', () => {
+    const prompt = promptTraduccion('')
+    assert.match(prompt, /«?lei»?\/?«?Lei»?.*ella/i)
+    assert.match(prompt, /tratamiento formal/i)
   })
 })

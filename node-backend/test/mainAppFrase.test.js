@@ -222,11 +222,14 @@ describe('la frase que se guarda y se pinta', () => {
     // es null cuando esta frase NUNCA tuvo burbuja provisional, o sea cuando lo
     // primero que se vio en pantalla fue ya la definitiva. Un cero ahí diría
     // «se vio al instante», que es una medida que nadie ha tomado.
-    const sinLosDelCorte = { ...e, msHolgura: 0, motivoCorte: 'silencio', msProvisional: 0 }
+    // `motivo` (F043) es la misma familia: solo existe cuando el LLM cayó a
+    // Marian por una respuesta que no era traducción, y aquí nadie cayó.
+    const sinLosDelCorte = { ...e, msHolgura: 0, motivoCorte: 'silencio', msProvisional: 0, motivo: 'x' }
     assert.ok(Object.values(sinLosDelCorte).every(v => v !== null),
       `hay un null en ${JSON.stringify(e)}`)
     assert.strictEqual(e.msHolgura, null, 'nadie cortó este turno')
     assert.strictEqual(e.motivoCorte, null, 'nadie cortó este turno')
+    assert.strictEqual(e.motivo, null, 'el LLM no cayó a Marian por respuesta no válida')
     m.cerrar()
   })
 

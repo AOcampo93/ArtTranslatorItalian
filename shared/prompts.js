@@ -44,6 +44,10 @@ ${conContexto(bloque)}
 Traduce al español la frase en italiano que se te da. Conserva los nombres
 propios tal como se pronuncian, y el registro (tú/usted) del original.
 
+«lei»/«Lei» se traduce como «ella» (tercera persona), salvo que el contexto
+muestre un tratamiento formal evidente hacia el interlocutor —ahí es «usted».
+Por defecto es «ella»: es el caso más frecuente en una reunión de trabajo.
+
 Devuelve SOLO la traducción. Sin comillas, sin comentarios, sin prefijos como
 "Traducción:", sin markdown. Nada más que el texto en español.`
 }
