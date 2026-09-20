@@ -629,6 +629,36 @@ describe('el botón «→ Pregunta» de una burbuja (F033)', () => {
       'una oración a medias no se puede mandar como pregunta: la va a sustituir otra entera')
   })
 
+  test('una provisional que pasa a definitiva (F037) SÍ acaba con el botón', () => {
+    // Corrección de revisión: `reemplazarFrase()` sólo llamaba a
+    // `rellenarBurbuja()` y nunca añadía el botón, así que una burbuja
+    // nacida provisional se quedaba para siempre sin «→ Pregunta» aunque ya
+    // fuera definitiva. Son justo las preguntas largas —las que más se
+    // parten entre turnos— las que se ven afectadas.
+    const { api, llamadas } = apiConPreguntar()
+    const b = montar({ api })
+    b.pintarFrase({
+      id: 'pv1', provisional: true, it: 'Se riesci a fare un riassunto',
+      es: 'Si puedes hacer un resumen', msTranscribir: 300, msTraducir: 120,
+    })
+    assert.strictEqual(b.burbujas()[0].querySelector('.preguntar'), null)
+
+    b.reemplazarFrase({
+      idProvisional: 'pv1', it: 'Se riesci a fare un riassunto rapido',
+      es: 'Si puedes hacer un resumen rápido', ms: 400,
+    })
+
+    const burbuja = b.burbujas()[0]
+    const boton = burbuja.querySelector('.preguntar')
+    assert.ok(boton, 'la burbuja ya definitiva debe llevar el botón')
+
+    boton.onclick()
+    assert.strictEqual(llamadas.length, 1)
+    assert.deepStrictEqual(llamadas[0], {
+      it: 'Se riesci a fare un riassunto rapido', es: 'Si puedes hacer un resumen rápido',
+    })
+  })
+
   test('el clic no pasa por el cuerpo de la burbuja: leer y seleccionar el texto no se disparan', () => {
     // El botón vive APARTE, no en el `onclick` de la burbuja ni de sus piernas:
     // así seleccionar el texto para copiarlo no manda nada por accidente.

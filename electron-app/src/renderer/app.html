@@ -620,7 +620,14 @@ function reemplazarFrase ({ idProvisional, ...frase }) {
   if (frase.provisional) burbujasProvisionales.set(frase.id ?? idProvisional, b)
 
   const total = rellenarBurbuja(b, frase)
-  if (!frase.provisional) apuntarDefinitiva(frase, total)
+  // Esta burbuja nació provisional (F037) y ahora pasa a definitiva: le falta
+  // el botón «→ Pregunta» porque `pintarFrase()` no se lo puso al crearla.
+  // Sin esto se queda para siempre sin botón, y son justo las preguntas
+  // largas —las que más se parten entre turnos— las que el detector se salta.
+  if (!frase.provisional) {
+    if (!b.querySelector('.preguntar')) b.append(crearBotonPreguntar(frase))
+    apuntarDefinitiva(frase, total)
+  }
   // `abajo()` y no `scrollTop = scrollHeight`: el reemplazo ocurre solo, sin
   // que el usuario toque nada, así que si había subido a releer algo, moverle
   // la vista sería peor aquí que en ningún otro sitio.
