@@ -157,11 +157,17 @@ function montar ({ traducir, traza = [], alCerrarSocket, autoguardadoRoto = fals
   // cualquier fallo simulado lanzaría un `ReferenceError` silenciado por el
   // `.catch` de la cadena, y estas pruebas dejarían de ver el aviso.
   const { sanear } = require('../src/llm')
+  // F040 (corrección): el tramo real de `sesion = {` escribe
+  // `traductor: traductorSesion` —ver `mainApp.js`, la sombra que se quitó
+  // del nombre—, así que hace falta ese identificador libre además de
+  // `traductor`. Aquí valen el mismo objeto: la prueba no distingue entre el
+  // traductor de la sesión y el módulo, sólo fuerza que `s.traductor` sea el
+  // que se le pasó.
   const fabrica = new Function(
-    'transcriptor', 'traductor', 'autosave', 'idSesion', 'motor', 'resumen',
+    'transcriptor', 'traductor', 'traductorSesion', 'autosave', 'idSesion', 'motor', 'resumen',
     'aRenderer', 'db', 'console', 'sesion',
     'partirTurno', 'arrastrar', 'acabaCerrada', 'sanear', codigo)
-  const salida = fabrica(transcriptor, traductor, autosave, 7, motor, resumen,
+  const salida = fabrica(transcriptor, traductor, traductor, autosave, 7, motor, resumen,
     aRenderer, db, consola, null, partirTurno, arrastrar, acabaCerrada, sanear)
 
   return {
@@ -222,6 +228,29 @@ describe('la frase que se guarda y se pinta', () => {
     assert.strictEqual(e.msHolgura, null, 'nadie cortó este turno')
     assert.strictEqual(e.motivoCorte, null, 'nadie cortó este turno')
     m.cerrar()
+  })
+
+  test('el .jsonl guarda con qué se tradujo cada línea: "llm" o "marian" (F040)', async () => {
+    // `traducirLinea` copia `tr.traductor` tal cual en la línea que arma
+    // (`mainApp.js`, dentro de `traducirLinea`); esta prueba comprueba que esa
+    // marca de verdad llega hasta el disco, y no sólo hasta el objeto en
+    // memoria. `porTraductor` (el resumen al parar) ya lo cuenta a partir de
+    // este mismo campo, así que si el campo no llega, el resumen tampoco.
+    const mLlm = montar({ traducir: async () => ({ es: 'Ciao', ms: 3, traductor: 'llm' }) })
+    mLlm.transcriptor.emit('frase', {
+      texto: 'Ciao a tutti.', msTranscribir: 100, msTurno: 900, acabaEnPuntuacion: true,
+    })
+    await hasta(() => mLlm.guardadas().length === 1, 'que la frase llegue al disco')
+    assert.strictEqual(mLlm.guardadas()[0].traductor, 'llm')
+    mLlm.cerrar()
+
+    const mMarian = montar({ traducir: async () => ({ es: 'Grazie', ms: 3, traductor: 'marian' }) })
+    mMarian.transcriptor.emit('frase', {
+      texto: 'Grazie mille.', msTranscribir: 100, msTurno: 900, acabaEnPuntuacion: true,
+    })
+    await hasta(() => mMarian.guardadas().length === 1, 'que la frase llegue al disco')
+    assert.strictEqual(mMarian.guardadas()[0].traductor, 'marian')
+    mMarian.cerrar()
   })
 
   test('el .jsonl guarda las cuatro medidas del troceo (F031)', async () => {

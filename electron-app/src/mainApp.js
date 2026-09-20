@@ -810,14 +810,20 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   // cae en `this.version` si no se le pasa otra.
   autosave.guardarCabecera({ perfil, contexto: ctx, inicio, id: idSesion })
 
-  // F040: `traductor` es el elegido para ESTA sesión — el LLM con Marian de
-  // respaldo si hay clave, Marian directo si no. Se llama igual que el módulo
-  // `traductor` (Marian, importado arriba) porque la sombra es intencional:
-  // dentro de `empezarSesion` de aquí en adelante, y en el objeto de sesión,
-  // "traductor" es el de ESTA reunión, no el módulo.
-  const { motor, resumen, traductor } = montarMotores({ perfil, ctx, claveLlm: claves.llm, autosave })
+  // F040 (corrección): `traductorSesion` es el elegido para ESTA sesión — el
+  // LLM con Marian de respaldo si hay clave, Marian directo si no. Antes esta
+  // constante se llamaba igual que el módulo `traductor` (Marian, importado
+  // arriba) "a propósito", pero `const` se iza a la cabeza de toda la función:
+  // la línea 790, `await traductor.cargar()`, cae en la zona muerta temporal
+  // de ESTA constante y lanza `ReferenceError: Cannot access 'traductor'
+  // before initialization` en cuanto alguien pulsa «Empezar» — con clave o
+  // sin ella, porque el error ocurre antes de que la clave importe. Aquí el
+  // nombre se separa del módulo; el objeto de sesión sigue exponiendo
+  // `traductor` porque es el campo que el resto del archivo (`s.traductor`)
+  // ya espera.
+  const { motor, resumen, traductor: traductorSesion } = montarMotores({ perfil, ctx, claveLlm: claves.llm, autosave })
   sesion = {
-    transcriptor, autosave, idSesion, motor, resumen, traductor, inicio: Date.now(), frases: 0,
+    transcriptor, autosave, idSesion, motor, resumen, traductor: traductorSesion, inicio: Date.now(), frases: 0,
     // F040: cuántas frases definitivas se tradujeron con el LLM y cuántas con
     // Marian, para el resumen al parar (`pararSesion`).
     porTraductor: { llm: 0, marian: 0 },

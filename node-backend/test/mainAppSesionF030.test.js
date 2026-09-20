@@ -44,7 +44,7 @@ describe('F030 — empezarSesion escribe inicio, version y cabecera de verdad', 
 
   test('el archivo lleva la marca de tiempo y la primera línea es la cabecera con version, inicio e id', () => {
     const fuente = fs.readFileSync(MAIN_APP, 'utf8')
-    const codigo = tramo(fuente, 'const idSesion = db.startSession', 'const { motor, resumen, traductor }')
+    const codigo = tramo(fuente, 'const idSesion = db.startSession', 'const { motor, resumen, traductor: traductorSesion }')
       + '\nreturn { idSesion, inicio, autosave }'
 
     const raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'mainapp-sesion-'))
