@@ -17,6 +17,7 @@ whisper-cpp/
 .env
 .env.*
 !.env.example
+!.env.ejemplo
 
 # Datos de sesión y transcripciones
 # Con barra, el patrón queda anclado a la raíz: `data/*.db` NO cubría
@@ -45,3 +46,7 @@ bin-win/
 vps/.env
 !vps/.env.ejemplo
 vps/informes/
+
+# F039b: token de subida del cliente (secreto de servicio, no de usuario:
+# viaja incrustado en el paquete de Windows). El ejemplo sí entra a git.
+electron-app/src/informes.token.json

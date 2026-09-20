@@ -44,6 +44,15 @@ chk "ws, que es el WebSocket de la transcripción en vivo" \
 chk "audio italiano de prueba" \
    '[ -f "'"$D"'/resources/node-backend/test/fixtures/italiano.wav" ]'
 chk "instrucciones para el cliente" '[ -f "'"$D"'/resources/LEEME.txt" ]'
+# F039b: sin este archivo (fuera del repo, gitignored) la app arranca igual,
+# pero sin subir ningún informe — y eso sólo se nota semanas después, cuando
+# el equipo pregunta por qué no llegó nada de una prueba. `asar` es el mismo
+# que usa `electron-builder` por debajo (viene con él en `node_modules`).
+ASAR="electron-app/node_modules/.bin/asar"
+chk "informes.token.json viaja dentro del paquete (si no, la subida queda desactivada en silencio)" \
+   '[ -x "'"$ASAR"'" ] && "'"$ASAR"'" list "'"$D"'/resources/app.asar" | grep -q "^/src/informes.token.json$"'
+chk "informes.token.json NO está en git (es un secreto de servicio, no de usuario)" \
+   '! git ls-files --error-unmatch electron-app/src/informes.token.json'
 echo
 echo "  $ok correctas · $mal fallidas"
 [ "$mal" -eq 0 ] || exit 1
