@@ -50,3 +50,7 @@ vps/informes/
 # F039b: token de subida del cliente (secreto de servicio, no de usuario:
 # viaja incrustado en el paquete de Windows). El ejemplo sí entra a git.
 electron-app/src/informes.token.json
+
+# F032: capturas de pantalla de herramientas/captura-demo.js, para revisar
+# la interfaz sin abrir Electron. Son artefactos locales, no producto.
+capturas/

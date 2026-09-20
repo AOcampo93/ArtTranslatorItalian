@@ -641,7 +641,24 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   }
 
   // Se guardan para que el informe y los prompts los tengan.
-  if (perfil?.nombre) contexto.crearPerfil(perfil)
+  //
+  // F032: un perfil que ya existe (llega con `id`, porque el asistente lo
+  // tomó de la lista) se ACTUALIZA, nunca se vuelve a insertar. Antes de
+  // esto, `empezarSesion` llamaba a `crearPerfil` en cada reunión sin mirar
+  // si ya había uno: el cliente lo dijo tal cual — "estar poniendo los
+  // perfiles a cada rato no es bueno" — y la causa era esta línea, no la
+  // pantalla. El que se usa queda `activarPerfil`, que es lo que permite
+  // preseleccionarlo la próxima vez sin que nadie vuelva a escribir nada.
+  if (perfil?.nombre) {
+    const id = perfil.id
+      ? (contexto.actualizarPerfil(perfil.id, {
+          nombre: perfil.nombre, edad: perfil.edad ?? null,
+          ocupacion: perfil.ocupacion ?? null, contexto: perfil.contexto ?? null,
+        }), perfil.id)
+      : contexto.crearPerfil(perfil)
+    contexto.activarPerfil(id)
+    perfil = { ...perfil, id }
+  }
   if (ctx?.nombre) contexto.crearContexto(ctx)
 
   const glosario = (ctx?.glosario || '').split(/[,\n·;]+/).map(s => s.trim()).filter(Boolean)
@@ -1074,10 +1091,53 @@ function rutaFixture () {
   throw new Error('no se encuentra el audio de prueba')
 }
 
+// F032: panel de Perfiles (lista, crear, editar, borrar, activar). Las
+// funciones ya existían en `contexto.js`; solo faltaba este cableado y la
+// pantalla que las pinta.
 ipcMain.handle('app:listarPerfiles', () => contexto.listarPerfiles())
 ipcMain.handle('app:guardarPerfil', (_e, p) => contexto.crearPerfil(p))
+ipcMain.handle('app:actualizarPerfil', (_e, { id, campos }) => contexto.actualizarPerfil(id, campos))
+ipcMain.handle('app:borrarPerfil', (_e, id) => { contexto.borrarPerfil(id); return { ok: true } })
+ipcMain.handle('app:activarPerfil', (_e, id) => { contexto.activarPerfil(id); return { ok: true } })
+
 ipcMain.handle('app:listarContextos', () => contexto.listarContextos())
 ipcMain.handle('app:guardarContexto', (_e, c) => contexto.crearContexto(c))
+ipcMain.handle('app:actualizarContexto', (_e, { id, campos }) => contexto.actualizarContexto(id, campos))
+ipcMain.handle('app:borrarContexto', (_e, id) => { contexto.borrarContexto(id); return { ok: true } })
+ipcMain.handle('app:activarContexto', (_e, id) => { contexto.activarContexto(id); return { ok: true } })
+
+/**
+ * F032 — la lista de «Conversaciones» del panel de inicio.
+ *
+ * Lee `.jsonl` de disco (`Autosave.listar`/`Autosave.leer`) y no la tabla
+ * `sessions`: es la fuente que el no negociable §0.3 garantiza completa, y
+ * F038 (que va a pintar transcripción, coste y borrado) todavía tiene que
+ * verificar si la base se rellena de verdad durante la reunión. Aquí solo
+ * hace falta el ACCESO — nombre, fecha, cuántas frases y preguntas trae cada
+ * archivo — no la vista rica, que es su tarea.
+ */
+function listarConversaciones () {
+  const dir = path.join(app.getPath('userData'), 'reuniones')
+  return Autosave.listar(dir).map(f => {
+    let cabecera = null, frases = 0, preguntas = 0
+    try {
+      const { entradas } = Autosave.leer(f.ruta)
+      cabecera = entradas.find(e => e.tipo === 'cabecera') || null
+      frases = entradas.filter(e => e.tipo === 'frase').length
+      preguntas = entradas.filter(e => e.tipo === 'pregunta').length
+    } catch (err) {
+      console.error('[conversaciones] no se pudo leer', f.archivo, err.message)
+    }
+    return {
+      archivo: f.archivo, ruta: f.ruta, tamano: f.tamano,
+      inicio: cabecera?.inicio || null,
+      perfil: cabecera?.perfil?.nombre || null,
+      contexto: cabecera?.contexto?.nombre || null,
+      frases, preguntas,
+    }
+  })
+}
+ipcMain.handle('app:listarConversaciones', () => listarConversaciones())
 
 ipcMain.handle('app:exportarSesion', async () => {
   const r = await dialog.showSaveDialog(ventana, {
@@ -1118,6 +1178,6 @@ app.on('before-quit', ev => {
 module.exports = {
   _internos: {
     guardarClaves, leerClaves, empezarSesion, pararSesion,
-    leerTokenInformes, maquinaSaneada, obtenerColaInformes,
+    leerTokenInformes, maquinaSaneada, obtenerColaInformes, listarConversaciones,
   },
 }

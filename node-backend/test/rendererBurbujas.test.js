@@ -143,7 +143,9 @@ function montar ({ api = null } = {}) {
   for (const id of ['conversacion', 'vacio', 'retardo', 'punto', 'txtEstado',
                     'btnEscuchar', 'btnParar', 'preparar', 'envivo', 'pistaEscuchar',
                     'ajustes', 'kSTT', 'kLLM', 'btnAjustes', 'btnCerrarAjustes',
-                    'btnGuardarAjustes']) {
+                    'btnGuardarAjustes',
+                    // F032: el panel de inicio, para la vuelta automática al parar.
+                    'inicio']) {
     const n = new Nodo('div')
     n.id = id
     raiz.append(n)
@@ -669,5 +671,28 @@ describe('el botón «→ Pregunta» de una burbuja (F033)', () => {
     assert.strictEqual(burbuja.onclick, undefined, 'la burbuja entera no tiene manejador de clic')
     assert.strictEqual(burbuja.querySelector('.it').onclick, undefined)
     assert.strictEqual(burbuja.querySelector('.es').onclick, undefined)
+  })
+})
+
+describe('F032 — al terminar la reunión, vuelta automática al panel de inicio', () => {
+  // Decisión del cliente: la pantalla en vivo no puede quedarse muerta tras
+  // pulsar «Detener» — tiene que volver ella sola al panel de inicio, que es
+  // desde donde se llega también a la reunión recién guardada, en
+  // «Conversaciones». Se simula el estado real —en vivo a la vista, panel de
+  // inicio oculto— para comprobar que el código HACE el cambio, no que ya
+  // estaba así por casualidad.
+  test('tras el resumen, la pantalla en vivo se oculta y el panel de inicio reaparece', async () => {
+    const b = montar({ api: apiQueDevuelve({
+      ok: true, frases: 3, costeUsd: 0.01, stats: { turnosForzados: 0 },
+    }) })
+    b.raiz.querySelector('#inicio').classList.add('oculto')
+    b.raiz.querySelector('#envivo').classList.remove('oculto')
+
+    await b.pulsarParar()
+
+    assert.strictEqual(b.raiz.querySelector('#envivo').oculto, true,
+      'la pantalla en vivo no puede quedarse a la vista tras terminar')
+    assert.strictEqual(b.raiz.querySelector('#inicio').oculto, false,
+      'tiene que volver sola al panel de inicio, no a una pantalla muerta')
   })
 })

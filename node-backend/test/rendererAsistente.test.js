@@ -1,0 +1,216 @@
+/**
+ * F032 — el asistente de «Preparar la reunión» avanza por pasos.
+ *
+ * ## Qué se protege aquí
+ *
+ * Pedido por el cliente tal cual: la pantalla de preparación enseñaba las
+ * tres tarjetas A LA VEZ y había que rellenarlas siempre, aunque el perfil no
+ * cambiara nunca. El criterio de F032 es "el siguiente aparece al cerrar el
+ * anterior": el paso 2 no puede estar a la vista hasta que se cierre el 1, ni
+ * el 3 hasta que se cierre el 2, ni el «Escuchar» final hasta que la
+ * comprobación (o «Saltar») lo deje listo.
+ *
+ * El renderer vive dentro de `app.html` y el proyecto no trae jsdom, así que
+ * se **extrae el bloque real del archivo** y se ejecuta contra un DOM
+ * mínimo, con el mismo patrón que `rendererBurbujas.test.js`.
+ */
+
+'use strict'
+
+const { test, describe } = require('node:test')
+const assert = require('node:assert')
+const fs = require('fs')
+const path = require('path')
+
+const APP_HTML = path.join(__dirname, '..', '..', 'electron-app', 'src', 'renderer', 'app.html')
+const DESDE = '// ── Formularios ─'
+const HASTA = '// ── Arrancar y parar ─'
+
+// ── Un DOM mínimo: lo justo que usa el asistente ────────────────────────────
+
+class Nodo {
+  constructor (tag) {
+    this.tag = tag
+    this.id = ''
+    this.hijos = []
+    this.disabled = false
+    this._clases = new Set()
+    this._texto = ''
+    this._valor = ''
+    this.html = ''
+    this.classList = {
+      add: (...c) => c.forEach(x => this._clases.add(x)),
+      remove: (...c) => c.forEach(x => this._clases.delete(x)),
+      contains: c => this._clases.has(c),
+      toggle: (c, on) => {
+        const poner = on === undefined ? !this._clases.has(c) : Boolean(on)
+        poner ? this._clases.add(c) : this._clases.delete(c)
+        return poner
+      },
+    }
+  }
+
+  get className () { return [...this._clases].join(' ') }
+  set className (v) { this._clases = new Set(String(v).split(/\s+/).filter(Boolean)) }
+  get textContent () { return this._texto }
+  set textContent (v) { this._texto = String(v); this.hijos = [] }
+  get value () { return this._valor }
+  set value (v) { this._valor = v }
+  get innerHTML () { return this.html }
+  set innerHTML (v) { this.html = String(v); this.hijos = [] }
+  get oculto () { return this._clases.has('oculto') }
+
+  append (...n) { this.hijos.push(...n) }
+  appendChild (n) { this.hijos.push(n); return n }
+  addEventListener (tipo, fn) { if (tipo === 'input') this._alInput = fn }
+
+  encaja (sel) {
+    const id = sel.match(/^#([\w-]+)/)
+    return Boolean(id) && this.id === id[1]
+  }
+
+  querySelector (sel) {
+    for (const h of this.hijos) {
+      if (h.encaja(sel)) return h
+      const dentro = h.querySelector(sel)
+      if (dentro) return dentro
+    }
+    return null
+  }
+
+  querySelectorAll () { return [] }
+}
+
+/** Monta el asistente tal como está en el HTML y devuelve las funciones y botones reales. */
+function montar () {
+  const html = fs.readFileSync(APP_HTML, 'utf8')
+  const i = html.indexOf(DESDE)
+  const j = html.indexOf(HASTA)
+  assert.ok(i > 0 && j > i, `no se encontró el bloque del asistente en ${APP_HTML}`)
+  const codigo = html.slice(i, j)
+
+  const raiz = new Nodo('body')
+  for (const id of [
+    'pNombre', 'pEdad', 'pOcupacion', 'pContexto',
+    'cNombre', 'cTipoReunion', 'cTipoProyecto', 'cContexto', 'cGlosario',
+    'n1', 'n2', 'n3', 'btnEscuchar', 'pistaEscuchar', 'pasos',
+    'btnProbar', 'btnSaltar', 'btnSiguiente1', 'btnSiguiente2', 'btnSiguiente3',
+    'btnSinContexto', 'pasoPerfil', 'pasoContexto', 'pasoComprobacion', 'pasoFinal',
+    'listaPerfilesPaso',
+  ]) {
+    const n = new Nodo('div')
+    n.id = id
+    // Los pasos 2, 3 y final arrancan con `class="oculto"` en el HTML real
+    // (F032: "el siguiente aparece al cerrar el anterior"); el DOM de
+    // mentira tiene que arrancar igual, o esta prueba no comprobaría nada.
+    if (['pasoContexto', 'pasoComprobacion', 'pasoFinal'].includes(id)) n.classList.add('oculto')
+    raiz.append(n)
+  }
+  // `btnSiguiente3` empieza deshabilitado en el HTML real (`disabled` en el
+  // atributo); esta prueba comprueba que el paso 3 lo habilita, así que el
+  // DOM de mentira tiene que arrancar igual de deshabilitado.
+  raiz.querySelector('#btnSiguiente3').disabled = true
+
+  const $ = sel => (raiz.encaja(sel) ? raiz : raiz.querySelector(sel))
+  const crear = (t, c) => { const e = new Nodo(t); if (c) e.className = c; return e }
+  const document = { querySelectorAll: () => [] }
+  const api = null   // DEMO: sin proceso principal, como al abrir el HTML suelto
+
+  const fabrica = new Function('$', 'crear', 'api', 'document', `${codigo}
+    return { mostrarPasoAsistente, reiniciarAsistente }`)
+
+  return {
+    raiz,
+    paso: id => raiz.querySelector(`#${id}`).oculto === false,
+    ...fabrica($, crear, api, document),
+  }
+}
+
+describe('F032 — el asistente avanza por pasos, no todo a la vez', () => {
+  test('al abrir, solo el paso 1 está a la vista', () => {
+    const a = montar()
+    assert.strictEqual(a.paso('pasoPerfil'), true)
+    assert.strictEqual(a.paso('pasoContexto'), false)
+    assert.strictEqual(a.paso('pasoComprobacion'), false)
+    assert.strictEqual(a.paso('pasoFinal'), false)
+  })
+
+  test('sin nombre de perfil, «Siguiente» del paso 1 no avanza', () => {
+    const a = montar()
+    a.raiz.querySelector('#btnSiguiente1').onclick()
+    assert.strictEqual(a.paso('pasoPerfil'), true, 'el paso 1 sigue a la vista: falta el nombre')
+    assert.strictEqual(a.paso('pasoContexto'), false)
+  })
+
+  test('el paso 2 aparece SOLO al cerrar el 1, y el 1 se cierra', () => {
+    const a = montar()
+    a.raiz.querySelector('#pNombre').value = 'Omar'
+
+    a.raiz.querySelector('#btnSiguiente1').onclick()
+
+    assert.strictEqual(a.paso('pasoPerfil'), false, 'el paso 1 se cierra al avanzar')
+    assert.strictEqual(a.paso('pasoContexto'), true, 'el paso 2 aparece')
+    assert.strictEqual(a.paso('pasoComprobacion'), false, 'el 3 todavía no')
+  })
+
+  test('el paso 3 aparece al cerrar el 2, con o sin contexto', () => {
+    const a = montar()
+    a.raiz.querySelector('#pNombre').value = 'Omar'
+    a.raiz.querySelector('#btnSiguiente1').onclick()
+
+    a.raiz.querySelector('#btnSiguiente2').onclick()
+
+    assert.strictEqual(a.paso('pasoContexto'), false, 'el paso 2 se cierra al avanzar')
+    assert.strictEqual(a.paso('pasoComprobacion'), true, 'el paso 3 aparece')
+  })
+
+  test('«Sin contexto para esta reunión» también avanza al paso 3', () => {
+    const a = montar()
+    a.raiz.querySelector('#pNombre').value = 'Omar'
+    a.raiz.querySelector('#btnSiguiente1').onclick()
+    a.raiz.querySelector('#cNombre').value = 'algo a medio escribir'
+
+    a.raiz.querySelector('#btnSinContexto').onclick()
+
+    assert.strictEqual(a.paso('pasoComprobacion'), true)
+    assert.strictEqual(a.raiz.querySelector('#cNombre').value, '',
+      '"sin contexto" limpia lo que hubiera a medio escribir')
+  })
+
+  test('el paso final («Escuchar») solo aparece tras «Saltar» o «Comprobar», y «Siguiente» del 3 lo revela', () => {
+    const a = montar()
+    a.raiz.querySelector('#pNombre').value = 'Omar'
+    a.raiz.querySelector('#btnSiguiente1').onclick()
+    a.raiz.querySelector('#btnSiguiente2').onclick()
+
+    // Antes de comprobar (o saltar), «Siguiente» del paso 3 está deshabilitado.
+    assert.strictEqual(a.raiz.querySelector('#btnSiguiente3').disabled, true)
+
+    a.raiz.querySelector('#btnSaltar').onclick()
+    assert.strictEqual(a.raiz.querySelector('#btnSiguiente3').disabled, false,
+      '«Saltar» deja avanzar igual que «Comprobar»')
+
+    a.raiz.querySelector('#btnSiguiente3').onclick()
+
+    assert.strictEqual(a.paso('pasoComprobacion'), false, 'el paso 3 se cierra al avanzar')
+    assert.strictEqual(a.paso('pasoFinal'), true, 'y aparece el paso final, con Escuchar listo')
+    assert.strictEqual(a.raiz.querySelector('#btnEscuchar').disabled, false)
+  })
+
+  test('reiniciarAsistente() vuelve al paso 1, para una reunión nueva desde cero', () => {
+    const a = montar()
+    a.raiz.querySelector('#pNombre').value = 'Omar'
+    a.raiz.querySelector('#btnSiguiente1').onclick()
+    a.raiz.querySelector('#btnSiguiente2').onclick()
+    a.raiz.querySelector('#btnSaltar').onclick()
+    a.raiz.querySelector('#btnSiguiente3').onclick()
+    assert.strictEqual(a.paso('pasoFinal'), true)
+
+    a.reiniciarAsistente()
+
+    assert.strictEqual(a.paso('pasoPerfil'), true)
+    assert.strictEqual(a.paso('pasoFinal'), false)
+    assert.strictEqual(a.raiz.querySelector('#btnSiguiente3').disabled, true,
+      'la próxima comprobación tiene que volver a hacerse')
+  })
+})

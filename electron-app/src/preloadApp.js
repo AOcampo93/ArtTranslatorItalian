@@ -45,11 +45,22 @@ contextBridge.exposeInMainWorld('app', {
    */
   preguntar: (it, es) => ipcRenderer.invoke('app:preguntar', { it, es }),
 
-  // ── Perfiles y contextos ──────────────────────────────────────────
+  // ── Perfiles y contextos (F032: lista, crear, editar, borrar, activar) ──
   listarPerfiles: () => ipcRenderer.invoke('app:listarPerfiles'),
   guardarPerfil: p => ipcRenderer.invoke('app:guardarPerfil', p),
+  actualizarPerfil: (id, campos) => ipcRenderer.invoke('app:actualizarPerfil', { id, campos }),
+  borrarPerfil: id => ipcRenderer.invoke('app:borrarPerfil', id),
+  activarPerfil: id => ipcRenderer.invoke('app:activarPerfil', id),
+
   listarContextos: () => ipcRenderer.invoke('app:listarContextos'),
   guardarContexto: c => ipcRenderer.invoke('app:guardarContexto', c),
+  actualizarContexto: (id, campos) => ipcRenderer.invoke('app:actualizarContexto', { id, campos }),
+  borrarContexto: id => ipcRenderer.invoke('app:borrarContexto', id),
+  activarContexto: id => ipcRenderer.invoke('app:activarContexto', id),
+
+  // ── Conversaciones (F032: acceso; F038 pinta la vista completa) ────
+  listarConversaciones: () => ipcRenderer.invoke('app:listarConversaciones'),
+  abrirCarpeta: ruta => ipcRenderer.invoke('app:abrirCarpeta', ruta),
 
   // ── Claves: entran, no salen ──────────────────────────────────────
   guardarClaves: claves => ipcRenderer.invoke('app:guardarClaves', claves),
