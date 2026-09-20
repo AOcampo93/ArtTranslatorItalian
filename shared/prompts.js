@@ -9,10 +9,12 @@
  * `contexto.buildContextBlock()`. Un solo constructor para los cuatro: si cada
  * prompt armara el suyo, se desincronizarían a la segunda semana.
  *
- * Reparto de trabajo, y conviene no confundirlo: **la traducción NO la hace el
- * LLM.** La hace Marian en local, en unos 70 ms y gratis. El LLM solo refina
- * terminología de dominio, detecta preguntas que el análisis de texto no ve, y
- * redacta respuestas.
+ * Reparto de trabajo — actualizado en F040, ver `promptTraduccion` abajo:
+ * **con clave de LLM, la traducción la hace el LLM**, con el mismo prompt de
+ * contexto que las respuestas. Marian sigue siendo el traductor sin clave, y
+ * el respaldo cuando el LLM falla o tarda más del plazo. Aparte de traducir,
+ * el LLM también refina terminología de dominio (F027, hoy sin usar), detecta
+ * preguntas que el análisis de texto no ve, y redacta respuestas.
  */
 
 'use strict'
@@ -24,7 +26,29 @@ function conContexto (bloque) {
     : ''
 }
 
-// ── 1. Refinado de traducción ───────────────────────────────────────────────
+// ── 0. Traducción italiano → español ────────────────────────────────────────
+/**
+ * F040. Con clave de LLM, la traducción IT→ES entera la hace este prompt —
+ * no Marian. Medido en la prueba de v0.6.0: Marian se come palabras sueltas
+ * («erotismo» → «heroísmo», «pazzo» sin traducir, «perché» → «para que»,
+ * «timidezes»), y ese defecto pesa más que el troceo de turnos. Sustituye a
+ * `promptRefinado` (§ siguiente, F027), que pedía corregir una traducción ya
+ * hecha: aquí se pide la traducción entera, y sale mejor que corregirla a
+ * medias. `promptRefinado` se queda sin usar — no se borra por si hiciera
+ * falta retomar ese enfoque, pero el que corre en producción es este.
+ */
+function promptTraduccion (bloque) {
+  return `Eres un traductor profesional de italiano a español, para una
+reunión de trabajo en vivo.
+${conContexto(bloque)}
+Traduce al español la frase en italiano que se te da. Conserva los nombres
+propios tal como se pronuncian, y el registro (tú/usted) del original.
+
+Devuelve SOLO la traducción. Sin comillas, sin comentarios, sin prefijos como
+"Traducción:", sin markdown. Nada más que el texto en español.`
+}
+
+// ── 1. Refinado de traducción (F027, sin usar desde F040) ──────────────────
 /**
  * Corre DESPUÉS de que Marian ya haya traducido y pintado. Su único trabajo es
  * corregir lo que un modelo de traducción genérico no puede saber: la
@@ -154,6 +178,7 @@ Reglas:
 }
 
 module.exports = {
+  promptTraduccion,
   promptRefinado,
   promptPreguntas,
   promptRespuesta,

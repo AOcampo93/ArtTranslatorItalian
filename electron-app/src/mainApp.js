@@ -54,6 +54,7 @@ const db = require(path.join(BACK, 'db'))
 const { Autosave } = require(path.join(BACK, 'autosave'))
 const { partirTurno, arrastrar, acabaCerrada } = require(path.join(BACK, 'frases'))
 const { MotorRespuestas, MotorResumen } = require(path.join(BACK, 'respuestas'))
+const { crearTraductorLlm } = require(path.join(BACK, 'traduccionLlm'))
 const { crearLlamador, clasificarError, sanear, proveedorDeClave, MODELOS, NOMBRE_PROVEEDOR } = require(path.join(BACK, 'llm'))
 const { ColaDeInformes } = require(path.join(BACK, 'informes'))
 const { percentil, duracionMs, costeStt, costeLlm } = require(path.join(BACK, 'coste'))
@@ -226,6 +227,12 @@ const aRenderer = (canal, datos) => {
  *
  * El proveedor sale del prefijo de la clave (ver `node-backend/src/llm.js`):
  * el usuario pega una sola clave en Ajustes y no elige nada más.
+ *
+ * F040: además de los dos motores, aquí se elige CON QUÉ se traduce esta
+ * sesión. `traductor` en el resultado es siempre utilizable —con clave, el
+ * LLM con Marian de respaldo (`traduccionLlm.js`); sin clave, Marian directo,
+ * envuelto para que su resultado también lleve `traductor: 'marian'`— así
+ * `procesarTurno` no necesita mirar aparte si hay clave.
  */
 function montarMotores ({ perfil, ctx, claveLlm, autosave }) {
   let llamar = null
@@ -243,9 +250,17 @@ function montarMotores ({ perfil, ctx, claveLlm, autosave }) {
       motivo = clasificarError(err).mensaje
     }
   }
+
+  // Marian, envuelto para que SU resultado también diga `traductor: 'marian'`
+  // — igual marca que deja el LLM, así el .jsonl no distingue "con clave" de
+  // "sin clave" por su forma, sólo por este campo.
+  const traductorMarian = {
+    traducir: async (texto) => ({ ...(await traductor.traducir(texto)), traductor: 'marian' }),
+  }
+
   if (!llamar) {
     aRenderer('app:avisoPreguntas', motivo)
-    return { motor: null, resumen: null }
+    return { motor: null, resumen: null, traductor: traductorMarian }
   }
 
   // El bloque se construye UNA vez y con el perfil y el contexto explícitos.
@@ -299,7 +314,13 @@ function montarMotores ({ perfil, ctx, claveLlm, autosave }) {
   const resumen = new MotorResumen({ llamar, bloqueContexto })
   resumen.on('contexto', c => aRenderer('app:contexto', c.texto))
 
-  return { motor, resumen }
+  // F040: con clave, la traducción IT→ES la hace el mismo LLM que redacta las
+  // respuestas — mismo `llamar`, mismo `bloqueContexto` (contexto y glosario
+  // en el sistema). Marian sólo entra si el LLM falla, tarda más del plazo o
+  // devuelve vacío.
+  const traductorLlm = crearTraductorLlm({ llamar, bloqueContexto, respaldo: traductorMarian })
+
+  return { motor, resumen, traductor: traductorLlm }
 }
 
 /**
@@ -419,18 +440,24 @@ function acabaEnPuntuacionDeLinea (textoLinea, turno) {
  * que es el único que pudo partir una palabra suya. `acabaEnPuntuacion` va
  * aparte porque es del texto, no del corte (ver arriba).
  */
-async function traducirLinea (texto, turno, extra = {}) {
+async function traducirLinea (s, texto, turno, extra = {}) {
   const t0 = Date.now()
-  const tr = await traductor.traducir(texto)
-  // Reloj de pared y no `tr.ms`: si una frase larga tiene ocupado a Marian,
-  // la siguiente espera su turno, y esa espera la sufre el usuario aunque
-  // el modelo no la cuente como suya.
+  // F040: `s.traductor` es el que `montarMotores` eligió al montar la
+  // sesión —el LLM con Marian de respaldo, o Marian directo sin clave—, no
+  // el módulo `traductor` (Marian) a secas: ver `montarMotores`.
+  const tr = await s.traductor.traducir(texto)
+  // Reloj de pared y no `tr.ms`: si una frase larga tiene ocupado al
+  // traductor, la siguiente espera su turno, y esa espera la sufre el
+  // usuario aunque el modelo no la cuente como suya.
   const msTraducir = Date.now() - t0
   const msTranscribir = turno.msTranscribir
   return {
     it: texto, es: tr.es,
     ms: msTranscribir + msTraducir,   // el retardo es la cadena, no una pierna
     msTranscribir, msTraducir,
+    // F040: con qué se tradujo esta línea — 'llm' o 'marian' — para poder
+    // comparar latencia y calidad en la siguiente prueba.
+    traductor: tr.traductor,
     forzado: Boolean(turno.forzado),
     msTurno: turno.msTurno ?? null,
     msHolgura: turno.msHolgura ?? null,
@@ -465,9 +492,9 @@ async function traducirLinea (texto, turno, extra = {}) {
  * que es el único fallo que este texto sabe nombrar: decir «no se pudo
  * traducir» de un fallo de disco manda a investigar al sitio equivocado.
  */
-async function traducirOAvisar (texto, turno, extra) {
+async function traducirOAvisar (s, texto, turno, extra) {
   try {
-    return await traducirLinea(texto, turno, extra)
+    return await traducirLinea(s, texto, turno, extra)
   } catch (err) {
     // F021: Marian corre en local y no tiene claves que filtrar, pero un
     // fallo suyo puede traer una ruta o un mensaje nativo de ONNX que tampoco
@@ -499,6 +526,14 @@ function guardarYPintar (s, frase, idProvisional = null) {
     // Se cuenta lo que ESTÁ en disco, no lo que se intentó escribir: este
     // número acaba en `lineCount` de la base de datos.
     s.frases++
+    // F040: cuántas de las que quedaron en disco se tradujeron con el LLM y
+    // cuántas con Marian, para el resumen al parar. Sólo cuenta si `frase`
+    // trae la marca (línea definitiva de una sesión real); las pruebas que
+    // fingen un traductor sin esa marca no incrementan nada, a propósito.
+    if (s.porTraductor) {
+      if (frase.traductor === 'llm') s.porTraductor.llm++
+      else if (frase.traductor === 'marian') s.porTraductor.marian++
+    }
   } catch (err) {
     // La traducción salió bien y lo que falló fue guardarla, que es justo lo
     // que §0.3 promete. Se dice con su nombre y con la clase de fallo grave.
@@ -619,7 +654,7 @@ async function procesarTurno (s, turno, llegada) {
   const msProvisional = union.arrastre ? colaPrevia.msProvisional ?? null : null
 
   if (completas) {
-    const frase = await traducirOAvisar(completas, turno,
+    const frase = await traducirOAvisar(s, completas, turno,
       { arrastre: union.arrastre, msProvisional, empiezaAMedias })
     if (!frase) {
       // Marian no pudo con la unión. El turno se pierde, como cualquier otra
@@ -670,7 +705,7 @@ async function procesarTurno (s, turno, llegada) {
     // La primera vez que se ve algo de este texto es AHORA; si viene de una
     // cola anterior, ya se vio entonces y esa es la medida que vale.
     const msProvisionalAhora = msProvisional ?? (Date.now() - llegada)
-    const frase = await traducirOAvisar(cola, turno, {
+    const frase = await traducirOAvisar(s, cola, turno, {
       arrastre: union.arrastre,
       empiezaAMedias: colaEmpiezaAMedias,
       msProvisional: msProvisionalAhora,
@@ -775,9 +810,17 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   // cae en `this.version` si no se le pasa otra.
   autosave.guardarCabecera({ perfil, contexto: ctx, inicio, id: idSesion })
 
-  const { motor, resumen } = montarMotores({ perfil, ctx, claveLlm: claves.llm, autosave })
+  // F040: `traductor` es el elegido para ESTA sesión — el LLM con Marian de
+  // respaldo si hay clave, Marian directo si no. Se llama igual que el módulo
+  // `traductor` (Marian, importado arriba) porque la sombra es intencional:
+  // dentro de `empezarSesion` de aquí en adelante, y en el objeto de sesión,
+  // "traductor" es el de ESTA reunión, no el módulo.
+  const { motor, resumen, traductor } = montarMotores({ perfil, ctx, claveLlm: claves.llm, autosave })
   sesion = {
-    transcriptor, autosave, idSesion, motor, resumen, inicio: Date.now(), frases: 0,
+    transcriptor, autosave, idSesion, motor, resumen, traductor, inicio: Date.now(), frases: 0,
+    // F040: cuántas frases definitivas se tradujeron con el LLM y cuántas con
+    // Marian, para el resumen al parar (`pararSesion`).
+    porTraductor: { llm: 0, marian: 0 },
     // Las frases a medio traducir, para poder esperarlas al parar en vez de
     // perderlas. Y `cerrada`, para que las que vuelvan tarde sepan que la
     // reunión terminó: se guardan igual, pero no gastan llamadas al LLM.
@@ -961,6 +1004,9 @@ async function pararSesion (motivo = 'el usuario paró', graciaMs = GRACIA_EN_VU
     // `s.motor.stats`, porque también cuenta las que se pulsaron sin clave de
     // LLM configurada, cuando `s.motor` ni siquiera existe.
     preguntasManuales: s.preguntasManuales || 0,
+    // F040: cuántas frases definitivas se tradujeron con el LLM y cuántas
+    // con Marian, para comparar latencia y calidad en la siguiente prueba.
+    porTraductor: s.porTraductor || { llm: 0, marian: 0 },
   }
 }
 

@@ -20,10 +20,10 @@ Tipo: negociación
 Proyecto: ERP de logística, migración a SAP
 Términos: SAP, ERP, fase 2`
 
-describe('el contexto llega a los cuatro prompts', () => {
-  const cuatro = ['promptRefinado', 'promptPreguntas', 'promptRespuesta', 'promptResumen']
+describe('el contexto llega a los cinco prompts', () => {
+  const cinco = ['promptTraduccion', 'promptRefinado', 'promptPreguntas', 'promptRespuesta', 'promptResumen']
 
-  for (const nombre of cuatro) {
+  for (const nombre of cinco) {
     test(`${nombre} incluye el bloque`, () => {
       const p = P[nombre](BLOQUE)
       assert.match(p, /CONTEXTO DE ESTA CONVERSACIÓN/)
@@ -81,6 +81,22 @@ describe('el escáner de preguntas apunta a lo que el texto no ve', () => {
 
   test('exige la pregunta completa', () => {
     assert.match(P.promptPreguntas(BLOQUE), /nunca truncada/i)
+  })
+})
+
+describe('F040 — la traducción por LLM pide SOLO la traducción', () => {
+  test('pide traducir al español y conservar los nombres propios', () => {
+    const p = P.promptTraduccion(BLOQUE)
+    assert.match(p, /Traduce al español/)
+    assert.match(p, /nombres\s+propios/)
+  })
+
+  test('prohíbe comentarios, comillas, markdown y el prefijo "Traducción:"', () => {
+    const p = P.promptTraduccion(BLOQUE)
+    assert.match(p, /SOLO la traducción/)
+    assert.match(p, /[Ss]in comillas/)
+    assert.match(p, /["“]Traducción:["”]/, 'nombra el prefijo típico para prohibirlo')
+    assert.match(p, /markdown/)
   })
 })
 
