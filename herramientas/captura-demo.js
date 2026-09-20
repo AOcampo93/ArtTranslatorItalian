@@ -78,6 +78,7 @@ async function main () {
   await capturar('inicio')
 
   // 2) Perfiles: lista vacía (sin `api`, `listarPerfiles` no se llama).
+  // F042: el formulario arranca OCULTO, detrás de «+ Agregar perfil».
   await ejecutar(`document.getElementById('irPerfiles').click()`)
   await esperar(150)
   await capturar('perfiles')
@@ -115,11 +116,12 @@ async function main () {
   await esperar(2200)
   await capturar('envivo-demo')
 
-  // 7b) F041: la misma pantalla, ensanchada a 1100 px — a partir de 900 px la
-  // vista en vivo pasa a dos columnas (traducción a la izquierda, preguntas a
-  // la derecha). Se vuelve a 440 px después, porque el resto del guion asume
-  // la ventana angosta de F035.
-  ventana.setSize(1100, 900)
+  // 7b) F042: la misma pantalla, ensanchada a 640 px — el umbral bajó de
+  // 900 a 600, así que 640 es justo el ancho que antes se quedaba en una
+  // sola columna y ahora ya tiene que verse en dos (traducción a la
+  // izquierda, preguntas a la derecha). Se vuelve a 440 px después, porque
+  // el resto del guion asume la ventana angosta de F035.
+  ventana.setSize(640, 900)
   await esperar(200)
   await capturar('envivo-demo-ancho')
   ventana.setSize(440, 900)

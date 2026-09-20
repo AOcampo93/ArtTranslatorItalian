@@ -160,7 +160,13 @@ class Autosave {
    * más de una cabecera es la huella de dos reuniones fundidas —
    * `detectarMezcla()` la busca.
    */
-  guardarCabecera ({ perfil, contexto, version, inicio, id } = {}) {
+  /**
+   * `claves` (F042): booleanos, nunca las claves — dice si la sesión tenía
+   * clave de transcripción y de LLM al arrancar, para poder comprobar en el
+   * informe que una reunión bien traducida de verdad tenía clave y no fue
+   * casualidad.
+   */
+  guardarCabecera ({ perfil, contexto, version, inicio, id, claves } = {}) {
     this.escribir({
       tipo: 'cabecera',
       perfil: perfil || null,
@@ -168,6 +174,7 @@ class Autosave {
       version: version || this.version || null,
       inicio: (inicio ? new Date(inicio) : this.inicio).toISOString(),
       id: id !== undefined ? id : this.idSesion,
+      claves: { stt: Boolean(claves?.stt), llm: Boolean(claves?.llm) },
     })
   }
 

@@ -52,13 +52,17 @@ describe('F030 — empezarSesion escribe inicio, version y cabecera de verdad', 
     const app = { getPath: () => raiz, getVersion: () => '0.5.0' }
     const perfil = { nombre: 'Omar' }
     const ctx = { nombre: 'Negociación' }
+    // F042: `claves` es la misma constante que `empezarSesion` ya calcula
+    // arriba (fuera de este tramo) con `leerClaves()`; aquí se inyecta a
+    // mano, como el resto de identificadores libres de abajo.
+    const claves = { stt: 'clave-stt', llm: 'clave-llm' }
 
     // Los nombres de estos parámetros son los mismos identificadores libres
     // que usa el tramo extraído (`db`, `Autosave`, `path`, `app`, `perfil`,
-    // `ctx`): si `mainApp.js` deja de usar alguno, `new Function` revienta
-    // con un `ReferenceError` al ejecutar, no en silencio.
-    const fabrica = new Function('db', 'Autosave', 'path', 'app', 'perfil', 'ctx', codigo)
-    const { idSesion, inicio, autosave } = fabrica(db, Autosave, path, app, perfil, ctx)
+    // `ctx`, `claves`): si `mainApp.js` deja de usar alguno, `new Function`
+    // revienta con un `ReferenceError` al ejecutar, no en silencio.
+    const fabrica = new Function('db', 'Autosave', 'path', 'app', 'perfil', 'ctx', 'claves', codigo)
+    const { idSesion, inicio, autosave } = fabrica(db, Autosave, path, app, perfil, ctx, claves)
 
     try {
       assert.strictEqual(idSesion, 77)
@@ -74,6 +78,9 @@ describe('F030 — empezarSesion escribe inicio, version y cabecera de verdad', 
       assert.strictEqual(entradas[0].id, 77)
       assert.strictEqual(entradas[0].inicio, inicio.toISOString())
       assert.strictEqual(entradas[0].perfil.nombre, 'Omar')
+      // F042: para poder verificar en el informe que la reunión de verdad
+      // tenía clave de STT y de LLM, y no es casualidad que tradujera bien.
+      assert.deepStrictEqual(entradas[0].claves, { stt: true, llm: true })
 
       // Mutación documentada: si se borra `autosave.guardarCabecera(...)` de
       // `mainApp.js` (el estado del que partía esta tarea, código muerto),

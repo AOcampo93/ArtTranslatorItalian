@@ -200,6 +200,22 @@ describe('F032 — el asistente avanza por pasos, no todo a la vez', () => {
     assert.strictEqual(a.raiz.querySelector('#btnEscuchar').disabled, false)
   })
 
+  test('F042: «Saltar» avanza él solo al paso final, sin un segundo clic en «Siguiente»', () => {
+    // Antes, «Saltar» sólo habilitaba «Siguiente»: el usuario tenía que
+    // pulsar un segundo botón para que pasara algo, y el cliente lo leyó
+    // como que «Saltar» no hacía nada.
+    const a = montar()
+    a.raiz.querySelector('#pNombre').value = 'Omar'
+    a.raiz.querySelector('#btnSiguiente1').onclick()
+    a.raiz.querySelector('#btnSiguiente2').onclick()
+
+    a.raiz.querySelector('#btnSaltar').onclick()
+
+    assert.strictEqual(a.paso('pasoComprobacion'), false, '«Saltar» cierra el paso 3 él solo')
+    assert.strictEqual(a.paso('pasoFinal'), true, 'y ya deja ver el paso final, sin tocar «Siguiente»')
+    assert.strictEqual(a.raiz.querySelector('#btnEscuchar').disabled, false)
+  })
+
   test('reiniciarAsistente() vuelve al paso 1, para una reunión nueva desde cero', () => {
     const a = montar()
     a.raiz.querySelector('#pNombre').value = 'Omar'

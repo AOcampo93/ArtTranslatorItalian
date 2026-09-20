@@ -82,4 +82,30 @@ describe('F032 — listarConversaciones() cuenta frases y preguntas de cada reun
     assert.ok(rota, 'el archivo roto no hace caer la lista')
     assert.strictEqual(rota.frases, 0)
   })
+
+  // F042: `traducirLinea` (mainApp.js) escribía la frase con `escribir()`
+  // directo, sin `tipo`, así que filtrar por `tipo === 'frase'` a secas
+  // dejaba esta lista en 0 — MEDIDO: una reunión real de 28 frases se leía
+  // como «0 frases · sin frases medidas». La corrección cuenta también las
+  // líneas sin `tipo` que sí llevan `it` (frase de verdad), y las nuevas ya
+  // se graban con `tipo: 'frase'` explícito (comprobado arriba).
+  test('F042: cuenta también las frases guardadas sin `tipo` (defecto de versiones anteriores)', () => {
+    const raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'conversaciones-'))
+    const dir = path.join(raiz, 'reuniones')
+
+    const a = new Autosave({ directorio: dir, idSesion: '10', inicio: new Date('2026-09-20T15:36:00Z') })
+    a.abrir()
+    a.guardarCabecera({ perfil: { nombre: 'Omar Oliveira' } })
+    // Como escribía `traducirLinea` antes de F042: sin `tipo`.
+    a.escribir({ it: 'Ciao', es: 'Hola', ms: 300 })
+    a.escribir({ it: 'Come va?', es: '¿Cómo va?', ms: 250 })
+    // Una pregunta también lleva `it`, pero con su propio `tipo`: no debe
+    // contarse como frase.
+    a.guardarPregunta({ it: 'Hai finito?', es: '¿Terminaste?' })
+    a.cerrar()
+
+    const listarConversaciones = construir(raiz)
+    const [reunion] = listarConversaciones()
+    assert.strictEqual(reunion.frases, 2, `debía contar 2 frases sin tipo, dio ${reunion.frases}`)
+  })
 })

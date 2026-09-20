@@ -187,12 +187,15 @@
     background: var(--sup); display: flex; flex-direction: column; min-height: 0;
   }
 
-  /* F041: al ensanchar la ventana (>= 900 px) ya cabe la traducción a la
-     izquierda y las preguntas a la derecha, lado a lado — angosta sigue en
-     columna, que es la regla de arriba y no cambia. Mismo reparto 60/40 que ya
-     tenía `flex: 6 1 0` / `flex: 4 1 0`; sólo cambia el eje, así que el
-     separador pasa de `border-top` a `border-left`. */
-  @media (min-width: 900px) {
+  /* F041/F042: al ensanchar la ventana ya cabe la traducción a la izquierda y
+     las preguntas a la derecha, lado a lado — angosta sigue en columna, que
+     es la regla de arriba y no cambia. Mismo reparto 60/40 que ya tenía
+     `flex: 6 1 0` / `flex: 4 1 0`; sólo cambia el eje, así que el separador
+     pasa de `border-top` a `border-left`. F042: el umbral baja de 900 a
+     600 px — el cliente lo pidió porque a 900 px casi nunca llegaba a verlo:
+     la ventana estándar es de 440 px y ensancharla hasta 900 es mucho más
+     gesto del que alguien hace a media reunión; a 600 ya cabe de sobra. */
+  @media (min-width: 600px) {
     main#envivo { flex-direction: row; }
     #conversacion { border-right: 1px solid var(--linea); }
     #preguntas { border-top: none; border-left: 1px solid var(--linea); }
@@ -278,6 +281,10 @@
     color: var(--tx); font-family: var(--sans); font-size: 13px; padding: 7px 9px;
   }
   input:focus, textarea:focus, select:focus { outline: none; border-color: var(--tx3); }
+  /* F042: el cliente confundió los placeholders de ejemplo («Omar Avila») con
+     datos ya guardados. Atenuado y con «Ej.:» delante (Perfiles) es lo que
+     distingue un ejemplo de un valor real; el color aparte no basta solo. */
+  input::placeholder, textarea::placeholder { color: var(--tx3); }
   textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
   .ancho { grid-column: 1 / -1; }
 
@@ -289,6 +296,11 @@
   .resultado-clave { font-size: 11.5px; margin: 5px 0 0; line-height: 1.4; }
   .resultado-clave.ok { color: var(--ok); }
   .resultado-clave.mal { color: var(--mal); }
+
+  /* F042: «Guardada ✓ (termina en …xxxx)» o «Sin clave», bajo el campo — es
+     la única forma de saber si hay clave guardada sin volver a teclearla. */
+  .estado-clave { font-size: 11.5px; margin-bottom: 5px; color: var(--tx3); }
+  .estado-clave.ok { color: var(--ok); }
 
   .paso { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: baseline; padding: 8px 0; }
   .paso + .paso { border-top: 1px solid var(--linea); }
@@ -326,6 +338,12 @@
 
   /* ── Panel de inicio (F032) ─────────────────────────────────────── */
   #inicio { flex: 1; overflow-y: auto; padding: 22px; }
+  /* F042: `#perfiles` y `#conversaciones` no tenían NINGUNA regla propia — a
+     diferencia de `#preparar` e `#inicio`, de arriba, su texto tocaba de
+     verdad el borde de la ventana. `var(--gutter)` y no el `22px` fijo de
+     esas dos, para que quede bajo el mismo número común que ya vigila F041. */
+  #perfiles { flex: 1; overflow-y: auto; padding: var(--gutter); }
+  #conversaciones { flex: 1; overflow-y: auto; padding: var(--gutter); }
   .accesos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
   .acceso {
     text-align: left; background: var(--sup); border: 1px solid var(--linea);
@@ -371,6 +389,17 @@
   .tarjeta-lista .acciones-fila { display: flex; gap: 6px; flex: none; }
   .tarjeta-lista .acciones-fila button { font-size: 11px; padding: 5px 9px; }
   .vacio-lista { color: var(--tx3); font-size: 12.5px; margin-top: 10px; }
+
+  /* F042: a menos de 600px (la ventana estándar es de 440) `.tarjeta-lista`
+     en fila dejaba Abrir/Ver/Borrar apretados al lado del texto, cada uno a
+     unos pocos píxeles del siguiente. En columna, con las acciones en su
+     propia fila DEBAJO del texto y a lo ancho, cada botón vuelve a tener
+     sitio de sobra para el dedo o el cursor. */
+  @media (max-width: 600px) {
+    .tarjeta-lista { flex-direction: column; align-items: stretch; }
+    .tarjeta-lista .acciones-fila { width: 100%; }
+    .tarjeta-lista .acciones-fila button { flex: 1; }
+  }
 
   /* Selector de perfil del paso 1: elegir de la lista o crear uno nuevo. */
   .sel-existente { margin-bottom: 11px; }
@@ -505,15 +534,24 @@
     <p class="sub">Quién eres. El activo se preselecciona la próxima vez que prepares una reunión.</p>
     <div id="listaPerfiles"></div>
 
-    <section class="tarjeta">
+    <!-- F042: pedido del cliente — el formulario ya NO se ve siempre; con la
+         lista de perfiles a la vista, un formulario de «Nuevo perfil» abierto
+         debajo con placeholders parecía datos ya guardados. Se abre con
+         «+ Agregar perfil» (o al pulsar «Editar» en uno de la lista) y lo
+         controla `mostrarFormularioPerfil()`. -->
+    <div class="fila">
+      <button class="sec" id="btnAgregarPerfil">+ Agregar perfil</button>
+    </div>
+
+    <section class="tarjeta oculto" id="formPerfil">
       <h2 id="tituloFormPerfil">Nuevo perfil</h2>
       <div class="rejilla">
-        <div><label>Nombre</label><input id="pfNombre" placeholder="Omar Avila"></div>
-        <div><label>Edad</label><input id="pfEdad" type="number" min="16" max="99" placeholder="34"></div>
-        <div class="ancho"><label>Ocupación</label><input id="pfOcupacion" placeholder="Responsable técnico"></div>
+        <div><label>Nombre</label><input id="pfNombre" placeholder="Ej.: Omar Avila"></div>
+        <div><label>Edad</label><input id="pfEdad" type="number" min="16" max="99" placeholder="Ej.: 34"></div>
+        <div class="ancho"><label>Ocupación</label><input id="pfOcupacion" placeholder="Ej.: Responsable técnico"></div>
         <div class="ancho">
           <label>Contexto personal</label>
-          <textarea id="pfContexto" placeholder="No hablo italiano; entiendo algo escrito."></textarea>
+          <textarea id="pfContexto" placeholder="Ej.: No hablo italiano; entiendo algo escrito."></textarea>
         </div>
       </div>
       <div class="fila">
@@ -577,6 +615,11 @@
       <div class="rejilla">
         <div class="ancho">
           <label>Transcripción</label>
+          <!-- F042: el campo se vacía tras cada guardado (ver
+               `btnGuardarAjustes`) y siempre muestra «•••», así que antes no
+               había forma de saber si ya había una clave guardada o no. Este
+               estado se pinta en `abrirAjustes()`, con `app:estadoClaves`. -->
+          <p class="estado-clave" id="estadoStt">Sin clave</p>
           <div class="clave-fila">
             <input id="kSTT" type="password" placeholder="•••">
             <button class="sec" id="btnProbarStt" type="button">Probar</button>
@@ -585,6 +628,7 @@
         </div>
         <div class="ancho">
           <label>Respuestas y preguntas</label>
+          <p class="estado-clave" id="estadoLlm">Sin clave</p>
           <div class="clave-fila">
             <input id="kLLM" type="password" placeholder="•••">
             <button class="sec" id="btnProbarLlm" type="button">Probar</button>
@@ -1073,8 +1117,12 @@ $('#btnProbar').onclick = async () => {
   revisarListo()
 }
 $('#btnSaltar').onclick = () => {
+  // F042: «Saltar» tiene que saltar de verdad — antes sólo habilitaba
+  // «Siguiente» y dejaba al usuario con la sensación de que el botón no
+  // hacía nada, porque había que pulsar un segundo botón para avanzar.
   comprobado = true
   $('#btnSiguiente3').disabled = false
+  mostrarPasoAsistente('pasoFinal')
   revisarListo()
 }
 
@@ -1324,6 +1372,18 @@ $('#modoInformes')?.querySelectorAll('.op').forEach(op => {
   op.onclick = () => pintarModoInformes(op.dataset.valor)
 })
 
+/**
+ * F042: pinta «Guardada ✓ (termina en …xxxx)» o «Sin clave» bajo el campo.
+ * Nunca ve la clave entera — sólo los 4 últimos caracteres que ya llegan
+ * recortados de `app:estadoClaves` (`ultimos4()`, en `mainApp.js`).
+ */
+function pintarEstadoClave (id, hay, ultimos4) {
+  const p = $(`#estado${id}`)
+  if (!p) return
+  p.classList.toggle('ok', Boolean(hay))
+  p.textContent = hay ? `Guardada ✓ (termina en …${ultimos4})` : 'Sin clave'
+}
+
 /** Abre Ajustes desde el engranaje de la barra o desde el panel de inicio (F032). */
 async function abrirAjustes () {
   $('#ajustes').classList.remove('oculto')
@@ -1331,6 +1391,8 @@ async function abrirAjustes () {
   // pantalla (o el archivo de token puede haber aparecido/desaparecido).
   const estado = api ? await api.estadoClaves() : null
   if (estado) {
+    pintarEstadoClave('Stt', estado.stt, estado.sttUltimos4)
+    pintarEstadoClave('Llm', estado.llm, estado.llmUltimos4)
     pintarModoInformes(estado.informes || 'completo')
     const txt = $('#txtInformes')
     if (txt) {
@@ -1376,8 +1438,13 @@ function pintarResultadoClave (id, resultado) {
  * @param {Function} fnApi  la llamada de `preloadApp.js` que hace la prueba
  */
 async function probarClave (id, campo, fnApi) {
+  // F042: el campo vacío ya NO es «escribe la clave» — se manda igual, y es
+  // el proceso principal (`app:probarClaveStt`/`Llm`) quien, con el campo
+  // vacío, prueba la clave YA GUARDADA. Antes de esto, pulsar «Probar» justo
+  // después de guardar (el campo se vacía al guardar, ver `btnGuardarAjustes`)
+  // decía siempre «escribe la clave», así que no había forma de comprobar la
+  // que ya estaba guardada sin volver a teclearla.
   const clave = $(`#${campo}`).value.trim()
-  if (!clave) { pintarResultadoClave(id, { ok: false, mensaje: 'Escribe la clave antes de probarla.' }); return }
   const boton = $(`#btnProbar${id}`)
   const textoOriginal = boton.textContent
   boton.disabled = true
@@ -1444,6 +1511,11 @@ $('#irRapida')?.addEventListener('click', async () => {
 
 $('#irPerfiles')?.addEventListener('click', async () => {
   mostrarPantalla('perfiles')
+  // F042: la pantalla arranca con el formulario cerrado cada vez que se
+  // entra — si quedó abierto de una visita anterior (se editó algo y se
+  // volvió al inicio sin guardar ni cancelar), no puede reaparecer solo.
+  cargarFormularioPerfil(null)
+  mostrarFormularioPerfil(false)
   await cargarListaPerfiles()
 })
 
@@ -1485,7 +1557,7 @@ function pintarListaPerfiles (perfiles) {
     btnActivar.onclick = async () => { await api?.activarPerfil(p.id); await cargarListaPerfiles() }
 
     const btnEditar = crear('button', 'sec'); btnEditar.textContent = 'Editar'
-    btnEditar.onclick = () => cargarFormularioPerfil(p)
+    btnEditar.onclick = () => { cargarFormularioPerfil(p); mostrarFormularioPerfil(true) }
 
     const btnBorrar = crear('button', 'sec'); btnBorrar.textContent = 'Borrar'
     btnBorrar.onclick = async () => {
@@ -1499,6 +1571,17 @@ function pintarListaPerfiles (perfiles) {
     fila.append(info, acc)
     cont.appendChild(fila)
   }
+}
+
+/**
+ * F042: abre o cierra el formulario de Perfiles.
+ *
+ * `mostrar` es explícito y no se deduce de `p`: «+ Agregar perfil» también
+ * pasa un perfil vacío (`null`) y SÍ tiene que abrir el formulario, así que
+ * «hay perfil → abrir» no vale como regla.
+ */
+function mostrarFormularioPerfil (mostrar) {
+  $('#formPerfil')?.classList.toggle('oculto', !mostrar)
 }
 
 function cargarFormularioPerfil (p) {
@@ -1516,7 +1599,11 @@ async function cargarListaPerfiles () {
   pintarListaPerfiles(await api.listarPerfiles())
 }
 
-$('#btnCancelarEdicionPerfil')?.addEventListener('click', () => cargarFormularioPerfil(null))
+$('#btnAgregarPerfil')?.addEventListener('click', () => { cargarFormularioPerfil(null); mostrarFormularioPerfil(true) })
+$('#btnCancelarEdicionPerfil')?.addEventListener('click', () => {
+  cargarFormularioPerfil(null)
+  mostrarFormularioPerfil(false)
+})
 $('#btnGuardarPerfil')?.addEventListener('click', async () => {
   const campos = {
     nombre: $('#pfNombre').value.trim(), edad: +$('#pfEdad').value || null,
@@ -1526,6 +1613,7 @@ $('#btnGuardarPerfil')?.addEventListener('click', async () => {
   if (editandoPerfilId) await api?.actualizarPerfil(editandoPerfilId, campos)
   else await api?.guardarPerfil(campos)
   cargarFormularioPerfil(null)
+  mostrarFormularioPerfil(false)
   await cargarListaPerfiles()
 })
 

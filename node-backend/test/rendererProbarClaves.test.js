@@ -84,16 +84,20 @@ describe('F036 — el botón «Probar»: cablea probarClave() con los ids correc
 // lo que sigue ejercita `probarClave` y `pintarResultadoClave` de verdad,
 // que es donde vive toda la lógica que decide el verde/rojo y el mensaje.
 describe('F036 — probarClave / pintarResultadoClave', () => {
-  test('sin clave escrita: rojo, sin llamar a la API', async () => {
+  // F042: el campo vacío ya NO se rechaza en el renderer — se manda igual, y
+  // es el proceso principal quien, con el campo vacío, prueba la clave YA
+  // GUARDADA (`mainAppProbarClaves.test.js` prueba esa parte; aquí sólo
+  // importa que el renderer no corte la llamada antes de que llegue).
+  test('campo vacío: SÍ llama a la API, para poder probar la clave ya guardada', async () => {
     let llamado = false
-    const api = { probarClaveStt: async () => { llamado = true; return { ok: true, mensaje: 'x' } } }
+    const api = { probarClaveStt: async c => { llamado = c; return { ok: true, mensaje: 'Clave válida: terminada en …abcd.' } } }
     const { probarClave, nodos } = montar(api)
     nodos.kSTT.value = '   '
     await probarClave('Stt', 'kSTT', c => api.probarClaveStt(c))
-    assert.strictEqual(llamado, false)
+    assert.strictEqual(llamado, '', 'el campo vacío se manda tal cual, sin inventar nada en el renderer')
     assert.ok(!nodos.resultadoStt.classList.contains('oculto'))
-    assert.ok(nodos.resultadoStt.classList.contains('mal'))
-    assert.match(nodos.resultadoStt.textContent, /Escribe la clave/)
+    assert.ok(nodos.resultadoStt.classList.contains('ok'))
+    assert.match(nodos.resultadoStt.textContent, /abcd/)
   })
 
   test('con la clave y éxito: verde, mensaje en pantalla, botón reactivado', async () => {

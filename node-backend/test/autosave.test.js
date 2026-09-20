@@ -256,6 +256,27 @@ describe('F030 — cabecera: de qué reunión y versión es un archivo', () => {
     const frases = entradas.filter(e => e.tipo === 'frase')
     assert.strictEqual(frases.length, 2, 'la cabecera no debe contarse como frase')
   })
+
+  // F042: sin esto, un informe no puede distinguir «tradujo bien porque
+  // tenía clave de LLM» de «tradujo bien de casualidad» — hace falta la
+  // cabecera de la reunión, no la memoria de quien la revisa.
+  test('F042: la cabecera dice con booleanos si había clave de STT y de LLM', () => {
+    const a = new Autosave({ directorio: dir, idSesion: '4' })
+    a.guardarCabecera({ perfil: { nombre: 'Omar' }, claves: { stt: true, llm: false } })
+    a.cerrar()
+
+    const { entradas } = Autosave.leer(a.ruta)
+    assert.deepStrictEqual(entradas[0].claves, { stt: true, llm: false })
+  })
+
+  test('F042: sin `claves`, la cabecera dice los dos en falso, nunca los omite', () => {
+    const a = new Autosave({ directorio: dir, idSesion: '5' })
+    a.guardarCabecera({ perfil: { nombre: 'Omar' } })
+    a.cerrar()
+
+    const { entradas } = Autosave.leer(a.ruta)
+    assert.deepStrictEqual(entradas[0].claves, { stt: false, llm: false })
+  })
 })
 
 describe('F030 — detectarMezcla: saber si un archivo ya viene fundido', () => {

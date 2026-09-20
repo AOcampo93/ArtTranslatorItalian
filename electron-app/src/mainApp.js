@@ -452,6 +452,11 @@ async function traducirLinea (s, texto, turno, extra = {}) {
   const msTraducir = Date.now() - t0
   const msTranscribir = turno.msTranscribir
   return {
+    // F042: sin esto, `Autosave.escribir()` guarda la línea sin `tipo` y
+    // cualquier lector que filtre por `tipo === 'frase'` (la lista de
+    // Conversaciones) la pierde aunque sí sea una frase — MEDIDO: una
+    // reunión de 28 frases se leía como «0 frases» por esto mismo.
+    tipo: 'frase',
     it: texto, es: tr.es,
     ms: msTranscribir + msTraducir,   // el retardo es la cadena, no una pierna
     msTranscribir, msTraducir,
@@ -808,7 +813,12 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   // `Autosave.detectarMezcla()` para saber si un archivo funde dos reuniones.
   // Sin `version`: el constructor ya la recibió arriba y `guardarCabecera`
   // cae en `this.version` si no se le pasa otra.
-  autosave.guardarCabecera({ perfil, contexto: ctx, inicio, id: idSesion })
+  autosave.guardarCabecera({
+    perfil, contexto: ctx, inicio, id: idSesion,
+    // F042: para poder verificar en el informe que la reunión de verdad tenía
+    // clave y no es casualidad que tradujera bien.
+    claves: { stt: !!claves.stt, llm: !!claves.llm },
+  })
 
   // F040 (corrección): `traductorSesion` es el elegido para ESTA sesión — el
   // LLM con Marian de respaldo si hay clave, Marian directo si no. Antes esta
@@ -1120,11 +1130,26 @@ ipcMain.handle('app:guardarClaves', (_e, claves) => {
  * `informes.token.json` la subida está desactivada pase lo que pase el
  * usuario elija, y Ajustes tiene que poder decirlo.
  */
+/**
+ * F042: los 4 últimos caracteres de cada clave guardada, NUNCA más — es lo
+ * justo para que el usuario reconozca cuál es sin que Ajustes deje de ser
+ * «nunca se pinta ni se registra ninguna clave» (criterio de F040bis). Una
+ * clave de menos de 4 caracteres no debería existir, pero por si acaso no se
+ * enseña entera: `slice(-4)` sobre un texto corto ya devuelve el texto
+ * completo, así que se corta aparte.
+ */
+function ultimos4 (clave) {
+  if (!clave || clave.length < 4) return null
+  return clave.slice(-4)
+}
+
 ipcMain.handle('app:estadoClaves', () => {
   const c = leerClaves()
   return {
     stt: !!c.stt,
     llm: !!c.llm,
+    sttUltimos4: ultimos4(c.stt),
+    llmUltimos4: ultimos4(c.llm),
     cifradoDisponible: safeStorage.isEncryptionAvailable(),
     informes: c.informes || 'completo',
     informesDisponibles: Boolean(leerTokenInformes()),
@@ -1179,8 +1204,12 @@ async function probarClaveLlm (clave) {
   }
 }
 
-ipcMain.handle('app:probarClaveStt', (_e, clave) => probarClaveStt(clave))
-ipcMain.handle('app:probarClaveLlm', (_e, clave) => probarClaveLlm(clave))
+// F042: «Probar» con el campo vacío prueba la clave YA GUARDADA, no dice
+// «falta la clave» a alguien que ya la guardó — antes, `Ajustes` vacía el
+// campo tras cada guardado (ver `btnGuardarAjustes`), así que pulsar «Probar»
+// justo después de guardar SIEMPRE encontraba el campo vacío.
+ipcMain.handle('app:probarClaveStt', (_e, clave) => probarClaveStt(clave || leerClaves().stt))
+ipcMain.handle('app:probarClaveLlm', (_e, clave) => probarClaveLlm(clave || leerClaves().llm))
 
 /**
  * La comprobación de la pantalla de preparación.
@@ -1314,7 +1343,13 @@ function listarConversaciones () {
     try {
       const { entradas } = Autosave.leer(f.ruta)
       cabecera = entradas.find(e => e.tipo === 'cabecera') || null
-      const lineasFrase = entradas.filter(e => e.tipo === 'frase')
+      // F042: hasta ahora `traducirLinea` guardaba la frase sin `tipo`, así
+      // que filtrar solo por `tipo === 'frase'` dejaba esta lista en 0 —
+      // MEDIDO: una reunión de 28 frases se leía como «0 frases · sin frases
+      // medidas». Las líneas de frase se reconocen por llevar `it` y no ser
+      // de otro tipo con nombre (pregunta, respuestaLlm, cabecera); las
+      // grabadas desde ahora ya llevan `tipo: 'frase'` explícito.
+      const lineasFrase = entradas.filter(e => e.it && (!e.tipo || e.tipo === 'frase'))
       frases = lineasFrase.length
       preguntas = entradas.filter(e => e.tipo === 'pregunta').length
         + entradas.filter(e => e.tipo === 'respuestaLlm' && !e.manual).length
@@ -1377,7 +1412,9 @@ function ensamblarPreguntas (entradas) {
 function leerConversacion (ruta) {
   const { entradas } = Autosave.leer(ruta)
   const cabecera = entradas.find(e => e.tipo === 'cabecera') || null
-  const frases = entradas.filter(e => e.tipo === 'frase').map(e => ({ it: e.it, es: e.es, t: e.t }))
+  // F042: mismo criterio que `listarConversaciones` — ver el comentario ahí.
+  const frases = entradas.filter(e => e.it && (!e.tipo || e.tipo === 'frase'))
+    .map(e => ({ it: e.it, es: e.es, t: e.t }))
   return {
     inicio: cabecera?.inicio || null,
     perfil: cabecera?.perfil?.nombre || null,

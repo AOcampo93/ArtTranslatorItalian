@@ -51,8 +51,11 @@ describe('F041 — padding: ningún elemento toca el borde de la ventana', () =>
 
   // La cabecera, la lista de la conversación, el panel de preguntas y las
   // tarjetas de "Preparar" son las cuatro zonas que el cliente señaló
-  // pegadas al borde en la v0.6.0 probada.
-  for (const selector of ['header', '#conversacion', '#listaPreguntas', '.tarjeta']) {
+  // pegadas al borde en la v0.6.0 probada. F042: `#perfiles` y
+  // `#conversaciones` no tenían NINGUNA regla de padding — su contenido sí
+  // tocaba el borde, y nadie lo había visto porque F041 solo revisó estas
+  // cuatro zonas.
+  for (const selector of ['header', '#conversacion', '#listaPreguntas', '.tarjeta', '#perfiles', '#conversaciones']) {
     test(`\`${selector}\` usa el gutter común`, () => {
       const cuerpo = regla(selector, 'padding')
       assert.ok(cuerpo, `no se encontró \`${selector} { ... }\` con padding`)
@@ -62,19 +65,48 @@ describe('F041 — padding: ningún elemento toca el borde de la ventana', () =>
   }
 })
 
-describe('F041 — dos columnas al ensanchar la ventana (>= 900px)', () => {
-  test('a partir de 900px, #envivo pasa a fila (traducción izquierda, preguntas derecha)', () => {
-    const m = html.match(/@media \(min-width:\s*900px\)\s*\{([\s\S]*?)\n  \}\n/)
-    assert.ok(m, 'no se encontró el `@media (min-width: 900px) { ... }` de la vista en vivo')
+describe('F042 — dos columnas al ensanchar la ventana (>= 600px, antes 900)', () => {
+  // El cliente lo pidió tras probar v0.7.0: a 900px casi nunca llegaba a
+  // verlo — la ventana estándar es de 440px, y ensancharla hasta 900 es
+  // mucho más gesto del que alguien hace a media reunión.
+  test('a partir de 600px, #envivo pasa a fila (traducción izquierda, preguntas derecha)', () => {
+    const m = html.match(/@media \(min-width:\s*600px\)\s*\{([\s\S]*?)\n  \}\n/)
+    assert.ok(m, 'no se encontró el `@media (min-width: 600px) { ... }` de la vista en vivo')
     assert.match(m[1], /main#envivo\s*\{\s*flex-direction:\s*row/,
-      'a >= 900px la vista en vivo tiene que pasar a fila (columnas lado a lado)')
+      'a >= 600px la vista en vivo tiene que pasar a fila (columnas lado a lado)')
+  })
+
+  test('ya no queda una media query a 900px para esto: el umbral bajó, no se duplicó', () => {
+    assert.doesNotMatch(html, /@media \(min-width:\s*900px\)/,
+      'un 900px que quedara junto al 600px nuevo dejaría dos criterios contradictorios')
   })
 
   test('angosta (por defecto, sin la media query) la vista en vivo sigue en columna', () => {
     const cuerpo = regla('main')
     assert.ok(cuerpo, 'no se encontró `main { ... }`')
     assert.match(cuerpo, /flex-direction:\s*column/,
-      'por debajo de 900px main tiene que seguir en columna, como pide F035')
+      'por debajo de 600px main tiene que seguir en columna, como pide F035')
+  })
+})
+
+describe('F042 — Conversaciones: los botones bajan a su propia fila a menos de 600px', () => {
+  // Reporte del cliente: a 440px (la ventana estándar) Abrir/Ver/Borrar
+  // quedaban apretados al lado del texto de la tarjeta.
+  test('a <= 600px, `.tarjeta-lista` pasa a columna y las acciones ocupan el ancho', () => {
+    const m = html.match(/@media \(max-width:\s*600px\)\s*\{([\s\S]*?)\n  \}\n/)
+    assert.ok(m, 'no se encontró el `@media (max-width: 600px) { ... }` de las tarjetas de lista')
+    assert.match(m[1], /\.tarjeta-lista\s*\{\s*flex-direction:\s*column/,
+      'a <= 600px `.tarjeta-lista` tiene que apilar el texto y las acciones')
+    assert.match(m[1], /\.tarjeta-lista \.acciones-fila\s*\{\s*width:\s*100%/,
+      'las acciones tienen que ocupar el ancho, no quedarse apretadas a un lado')
+  })
+
+  test('por defecto (ancha) `.tarjeta-lista` sigue en fila, como antes', () => {
+    const cuerpo = regla('.tarjeta-lista')
+    assert.ok(cuerpo, 'no se encontró `.tarjeta-lista { ... }`')
+    assert.match(cuerpo, /display:\s*flex/)
+    assert.doesNotMatch(cuerpo, /flex-direction:\s*column/,
+      'la regla base no puede forzar columna: eso es solo del <= 600px')
   })
 })
 
