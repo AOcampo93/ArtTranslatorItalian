@@ -39,6 +39,12 @@ contextBridge.exposeInMainWorld('app', {
   /** Pide otra redacción para una pregunta ya detectada. */
   otraRespuesta: id => ipcRenderer.invoke('app:otraRespuesta', id),
 
+  /**
+   * Convierte una burbuja en pregunta (F033): el botón «→ Pregunta» salta el
+   * detector porque el usuario ya decidió que esa frase lo era.
+   */
+  preguntar: (it, es) => ipcRenderer.invoke('app:preguntar', { it, es }),
+
   // ── Perfiles y contextos ──────────────────────────────────────────
   listarPerfiles: () => ipcRenderer.invoke('app:listarPerfiles'),
   guardarPerfil: p => ipcRenderer.invoke('app:guardarPerfil', p),

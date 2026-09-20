@@ -139,6 +139,45 @@ describe('el triaje local decide qué merece una llamada al LLM', () => {
   })
 })
 
+// ── F033: el usuario fuerza una pregunta que el detector no cachó ───────────
+
+describe('forzar() convierte una burbuja en pregunta, saltando el detector', () => {
+  test('una frase que el detector NO marcaría igualmente se redacta', async () => {
+    // Frase declarativa a propósito: sin sujeto en segunda persona ni signo de
+    // interrogación, así que `analizar()` la habría dejado pasar de largo. Es
+    // justo el caso medido del cliente (19-09-2026) que motiva F033.
+    const texto = 'Il budget copre anche la manutenzione'
+    assert.strictEqual(analizar(texto).esPregunta, false, 'de fondo: el detector no la ve')
+
+    const { llamar, llamadas } = llmFalso('Sì, il budget la copre.')
+    const m = new MotorRespuestas({ llamar })
+    const preguntas = recoger(m, 'pregunta')
+
+    const espera = esperar(m, 'respuesta')
+    const id = m.forzar(texto, '¿El presupuesto cubre también el mantenimiento?')
+    const respuesta = await espera
+
+    assert.ok(id, 'abre una tarjeta')
+    assert.strictEqual(preguntas.length, 1)
+    assert.strictEqual(preguntas[0].manual, true)
+    assert.strictEqual(llamadas.length, 1, 'sí llegó a pedir la redacción')
+    assert.strictEqual(respuesta.texto, 'Sì, il budget la copre.')
+    assert.strictEqual(m.stats.preguntasManuales, 1)
+  })
+
+  test('respeta el mismo dedupe: no abre dos tarjetas de la misma pregunta', async () => {
+    const { llamar, llamadas } = llmFalso()
+    const m = new MotorRespuestas({ llamar })
+
+    await preguntarYEsperar(m, "Quanto tempo ci vuole per completare l'integrazione")
+    const segunda = m.forzar("Quanto tempo serve per l'integrazione")
+
+    assert.strictEqual(segunda, null)
+    assert.strictEqual(llamadas.length, 1)
+    assert.strictEqual(m.stats.preguntasManuales, 0, 'no se contó: no abrió tarjeta nueva')
+  })
+})
+
 // ── Criterio 2: no se responde dos veces la misma pregunta ──────────────────
 
 describe('no se responde dos veces la misma pregunta reformulada', () => {

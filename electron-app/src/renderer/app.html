@@ -103,6 +103,16 @@
   .burbuja.provisional { opacity: .72; border-left: 2px dashed var(--linea); }
   .burbuja.provisional .es { color: var(--tx2); }
 
+  /* Botón pequeño y aparte (F033): el cuerpo de la burbuja sigue
+     seleccionable, y sólo esto manda la frase al panel de preguntas. */
+  button.preguntar {
+    display: block; margin-top: 6px; padding: 3px 9px;
+    font-size: 11px; font-weight: 500;
+    background: transparent; border: 1px solid var(--linea); color: var(--tx2);
+  }
+  button.preguntar:hover:not(:disabled) { border-color: var(--tx3); color: var(--tx); }
+  button.preguntar.enviada { border-style: dashed; opacity: .6; }
+
   .vacio { margin: auto; text-align: center; color: var(--tx3); font-size: 13px; max-width: 320px; }
   .vacio b { display: block; color: var(--tx2); font-size: 14px; margin-bottom: 6px; font-weight: 600; }
 
@@ -550,6 +560,32 @@ function apuntarDefinitiva ({ forzado, acabaEnPuntuacion }, total) {
   apuntarRetardo(total)
 }
 
+/**
+ * El botón «→ Pregunta» de una burbuja (F033).
+ *
+ * Pedido por el cliente: el detector no cacha todas las preguntas en habla
+ * real, así que el usuario decide y la app obedece. Es un botón PEQUEÑO
+ * aparte, no un clic en el cuerpo de la burbuja: el cuerpo hay que poder
+ * leerlo y seleccionar su texto sin que nada se dispare.
+ *
+ * Una burbuja provisional (F037, atenuada, con «…») no lleva este botón: esa
+ * frase todavía no ha acabado y la va a sustituir otra entera.
+ */
+function crearBotonPreguntar (frase) {
+  const btn = crear('button', 'preguntar')
+  btn.textContent = '→ Pregunta'
+  btn.onclick = () => {
+    // Una sola vez: sin esto, un doble clic mandaría la misma pregunta dos
+    // veces antes de que llegara ninguna respuesta.
+    if (btn.disabled) return
+    btn.disabled = true
+    btn.classList.add('enviada')
+    btn.textContent = 'Enviada'
+    api?.preguntar(frase.it, frase.es)
+  }
+  return btn
+}
+
 function pintarFrase (frase) {
   $('#vacio')?.classList.add('oculto')
   burbujaParcial?.remove()
@@ -557,6 +593,7 @@ function pintarFrase (frase) {
 
   const b = crear('div', 'burbuja')
   b.append(crear('div', 'it'), crear('div', 'es'), crear('div', 'pie'))
+  if (!frase.provisional) b.append(crearBotonPreguntar(frase))
   const total = rellenarBurbuja(b, frase)
 
   $('#conversacion').appendChild(b)

@@ -862,6 +862,11 @@ async function pararSesion (motivo = 'el usuario paró', graciaMs = GRACIA_EN_VU
     enVuelo,
     costeUsd: s.transcriptor.costeAproximadoUsd(0.45),
     stats: s.transcriptor.stats,
+    // F033: cuántas preguntas puso el usuario a mano con «→ Pregunta». Es el
+    // dato que dice cuántas se le escapan al detector; vive en `s`, no en
+    // `s.motor.stats`, porque también cuenta las que se pulsaron sin clave de
+    // LLM configurada, cuando `s.motor` ni siquiera existe.
+    preguntasManuales: s.preguntasManuales || 0,
   }
 }
 
@@ -892,6 +897,65 @@ ipcMain.handle('app:otraRespuesta', (_e, id) => {
     return { ok: false }
   }
   return { ok: sesion.motor.reintentar(id) }
+})
+
+/**
+ * El botón «→ Pregunta» de una burbuja (F033).
+ *
+ * Pedido por el cliente: el detector se le escapa alguna pregunta clara en
+ * habla real, así que el usuario decide y la app obedece, saltándose
+ * `questionDetector` — `MotorRespuestas.forzar()` es quien salta el detector
+ * de verdad; aquí sólo se decide QUÉ decir cuando no hay a quién preguntarle.
+ *
+ * El botón ya ha dejado la burbuja «enviada» al pulsarlo (eso lo hace el
+ * renderer, sin esperar a esto), así que este manejador SIEMPRE tiene que
+ * abrir una tarjeta y decir algo en ella — quedarse callado dejaría al
+ * usuario sin saber si el clic sirvió de algo, que es el mismo fallo que
+ * F021 ya arregló para «Otra».
+ */
+let nPreguntaManual = 0
+ipcMain.handle('app:preguntar', (_e, { it, es } = {}) => {
+  const texto = String(it || '').trim()
+  if (!texto) return { ok: false }
+
+  // Sin reunión no hay dónde registrarlo ni con qué contestar, pero la
+  // tarjeta se pinta igual: mismo criterio que `app:otraRespuesta`.
+  if (!sesion) {
+    const id = `m${++nPreguntaManual}`
+    aRenderer('app:pregunta', { id, it: texto, es: es || '' })
+    aRenderer('app:respuesta', {
+      id, texto: null, tipo: 'desconocido',
+      mensaje: 'La reunión ya no está en marcha; vuelve a empezarla para pedir una respuesta.',
+      detalle: '',
+    })
+    return { ok: false, id }
+  }
+
+  const s = sesion
+  s.preguntasManuales = (s.preguntasManuales || 0) + 1
+  // Se registra el intento, haya o no motor: es el dato que dice cuántas
+  // preguntas se le escapan al detector, y contarlo depende de que quede
+  // escrito ANTES de saber si hay quien la conteste.
+  s.autosave.guardarPregunta({ it: texto, es: es || '', manual: true })
+
+  if (!s.motor) {
+    // F021: mismo contrato que cualquier otro fallo del panel de respuestas
+    // — `texto: null` con `{ tipo, mensaje, detalle }` — para que la tarjeta
+    // lo diga en vez de quedarse en «Preparando…».
+    const id = `m${++nPreguntaManual}`
+    aRenderer('app:pregunta', { id, it: texto, es: es || '' })
+    aRenderer('app:respuesta', {
+      id, texto: null, tipo: 'clave_invalida',
+      mensaje: 'Sin clave de IA: no habrá respuesta. Configúrala en Ajustes.',
+      detalle: '',
+    })
+    return { ok: true, id }
+  }
+
+  // Aquí sí puede volver `null`: es el dedupe de `forzar()`, la misma
+  // pregunta ya está en el panel. La burbuja ya quedó «enviada» igualmente.
+  const id = s.motor.forzar(texto, es)
+  return { ok: Boolean(id), id: id || null }
 })
 
 ipcMain.handle('app:guardarClaves', (_e, claves) => {

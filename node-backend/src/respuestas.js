@@ -130,7 +130,14 @@ class MotorRespuestas extends EventEmitter {
     this._vistas = []          // { id, it, es }
     this._recientes = []       // últimas frases, para el contexto inmediato
     this._n = 0
-    this.stats = { analizadas: 0, detectadas: 0, respondidas: 0, descartadas: 0, fallos: 0 }
+    this.stats = {
+      analizadas: 0, detectadas: 0, respondidas: 0, descartadas: 0, fallos: 0,
+      // F033: cuántas de las detectadas las abrió el usuario a mano, pulsando
+      // «→ Pregunta» en una burbuja. Es el dato que dice cuántas se le escapan
+      // al detector local: si este número no fuera cero, el 5/6 medido en
+      // `PLAN.md` §9 no se sostiene en habla real.
+      preguntasManuales: 0,
+    }
   }
 
   /**
@@ -168,6 +175,41 @@ class MotorRespuestas extends EventEmitter {
     // esperando mientras se redacta, en vez de un panel vacío durante un
     // segundo largo.
     this.emit('pregunta', { ...pregunta, motivo: a.motivo })
+    this._lanzar(pregunta)
+    return id
+  }
+
+  /**
+   * Convierte una frase ya traducida en pregunta a mano (F033): el usuario
+   * pulsó «→ Pregunta» en una burbuja porque el detector no la cachó.
+   *
+   * Se salta `analizar()` y `merecePena` a propósito —es la única razón de
+   * ser de este método—, pero respeta el MISMO dedupe que `considerar()`: si
+   * la pregunta ya está en el panel (la vio el detector, o el usuario ya la
+   * forzó antes), no se abre una tarjeta repetida. El usuario decide qué es
+   * una pregunta; no decide que la misma pregunta se responda dos veces.
+   *
+   * @param {string} it  la frase en italiano, tal como está en la burbuja
+   * @param {string} [es] su traducción, ya pintada
+   * @returns {string|null} el id de la tarjeta, o null si era la misma de antes
+   */
+  forzar (it, es) {
+    const texto = (it || '').trim()
+    if (!texto) return null
+
+    if (this._vistas.some(v => sonLaMisma(v.it, texto))) {
+      this.stats.descartadas++
+      return null
+    }
+
+    const id = `q${++this._n}`
+    const pregunta = { id, it: texto, es: es || '', manual: true }
+    this._vistas.push(pregunta)
+    if (this._vistas.length > MEMORIA) this._vistas.shift()
+    this.stats.detectadas++
+    this.stats.preguntasManuales++
+
+    this.emit('pregunta', { ...pregunta })
     this._lanzar(pregunta)
     return id
   }

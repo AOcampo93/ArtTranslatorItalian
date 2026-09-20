@@ -583,3 +583,61 @@ describe('la burbuja provisional y su reemplazo (F037)', () => {
     assert.strictEqual(b.vivas(), 0)
   })
 })
+
+describe('el botón «→ Pregunta» de una burbuja (F033)', () => {
+  /** Un puente de mentira que sólo apunta las llamadas a `preguntar`. */
+  const apiConPreguntar = () => {
+    const llamadas = []
+    return { api: { preguntar: (it, es) => { llamadas.push({ it, es }); return Promise.resolve({ ok: true }) } }, llamadas }
+  }
+
+  test('pulsarlo manda la frase al proceso principal', () => {
+    const { api, llamadas } = apiConPreguntar()
+    const b = montar({ api })
+    b.pintarFrase({ it: 'Il budget copre la manutenzione', es: 'El presupuesto cubre el mantenimiento', ms: 300 })
+
+    b.burbujas()[0].querySelector('.preguntar').onclick()
+
+    assert.strictEqual(llamadas.length, 1)
+    assert.deepStrictEqual(llamadas[0], {
+      it: 'Il budget copre la manutenzione', es: 'El presupuesto cubre el mantenimiento',
+    })
+  })
+
+  test('queda «enviada» y un segundo clic no la manda otra vez', () => {
+    const { api, llamadas } = apiConPreguntar()
+    const b = montar({ api })
+    b.pintarFrase({ it: 'x', es: 'y', ms: 100 })
+
+    const boton = b.burbujas()[0].querySelector('.preguntar')
+    boton.onclick()
+    boton.onclick()
+    boton.onclick()
+
+    assert.strictEqual(llamadas.length, 1, 'no se manda dos veces sin querer')
+    assert.strictEqual(boton.disabled, true)
+    assert.ok(boton.classList.contains('enviada'))
+  })
+
+  test('una burbuja provisional (F037) no lleva el botón', () => {
+    const b = montar()
+    b.pintarFrase({
+      id: 'pv1', provisional: true, it: 'Tu pensi che questo ruolo',
+      es: 'Crees que este papel', msTranscribir: 300, msTraducir: 120,
+    })
+    assert.strictEqual(b.burbujas()[0].querySelector('.preguntar'), null,
+      'una oración a medias no se puede mandar como pregunta: la va a sustituir otra entera')
+  })
+
+  test('el clic no pasa por el cuerpo de la burbuja: leer y seleccionar el texto no se disparan', () => {
+    // El botón vive APARTE, no en el `onclick` de la burbuja ni de sus piernas:
+    // así seleccionar el texto para copiarlo no manda nada por accidente.
+    const b = montar()
+    b.pintarFrase({ it: 'Ciao', es: 'Hola', ms: 100 })
+
+    const burbuja = b.burbujas()[0]
+    assert.strictEqual(burbuja.onclick, undefined, 'la burbuja entera no tiene manejador de clic')
+    assert.strictEqual(burbuja.querySelector('.it').onclick, undefined)
+    assert.strictEqual(burbuja.querySelector('.es').onclick, undefined)
+  })
+})

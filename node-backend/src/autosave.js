@@ -117,9 +117,16 @@ class Autosave {
     this.escribir({ tipo: 'frase', it, es, msWhisper, msMarian, msTotal })
   }
 
-  /** Una pregunta detectada, con su respuesta si ya la hay. */
-  guardarPregunta ({ it, es, respuesta }) {
-    this.escribir({ tipo: 'pregunta', it, es, respuesta: respuesta || null })
+  /**
+   * Una pregunta detectada, con su respuesta si ya la hay.
+   *
+   * `manual` (F033) distingue la que abrió el detector de la que el usuario
+   * forzó a mano pulsando «→ Pregunta» en una burbuja: es el dato que dice
+   * cuántas se le escapan al detector, y sólo se puede contar si queda
+   * escrito por qué se abrió cada una.
+   */
+  guardarPregunta ({ it, es, respuesta, manual }) {
+    this.escribir({ tipo: 'pregunta', it, es, respuesta: respuesta || null, manual: Boolean(manual) })
   }
 
   /**
