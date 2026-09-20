@@ -68,9 +68,9 @@ describe('la petición de cada proveedor', () => {
     const { fetchImpl, peticiones } = fetchFalso(okCon({ content: [{ text: 'Certo, ci penso io.' }] }))
     const llamar = crearLlamador({ clave: CLAVE.anthropic, fetchImpl })
 
-    const texto = await llamar('eres un intérprete', 'la pregunta')
+    const resultado = await llamar('eres un intérprete', 'la pregunta')
 
-    assert.strictEqual(texto, 'Certo, ci penso io.')
+    assert.strictEqual(resultado.texto, 'Certo, ci penso io.')
     const p = peticiones[0]
     assert.match(p.url, /^https:\/\/api\.anthropic\.com\//)
     assert.strictEqual(p.opciones.headers['x-api-key'], CLAVE.anthropic)
@@ -102,9 +102,9 @@ describe('la petición de cada proveedor', () => {
     )
     const llamar = crearLlamador({ clave: CLAVE.gemini, fetchImpl })
 
-    const texto = await llamar('sistema', 'usuario', { json: true })
+    const resultado = await llamar('sistema', 'usuario', { json: true })
 
-    assert.strictEqual(texto, 'Va bene.')
+    assert.strictEqual(resultado.texto, 'Va bene.')
     assert.ok(!peticiones[0].url.includes(CLAVE.gemini), `la URL lleva la clave: ${peticiones[0].url}`)
     assert.strictEqual(peticiones[0].opciones.headers['x-goog-api-key'], CLAVE.gemini)
     assert.strictEqual(peticiones[0].cuerpo.generationConfig.responseMimeType, 'application/json')
@@ -120,7 +120,28 @@ describe('la petición de cada proveedor', () => {
   test('las vallas de markdown se quitan antes de devolver', async () => {
     const { fetchImpl } = fetchFalso(okCon({ content: [{ text: '```json\n{"resumen":"x"}\n```' }] }))
     const llamar = crearLlamador({ clave: CLAVE.anthropic, fetchImpl })
-    assert.strictEqual(await llamar('s', 'u'), '{"resumen":"x"}')
+    assert.strictEqual((await llamar('s', 'u')).texto, '{"resumen":"x"}')
+  })
+
+  test('F038: los tokens reales del `usage` de cada proveedor viajan con el texto', async () => {
+    const { fetchImpl: fA } = fetchFalso(okCon({ content: [{ text: 'ok' }], usage: { input_tokens: 120, output_tokens: 40 } }))
+    const anthropic = await crearLlamador({ clave: CLAVE.anthropic, fetchImpl: fA })('s', 'u')
+    assert.deepStrictEqual({ tokensEntrada: anthropic.tokensEntrada, tokensSalida: anthropic.tokensSalida }, { tokensEntrada: 120, tokensSalida: 40 })
+
+    const { fetchImpl: fO } = fetchFalso(okCon({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 80, completion_tokens: 20 } }))
+    const openai = await crearLlamador({ clave: CLAVE.openai, fetchImpl: fO })('s', 'u')
+    assert.deepStrictEqual({ tokensEntrada: openai.tokensEntrada, tokensSalida: openai.tokensSalida }, { tokensEntrada: 80, tokensSalida: 20 })
+
+    const { fetchImpl: fG } = fetchFalso(okCon({ candidates: [{ content: { parts: [{ text: 'ok' }] } }], usageMetadata: { promptTokenCount: 60, candidatesTokenCount: 15 } }))
+    const gemini = await crearLlamador({ clave: CLAVE.gemini, fetchImpl: fG })('s', 'u')
+    assert.deepStrictEqual({ tokensEntrada: gemini.tokensEntrada, tokensSalida: gemini.tokensSalida }, { tokensEntrada: 60, tokensSalida: 15 })
+
+    // Sin `usage` en la respuesta —proveedor viejo, o un mock que no lo trae—
+    // no se inventa 0, que se leería como "no costó nada": se dice `null`.
+    const { fetchImpl: fSinUso } = fetchFalso(okCon({ content: [{ text: 'ok' }] }))
+    const sinUso = await crearLlamador({ clave: CLAVE.anthropic, fetchImpl: fSinUso })('s', 'u')
+    assert.strictEqual(sinUso.tokensEntrada, null)
+    assert.strictEqual(sinUso.tokensSalida, null)
   })
 })
 

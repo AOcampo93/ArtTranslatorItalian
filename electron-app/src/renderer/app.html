@@ -254,6 +254,19 @@
   .tarjeta-lista .info { flex: 1; min-width: 0; }
   .tarjeta-lista .titulo-fila { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
   .tarjeta-lista .detalle-fila { font-size: 11.5px; color: var(--tx3); margin-top: 2px; }
+  /* F038: duración, latencia y coste de cada reunión guardada. */
+  .tarjeta-lista .coste-fila { font-size: 11px; color: var(--tx3); margin-top: 3px; }
+  .acciones-fila .borrar-fila { color: var(--mal, #e5534b); }
+  #detalleConversacion {
+    background: var(--sup); border: 1px solid var(--linea); border-radius: 10px;
+    padding: 13px; margin-top: 12px;
+  }
+  #detalleConversacion .linea-transcripcion { font-size: 12.5px; margin: 4px 0; }
+  #detalleConversacion .tarjeta-pregunta-detalle {
+    border-top: 1px solid var(--linea); padding: 8px 0; font-size: 12.5px;
+  }
+  #detalleConversacion .pregunta-texto { font-weight: 600; }
+  #detalleConversacion .respuesta-texto { color: var(--tx3); margin-top: 2px; }
   .badge-activo {
     font-size: 10px; font-weight: 600; color: #05231D; background: var(--ok);
     border-radius: 999px; padding: 1px 7px;
@@ -408,13 +421,14 @@
   </div>
 </div>
 
-<!-- ══ Conversaciones (F032: acceso; F038 pinta la vista completa) ═══════ -->
+<!-- ══ Conversaciones (F032: acceso; F038: ver, coste y borrar) ═══════════ -->
 <div id="conversaciones" class="oculto">
   <div class="env">
     <button class="volver" id="volverInicioConversaciones">← Panel de inicio</button>
     <h1>Conversaciones</h1>
-    <p class="sub">Reuniones grabadas en este equipo. «Abrir» muestra el archivo de la reunión.</p>
+    <p class="sub">Reuniones grabadas en este equipo, con duración, latencia y coste estimado.</p>
     <div id="listaConversaciones"></div>
+    <div id="detalleConversacion" class="oculto"></div>
   </div>
 </div>
 
@@ -1331,10 +1345,22 @@ $('#btnGuardarPerfil')?.addEventListener('click', async () => {
   await cargarListaPerfiles()
 })
 
-// ── Conversaciones (F032): acceso a reuniones anteriores ────────────────
-// La lista completa —transcripción, coste, borrar— es F038; aquí solo el
-// acceso: fecha, con quién y de qué se grabó, y un botón que abre el
-// archivo de esa reunión.
+// ── Conversaciones (F032): acceso a reuniones — F038: coste, ver y borrar ──
+/** `12,3456 ms` de coste en dólares, con cuatro decimales: los importes por
+ * reunión son de fracciones de centavo y con dos decimales saldría «$0,00»
+ * en casi todas, que es indistinguible de «no calculado». */
+function formatoUsd (n) {
+  return `$${(Number(n) || 0).toFixed(4)}`
+}
+
+/** `ms` a `N min SS s`, para no enseñar milisegundos de una reunión entera. */
+function formatoDuracion (ms) {
+  const total = Math.round((Number(ms) || 0) / 1000)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m} min ${String(s).padStart(2, '0')} s`
+}
+
 function pintarListaConversaciones (conversaciones) {
   const cont = $('#listaConversaciones')
   if (!cont) return
@@ -1355,15 +1381,34 @@ function pintarListaConversaciones (conversaciones) {
     detalle.textContent = `${fecha} · ${c.frases} frase(s) · ${c.preguntas} pregunta(s)`
     info.append(titulo, detalle)
 
+    // F038: duración, latencia p50/p95 y coste estimado, cada cifra con de
+    // dónde sale — el criterio de aceptación lo pide explícito, no basta con
+    // que el número esté bien.
+    const coste = crear('div', 'coste-fila')
+    const latencia = (c.latenciaP50 != null && c.latenciaP95 != null)
+      ? `latencia p50 ${c.latenciaP50} ms / p95 ${c.latenciaP95} ms [medido]`
+      : 'sin frases medidas'
+    coste.textContent = `${formatoDuracion(c.duracionMs)} · ${latencia} · `
+      + `STT ${formatoUsd(c.costeSttUsd)} (${c.costeSttProcedencia || 'sin datos'}) · `
+      + `LLM ${formatoUsd(c.costeLlmUsd)} (${c.costeLlmProcedencia || 'sin datos'})`
+    info.append(coste)
+
     const acc = crear('div', 'acciones-fila')
     const btnAbrir = crear('button', 'sec')
     btnAbrir.textContent = 'Abrir'
-    // F038 pintará la transcripción entera dentro de la app; hasta entonces,
-    // esto SÍ es "llegar a la transcripción desde el panel": abre el
-    // `.jsonl` de esa reunión, que es la fuente que el autoguardado (§0.3)
-    // garantiza completa.
+    // Abre el `.jsonl` de esa reunión con el explorador de archivos del
+    // sistema — la fuente que el autoguardado (§0.3) garantiza completa.
     btnAbrir.onclick = () => api?.abrirCarpeta(c.ruta)
-    acc.append(btnAbrir)
+
+    const btnVer = crear('button', 'ver-fila')
+    btnVer.textContent = 'Ver'
+    btnVer.onclick = () => verConversacion(c)
+
+    const btnBorrar = crear('button', 'borrar-fila')
+    btnBorrar.textContent = 'Borrar'
+    btnBorrar.onclick = () => borrarConversacionDesdeUI(c)
+
+    acc.append(btnAbrir, btnVer, btnBorrar)
 
     fila.append(info, acc)
     cont.appendChild(fila)
@@ -1373,6 +1418,62 @@ function pintarListaConversaciones (conversaciones) {
 async function cargarConversaciones () {
   if (!api) { pintarListaConversaciones([]); return }
   pintarListaConversaciones(await api.listarConversaciones())
+}
+
+/**
+ * F038 — «Ver»: transcripción entera y preguntas con su respuesta, dentro de
+ * la propia app (antes había que abrir el `.jsonl` a mano).
+ */
+function pintarDetalleConversacion (datos) {
+  const cont = $('#detalleConversacion')
+  if (!cont) return
+  cont.innerHTML = ''
+  cont.classList.remove('oculto')
+
+  const cerrar = crear('button', 'volver')
+  cerrar.textContent = '← Volver a la lista'
+  cerrar.onclick = () => { cont.classList.add('oculto'); cont.innerHTML = '' }
+  cont.appendChild(cerrar)
+
+  const titulo = crear('h2')
+  titulo.textContent = [datos.contexto, datos.perfil].filter(Boolean).join(' · ') || 'Reunión'
+  cont.appendChild(titulo)
+
+  const transcripcion = crear('div', 'transcripcion-detalle')
+  for (const f of datos.frases || []) {
+    const linea = crear('p', 'linea-transcripcion')
+    linea.textContent = `${f.it}  →  ${f.es}`
+    transcripcion.appendChild(linea)
+  }
+  cont.appendChild(transcripcion)
+
+  for (const p of datos.preguntas || []) {
+    const tarjeta = crear('div', 'tarjeta-pregunta-detalle')
+    const pregunta = crear('p', 'pregunta-texto')
+    pregunta.textContent = p.it
+    const respuesta = crear('p', 'respuesta-texto')
+    respuesta.textContent = p.respuesta || (p.mensaje ? `Sin respuesta: ${p.mensaje}` : 'Sin respuesta todavía.')
+    tarjeta.append(pregunta, respuesta)
+    cont.appendChild(tarjeta)
+  }
+}
+
+/** F038 — pide la reunión entera al proceso principal y la pinta. */
+async function verConversacion (c) {
+  if (!api) return
+  const datos = await api.leerConversacion(c.ruta)
+  pintarDetalleConversacion({ ...datos, contexto: datos?.contexto || c.contexto, perfil: datos?.perfil || c.perfil })
+}
+
+/**
+ * F038 — «Borrar»: pide confirmación (mismo patrón que borrar un perfil,
+ * más abajo) y borra la base y el `.jsonl`.
+ */
+async function borrarConversacionDesdeUI (c) {
+  if (!api) return
+  if (!confirm(`¿Borrar la reunión «${c.contexto || c.archivo}»? No se puede deshacer.`)) return
+  await api.borrarConversacion(c.ruta)
+  await cargarConversaciones()
 }
 
 // ── Datos de ejemplo, para poder ver la interfaz sin audio ni claves ──

@@ -44,6 +44,7 @@ const { partirTurno, arrastrar, acabaCerrada } = require(path.join(BACK, 'frases
 const { MotorRespuestas, MotorResumen } = require(path.join(BACK, 'respuestas'))
 const { crearLlamador, clasificarError, sanear } = require(path.join(BACK, 'llm'))
 const { ColaDeInformes } = require(path.join(BACK, 'informes'))
+const { percentil, duracionMs, costeStt, costeLlm } = require(path.join(BACK, 'coste'))
 
 let ventana = null
 let sesion = null          // { transcriptor, traductor, autosave, inicio, ... }
@@ -176,7 +177,7 @@ const aRenderer = (canal, datos) => {
  * El proveedor sale del prefijo de la clave (ver `node-backend/src/llm.js`):
  * el usuario pega una sola clave en Ajustes y no elige nada más.
  */
-function montarMotores ({ perfil, ctx, claveLlm }) {
+function montarMotores ({ perfil, ctx, claveLlm, autosave }) {
   let llamar = null
   let motivo = 'Para ver aquí respuestas sugeridas, añade una clave en Ajustes.'
 
@@ -213,12 +214,37 @@ function montarMotores ({ perfil, ctx, claveLlm }) {
   // empezar, el cartel de la reunión anterior ya no dice la verdad.
   aRenderer('app:avisoPreguntas', '')
 
+  // F038: para guardar la respuesta junto a su pregunta en el `.jsonl` hace
+  // falta recordar `it`/`es`/`manual` entre el evento `pregunta` (que llega
+  // sin respuesta, para pintar la tarjeta cuanto antes) y `respuesta` (que
+  // llega después, del LLM). Vive aquí y no en `MotorRespuestas` porque es
+  // sólo para el autoguardado — el motor ya tiene su propia `_vistas`.
+  const preguntasEnCurso = new Map()
+
   const motor = new MotorRespuestas({ llamar, bloqueContexto })
-  motor.on('pregunta', p => aRenderer('app:pregunta', { id: p.id, it: p.it, es: p.es }))
+  motor.on('pregunta', p => {
+    preguntasEnCurso.set(p.id, { it: p.it, es: p.es, manual: Boolean(p.manual) })
+    aRenderer('app:pregunta', { id: p.id, it: p.it, es: p.es })
+  })
   // La respuesta puede venir con `texto: null` y `{ tipo, mensaje, detalle }`
   // (F021, `respuestas.js` ya lo clasifica y sanea): se reenvía tal cual para
   // que la tarjeta lo diga en vez de quedarse en «Preparando…».
-  motor.on('respuesta', r => aRenderer('app:respuesta', r))
+  motor.on('respuesta', r => {
+    aRenderer('app:respuesta', r)
+    // F038: se guarda tanto si contestó como si falló (con `texto: null`),
+    // para que «ver reunión» sepa que se preguntó aunque no haya respuesta.
+    // Sin `datos` (la tarjeta es más vieja que `MEMORIA`, ver `respuestas.js`)
+    // no hay `it`/`es` que guardar y se deja tal como estaba: sin esta línea,
+    // no sin la reunión entera.
+    const datos = preguntasEnCurso.get(r.id)
+    if (datos && autosave) {
+      autosave.guardarRespuestaLlm({
+        it: datos.it, es: datos.es, manual: datos.manual,
+        texto: r.texto, tokensEntrada: r.tokensEntrada, tokensSalida: r.tokensSalida,
+        modelo: r.modelo, mensaje: r.mensaje || null,
+      })
+    }
+  })
 
   const resumen = new MotorResumen({ llamar, bloqueContexto })
   resumen.on('contexto', c => aRenderer('app:contexto', c.texto))
@@ -698,7 +724,7 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   // cae en `this.version` si no se le pasa otra.
   autosave.guardarCabecera({ perfil, contexto: ctx, inicio, id: idSesion })
 
-  const { motor, resumen } = montarMotores({ perfil, ctx, claveLlm: claves.llm })
+  const { motor, resumen } = montarMotores({ perfil, ctx, claveLlm: claves.llm, autosave })
   sesion = {
     transcriptor, autosave, idSesion, motor, resumen, inicio: Date.now(), frases: 0,
     // Las frases a medio traducir, para poder esperarlas al parar en vez de
@@ -1107,24 +1133,41 @@ ipcMain.handle('app:borrarContexto', (_e, id) => { contexto.borrarContexto(id); 
 ipcMain.handle('app:activarContexto', (_e, id) => { contexto.activarContexto(id); return { ok: true } })
 
 /**
- * F032 — la lista de «Conversaciones» del panel de inicio.
+ * F032/F038 — la lista de «Conversaciones» del panel de inicio.
  *
  * Lee `.jsonl` de disco (`Autosave.listar`/`Autosave.leer`) y no la tabla
- * `sessions`: es la fuente que el no negociable §0.3 garantiza completa, y
- * F038 (que va a pintar transcripción, coste y borrado) todavía tiene que
- * verificar si la base se rellena de verdad durante la reunión. Aquí solo
- * hace falta el ACCESO — nombre, fecha, cuántas frases y preguntas trae cada
- * archivo — no la vista rica, que es su tarea.
+ * `sessions`: es la fuente que el no negociable §0.3 garantiza completa.
+ * Se comprobó (F038) que `sessions` sólo guarda metadatos de la sesión —ni
+ * transcripción ni preguntas, `db.js` avisa en su propio código que
+ * `saveTranscript` está obsoleto desde que las frases van al `.jsonl`—, así
+ * que no hay nada ahí que valga la pena leer para esta lista.
+ *
+ * `preguntas` cuenta las líneas `pregunta` (F033, cada pulsación de
+ * «→ Pregunta», tenga o no motor) más las `respuestaLlm` que NO son manuales
+ * —las que detectó el motor solo, que hasta F038 no dejaban ningún rastro en
+ * el archivo—. Sumar las dos evita contar dos veces una pregunta manual, que
+ * ya tiene su línea `pregunta`.
  */
 function listarConversaciones () {
   const dir = path.join(app.getPath('userData'), 'reuniones')
   return Autosave.listar(dir).map(f => {
-    let cabecera = null, frases = 0, preguntas = 0
+    let cabecera = null, frases = 0, preguntas = 0, duracion = 0
+    let latenciaP50 = null, latenciaP95 = null
+    let stt = { usd: 0, procedencia: 'no se pudo leer el archivo' }
+    let llm = { usd: 0, procedencia: 'no se pudo leer el archivo' }
     try {
       const { entradas } = Autosave.leer(f.ruta)
       cabecera = entradas.find(e => e.tipo === 'cabecera') || null
-      frases = entradas.filter(e => e.tipo === 'frase').length
+      const lineasFrase = entradas.filter(e => e.tipo === 'frase')
+      frases = lineasFrase.length
       preguntas = entradas.filter(e => e.tipo === 'pregunta').length
+        + entradas.filter(e => e.tipo === 'respuestaLlm' && !e.manual).length
+      duracion = duracionMs(entradas)
+      const latencias = lineasFrase.map(e => e.ms)
+      latenciaP50 = percentil(latencias, 50)
+      latenciaP95 = percentil(latencias, 95)
+      stt = costeStt(duracion)
+      llm = costeLlm(entradas)
     } catch (err) {
       console.error('[conversaciones] no se pudo leer', f.archivo, err.message)
     }
@@ -1133,11 +1176,93 @@ function listarConversaciones () {
       inicio: cabecera?.inicio || null,
       perfil: cabecera?.perfil?.nombre || null,
       contexto: cabecera?.contexto?.nombre || null,
-      frases, preguntas,
+      idSesion: cabecera?.id ?? null,
+      frases, preguntas, duracionMs: duracion,
+      latenciaP50, latenciaP95,
+      costeSttUsd: stt.usd, costeSttProcedencia: stt.procedencia,
+      costeLlmUsd: llm.usd, costeLlmProcedencia: llm.procedencia,
     }
   })
 }
 ipcMain.handle('app:listarConversaciones', () => listarConversaciones())
+
+/**
+ * F038 — empareja cada pregunta con su respuesta para «ver reunión».
+ *
+ * Las líneas `pregunta` (F033) se pintan en cuanto se abre la tarjeta, sin
+ * respuesta todavía; las `respuestaLlm` (F038) llegan después, cuando el LLM
+ * contesta o falla. Se emparejan por texto porque las `pregunta` manuales no
+ * llevan el id del motor (ver `montarMotores`) — el texto de una pregunta ya
+ * deduplicado (`MotorRespuestas.sonLaMisma`) es suficientemente único dentro
+ * de una misma reunión. Una `respuestaLlm` que no encuentra pareja —la
+ * pregunta la detectó el motor solo, y hasta F038 esas no dejaban línea
+ * propia— se enseña de todos modos, con su propio texto.
+ */
+function ensamblarPreguntas (entradas) {
+  const preguntas = entradas
+    .filter(e => e.tipo === 'pregunta')
+    .map(e => ({ it: e.it, es: e.es || '', manual: Boolean(e.manual), respuesta: e.respuesta || null, mensaje: null }))
+
+  for (const r of entradas.filter(e => e.tipo === 'respuestaLlm')) {
+    const pendiente = preguntas.find(p => p.it === r.it && !p.respuesta && !p.mensaje)
+    if (pendiente) {
+      pendiente.respuesta = r.texto || null
+      pendiente.mensaje = r.mensaje || null
+    } else {
+      preguntas.push({ it: r.it, es: r.es || '', manual: Boolean(r.manual), respuesta: r.texto || null, mensaje: r.mensaje || null })
+    }
+  }
+  return preguntas
+}
+
+/**
+ * F038 — «ver reunión»: transcripción entera y preguntas con sus respuestas.
+ */
+function leerConversacion (ruta) {
+  const { entradas } = Autosave.leer(ruta)
+  const cabecera = entradas.find(e => e.tipo === 'cabecera') || null
+  const frases = entradas.filter(e => e.tipo === 'frase').map(e => ({ it: e.it, es: e.es, t: e.t }))
+  return {
+    inicio: cabecera?.inicio || null,
+    perfil: cabecera?.perfil?.nombre || null,
+    contexto: cabecera?.contexto?.nombre || null,
+    frases,
+    preguntas: ensamblarPreguntas(entradas),
+  }
+}
+ipcMain.handle('app:leerConversacion', (_e, ruta) => leerConversacion(ruta))
+
+/**
+ * F038 — «Borrar»: quita el `.jsonl` Y la fila de `sessions` si la hay.
+ *
+ * La ruta tiene que caer DENTRO de la carpeta de reuniones del propio
+ * usuario: el renderer manda la ruta que él mismo le entregó
+ * `listarConversaciones()`, pero nunca hay que confiar en una ruta que
+ * cruza el puente de IPC sin comprobarla, y menos una que se va a borrar.
+ */
+function borrarConversacion (ruta) {
+  const dir = path.join(app.getPath('userData'), 'reuniones')
+  const rutaResuelta = path.resolve(ruta || '')
+  if (path.dirname(rutaResuelta) !== path.resolve(dir)) {
+    return { ok: false, motivo: 'esa ruta no es una reunión guardada por la app' }
+  }
+  let idSesion = null
+  try {
+    const { entradas } = Autosave.leer(rutaResuelta)
+    idSesion = entradas.find(e => e.tipo === 'cabecera')?.id ?? null
+  } catch { /* si no se puede leer la cabecera, se borra igual el archivo */ }
+
+  if (idSesion !== null && idSesion !== undefined) {
+    try { db.deleteSession(idSesion) } catch (err) { console.error('[conversaciones] no se pudo borrar de la base:', err.message) }
+  }
+  try {
+    fs.unlinkSync(rutaResuelta)
+  } catch (err) {
+    return { ok: false, motivo: `no se pudo borrar el archivo: ${err.message}` }
+  }
+  return { ok: true }
+}
+ipcMain.handle('app:borrarConversacion', (_e, ruta) => borrarConversacion(ruta))
 
 ipcMain.handle('app:exportarSesion', async () => {
   const r = await dialog.showSaveDialog(ventana, {
@@ -1179,5 +1304,6 @@ module.exports = {
   _internos: {
     guardarClaves, leerClaves, empezarSesion, pararSesion,
     leerTokenInformes, maquinaSaneada, obtenerColaInformes, listarConversaciones,
+    leerConversacion, borrarConversacion, ensamblarPreguntas,
   },
 }

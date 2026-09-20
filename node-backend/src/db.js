@@ -274,6 +274,22 @@ function recentSessions (limit = 20) {
   return all('SELECT * FROM sessions ORDER BY id DESC LIMIT ?', [limit])
 }
 
+/**
+ * Borra la fila de `sessions` de una reunión (F038, «Borrar»).
+ *
+ * `transcripts`/`questions` ya no se rellenan (ver `saveTranscript`, arriba),
+ * pero se limpian igual por si quedó algo de una versión anterior a este
+ * cambio. El `.jsonl` no lo borra esto: es responsabilidad de quien llama,
+ * que también tiene la ruta del archivo (`mainApp.js`, `borrarConversacion`).
+ */
+function deleteSession (sessionId) {
+  if (sessionId === null || sessionId === undefined) return
+  run('DELETE FROM transcripts WHERE session_id = ?', [sessionId])
+  run('DELETE FROM questions WHERE session_id = ?', [sessionId])
+  run('DELETE FROM sessions WHERE id = ?', [sessionId])
+  persistAgrupado()
+}
+
 module.exports = {
   init,
   persist,
@@ -291,5 +307,6 @@ module.exports = {
   updateQuestionResponses,
   loadSession,
   recentSessions,
+  deleteSession,
   get _db () { return db },
 }

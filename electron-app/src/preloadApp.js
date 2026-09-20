@@ -58,9 +58,13 @@ contextBridge.exposeInMainWorld('app', {
   borrarContexto: id => ipcRenderer.invoke('app:borrarContexto', id),
   activarContexto: id => ipcRenderer.invoke('app:activarContexto', id),
 
-  // ── Conversaciones (F032: acceso; F038 pinta la vista completa) ────
+  // ── Conversaciones (F032: acceso; F038: ver, coste y borrar) ────────
   listarConversaciones: () => ipcRenderer.invoke('app:listarConversaciones'),
   abrirCarpeta: ruta => ipcRenderer.invoke('app:abrirCarpeta', ruta),
+  /** Transcripción entera y preguntas con respuesta de una reunión guardada. */
+  leerConversacion: ruta => ipcRenderer.invoke('app:leerConversacion', ruta),
+  /** Borra el `.jsonl` de esa reunión y su fila de `sessions`, si la hay. */
+  borrarConversacion: ruta => ipcRenderer.invoke('app:borrarConversacion', ruta),
 
   // ── Claves: entran, no salen ──────────────────────────────────────
   guardarClaves: claves => ipcRenderer.invoke('app:guardarClaves', claves),

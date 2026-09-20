@@ -24,6 +24,7 @@ const os = require('os')
 const path = require('path')
 
 const { Autosave } = require('../src/autosave')
+const { percentil, duracionMs, costeStt, costeLlm } = require('../src/coste')
 
 const MAIN_APP = path.join(__dirname, '..', '..', 'electron-app', 'src', 'mainApp.js')
 const FUENTE = fs.readFileSync(MAIN_APP, 'utf8')
@@ -36,11 +37,16 @@ function tramo (desde, hasta) {
 }
 
 function construir (raizUserData) {
-  const codigo = tramo('function listarConversaciones', "ipcMain.handle('app:exportarSesion'")
-    .replace("ipcMain.handle('app:listarConversaciones', () => listarConversaciones())", '')
+  // El final corta justo antes de que `listarConversaciones()` se registre
+  // como manejador de IPC (F038 añade más manejadores justo después, que
+  // aquí no hacen falta y que necesitarían un `ipcMain` de mentira).
+  const codigo = tramo('function listarConversaciones', "ipcMain.handle('app:listarConversaciones'")
   const app = { getPath: () => raizUserData }
-  const fabrica = new Function('Autosave', 'path', 'app', 'console', `${codigo}\n return listarConversaciones`)
-  return fabrica(Autosave, path, app, console)
+  const fabrica = new Function(
+    'Autosave', 'path', 'app', 'console', 'percentil', 'duracionMs', 'costeStt', 'costeLlm',
+    `${codigo}\n return listarConversaciones`
+  )
+  return fabrica(Autosave, path, app, console, percentil, duracionMs, costeStt, costeLlm)
 }
 
 describe('F032 — listarConversaciones() cuenta frases y preguntas de cada reunión guardada', () => {

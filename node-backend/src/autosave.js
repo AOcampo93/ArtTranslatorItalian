@@ -130,6 +130,28 @@ class Autosave {
   }
 
   /**
+   * La respuesta que el LLM redactó para una pregunta (F038), con la pregunta
+   * misma al lado: el archivo es append-only (§0.3) y la tarjeta se pinta
+   * ANTES de tener respuesta, así que no hay una línea `pregunta` que
+   * "completar" — esta es una línea aparte, y quien la lee empareja por
+   * texto (`mainApp.js`, `ensamblarPreguntas`).
+   *
+   * `tokensEntrada`/`tokensSalida` vienen de `llm.js` cuando el proveedor los
+   * devuelve; si no, quedan `null` y el coste de la reunión los estima por
+   * caracteres — nunca se inventa un 0.
+   */
+  guardarRespuestaLlm ({ it, es, manual, texto, tokensEntrada, tokensSalida, modelo, mensaje }) {
+    this.escribir({
+      tipo: 'respuestaLlm',
+      it, es: es || '', manual: Boolean(manual),
+      texto: texto || null,
+      tokensEntrada: tokensEntrada ?? null, tokensSalida: tokensSalida ?? null,
+      modelo: modelo || null,
+      mensaje: mensaje || null,
+    })
+  }
+
+  /**
    * Metadatos de la sesión: con qué perfil y contexto se grabó, con qué
    * versión de la app, cuándo empezó y con qué id de `db.js`.
    *

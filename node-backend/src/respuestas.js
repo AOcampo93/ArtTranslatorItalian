@@ -59,6 +59,23 @@ const MEMORIA = 12
 /** Cuántas frases anteriores se le dan al LLM como contexto inmediato. */
 const FRASES_DE_CONTEXTO = 6
 
+/**
+ * `llamar()` (F038, `llm.js`) devuelve `{texto, tokensEntrada, tokensSalida,
+ * modelo}` para que el coste de la reunión se pueda calcular con tokens
+ * reales. Este módulo sólo necesitaba el texto, así que se acepta también la
+ * forma vieja —una cadena a secas— para no romper los `llamar()` de mentira
+ * que ya usan las pruebas de este archivo.
+ */
+function textoYUso (bruto) {
+  if (typeof bruto === 'string') return { texto: bruto, tokensEntrada: null, tokensSalida: null, modelo: null }
+  return {
+    texto: bruto?.texto ?? '',
+    tokensEntrada: bruto?.tokensEntrada ?? null,
+    tokensSalida: bruto?.tokensSalida ?? null,
+    modelo: bruto?.modelo ?? null,
+  }
+}
+
 /** Normaliza para comparar preguntas: sin signos, sin acentos, sin relleno. */
 function huella (texto) {
   return (texto || '')
@@ -272,10 +289,11 @@ class MotorRespuestas extends EventEmitter {
       ].filter(Boolean).join('\n\n')
 
       const bruto = await this.llamar(sistema, usuario)
-      const texto = this._limpiar(bruto)
+      const { texto: crudo, tokensEntrada, tokensSalida, modelo } = textoYUso(bruto)
+      const texto = this._limpiar(crudo)
       if (!texto) throw new Error('el modelo devolvió una respuesta vacía')
       this.stats.respondidas++
-      this.emit('respuesta', { id: pregunta.id, texto })
+      this.emit('respuesta', { id: pregunta.id, texto, tokensEntrada, tokensSalida, modelo })
     } catch (err) {
       this.stats.fallos++
       // Se dice que no hay respuesta, en vez de dejar «Preparando…» para
@@ -431,7 +449,7 @@ class MotorResumen extends EventEmitter {
     const usuario = `Lo que se ha dicho:\n${frases.map(f => `- ${f}`).join('\n')}`
 
     const bruto = await this.llamar(sistema, usuario, { json: true })
-    const { texto, temaNuevo } = interpretarResumen(bruto)
+    const { texto, temaNuevo } = interpretarResumen(textoYUso(bruto).texto)
     if (!texto) throw new Error('el modelo devolvió un resumen vacío')
 
     this.stats.resumenes++
@@ -465,6 +483,6 @@ function interpretarResumen (bruto) {
 
 module.exports = { MotorRespuestas, MotorResumen, MAX_CARACTERES }
 module.exports._internos = {
-  huella, sonLaMisma, sinComillasEnvolventes, interpretarResumen,
+  huella, sonLaMisma, sinComillasEnvolventes, interpretarResumen, textoYUso,
   MEMORIA, FRASES_DE_CONTEXTO, INTERVALO_RESUMEN_MS, MIN_FRASES_RESUMEN,
 }

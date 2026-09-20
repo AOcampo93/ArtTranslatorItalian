@@ -297,6 +297,13 @@ const API = {
     },
     // No tiene modo JSON: el prompt ya pide JSON y `quitarVallas` limpia.
     texto: d => d?.content?.[0]?.text || '',
+    // F038: tokens reales del `usage` de la respuesta, para el coste de la
+    // reunión. `null` si el proveedor cambia de forma y el campo no está —
+    // nunca 0, que se leería como "no costó nada".
+    uso: d => ({
+      tokensEntrada: Number.isFinite(d?.usage?.input_tokens) ? d.usage.input_tokens : null,
+      tokensSalida: Number.isFinite(d?.usage?.output_tokens) ? d.usage.output_tokens : null,
+    }),
   },
 
   openai: {
@@ -322,6 +329,10 @@ const API = {
       }
     },
     texto: d => d?.choices?.[0]?.message?.content || '',
+    uso: d => ({
+      tokensEntrada: Number.isFinite(d?.usage?.prompt_tokens) ? d.usage.prompt_tokens : null,
+      tokensSalida: Number.isFinite(d?.usage?.completion_tokens) ? d.usage.completion_tokens : null,
+    }),
   },
 
   gemini: {
@@ -343,6 +354,10 @@ const API = {
       }
     },
     texto: d => d?.candidates?.[0]?.content?.parts?.[0]?.text || '',
+    uso: d => ({
+      tokensEntrada: Number.isFinite(d?.usageMetadata?.promptTokenCount) ? d.usageMetadata.promptTokenCount : null,
+      tokensSalida: Number.isFinite(d?.usageMetadata?.candidatesTokenCount) ? d.usageMetadata.candidatesTokenCount : null,
+    }),
   },
 }
 
@@ -355,7 +370,7 @@ const API = {
  * @param {string} [opts.modelo]       por defecto, el de MODELOS
  * @param {Function} [opts.fetchImpl]  inyectable: así se prueba sin red
  * @param {number} [opts.plazoMs]
- * @returns {(sistema: string, usuario: string, opciones?: object) => Promise<string>}
+ * @returns {(sistema: string, usuario: string, opciones?: object) => Promise<{texto: string, tokensEntrada: number|null, tokensSalida: number|null, modelo: string}>}
  */
 function crearLlamador ({ clave, proveedor, modelo, fetchImpl, plazoMs = PLAZO_MS } = {}) {
   const prov = proveedor || proveedorDeClave(clave)
@@ -386,7 +401,12 @@ function crearLlamador ({ clave, proveedor, modelo, fetchImpl, plazoMs = PLAZO_M
     if (!resp.ok) throw new Error(`${prov} ${await motivoDelFallo(resp, prov, mod)}`)
 
     const datos = await resp.json()
-    return quitarVallas(API[prov].texto(datos))
+    // F038: además del texto, el coste de la reunión necesita los tokens
+    // reales. Se devuelve un objeto — quien ya trataba esto como una cadena
+    // (p. ej. `respuestas.js`) sigue funcionando porque lee `.texto`; ver
+    // `_internos.textoYUso` en ese archivo.
+    const uso = API[prov].uso ? API[prov].uso(datos) : { tokensEntrada: null, tokensSalida: null }
+    return { texto: quitarVallas(API[prov].texto(datos)), tokensEntrada: uso.tokensEntrada, tokensSalida: uso.tokensSalida, modelo: mod }
   }
 }
 

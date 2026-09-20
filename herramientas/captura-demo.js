@@ -117,6 +117,40 @@ async function main () {
   await ejecutar(`document.getElementById('irConversaciones').click()`)
   await esperar(150)
   await capturar('conversaciones')
+
+  // 8b) F038: sin `api` (modo demo) la lista está vacía, así que se pinta con
+  // datos de ejemplo llamando a la función directamente — es lo único que
+  // enseña la fila de coste/latencia y los botones «Ver»/«Borrar» sin tener
+  // que grabar una reunión de verdad.
+  await ejecutar(`
+    pintarListaConversaciones([{
+      archivo: 'sesion-20260919-101500-3.jsonl', ruta: '/reuniones/sesion-3.jsonl',
+      inicio: '2026-09-19T10:15:00.000Z', perfil: 'Omar Avila', contexto: 'Rossi Logistica',
+      frases: 21, preguntas: 3, duracionMs: 1980000, latenciaP50: 640, latenciaP95: 1350,
+      costeSttUsd: 0.02475, costeSttProcedencia: 'tarifa verificada, duración medida',
+      costeLlmUsd: 0.00061, costeLlmProcedencia: 'tokens medidos; tarifa de lista sin contrastar contra factura',
+    }])
+  `)
+  await esperar(150)
+  await capturar('conversaciones-coste')
+
+  // 8c) F038: «Ver» — transcripción y preguntas con su respuesta.
+  await ejecutar(`
+    pintarDetalleConversacion({
+      contexto: 'Rossi Logistica', perfil: 'Omar Avila',
+      frases: [
+        { it: 'Buongiorno a tutti, iniziamo la riunione.', es: 'Buenos días a todos, empecemos la reunión.' },
+        { it: 'Il cliente ha chiesto di anticipare la consegna.', es: 'El cliente pidió adelantar la entrega.' },
+      ],
+      preguntas: [
+        { it: 'Quanto tempo ci vuole per completare il lavoro?', es: '¿Cuánto tiempo lleva terminar el trabajo?', respuesta: 'Circa due settimane, salvo imprevisti.', manual: false },
+        { it: 'Il budget copre anche la manutenzione?', es: '¿El presupuesto cubre también el mantenimiento?', respuesta: null, mensaje: 'Sin clave de IA: no habrá respuesta. Configúrala en Ajustes.' },
+      ],
+    })
+  `)
+  await esperar(150)
+  await capturar('conversaciones-ver')
+
   await ejecutar(`document.getElementById('volverInicioConversaciones').click()`)
 
   // 9) Ajustes.

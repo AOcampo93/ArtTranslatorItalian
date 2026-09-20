@@ -247,8 +247,13 @@ describe('la respuesta va solo en italiano; la pregunta también en español', (
 
     const { respuesta } = await preguntarYEsperar(m, 'Hai già parlato con il fornitore del magazzino', '¿Ya has hablado…?')
 
-    assert.deepStrictEqual(Object.keys(respuesta).sort(), ['id', 'texto'])
+    // F038: además del texto viajan `tokensEntrada`/`tokensSalida`/`modelo`
+    // (aquí `null`, porque el `llamar()` de mentira devuelve una cadena, no
+    // el `{texto, ...}` que da `llm.js`) para el coste de la reunión — no un
+    // segundo idioma, que es lo que esta prueba protege.
+    assert.deepStrictEqual(Object.keys(respuesta).sort(), ['id', 'modelo', 'texto', 'tokensEntrada', 'tokensSalida'])
     assert.strictEqual(respuesta.texto, 'Sì, ne ho parlato ieri.')
+    assert.strictEqual(respuesta.es, undefined, 'la respuesta no lleva su propia traducción al español')
   })
 
   test('al modelo se le pide italiano y se le da el contexto del usuario', async () => {
