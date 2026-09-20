@@ -1,6 +1,6 @@
 {
   "name": "art-translator-italian-diagnostico",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Herramienta de diagnóstico: mide el equipo antes de instalar el traductor",
   "main": "src/mainApp.js",
   "scripts": {
