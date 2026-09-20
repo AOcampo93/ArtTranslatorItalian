@@ -393,6 +393,16 @@ class AssemblyLiveTranscriber extends EventEmitter {
    * @param {string[]} [opts.glosario] términos del contexto de proyecto
    * @param {string} [opts.contexto]   descripción de la reunión, en italiano
    * @param {Function} [opts.crearSocket] inyectable, para probar sin red
+   * @param {{marcas: number[]}} [opts.registroConexiones] el freno de ritmo
+   *   (F036, corrección): por defecto cada instancia trae el suyo propio,
+   *   vacío, que es lo que quiere cualquier prueba aislada. Quien SÍ necesita
+   *   compartirlo —el botón «Probar» de Ajustes y la sesión real de la
+   *   reunión, en `mainApp.js`— pasa el MISMO objeto a las dos instancias:
+   *   son la misma cuenta de AssemblyAI y el mismo cupo de cuatro conexiones
+   *   por minuto, así que tienen que verse la una a la otra. Sin esto, cada
+   *   `new AssemblyLiveTranscriber()` empezaba con la ventana vacía y pulsar
+   *   «Probar» varias veces abría sockets sin freno y agotaba el cupo justo
+   *   antes de la reunión.
    */
   constructor ({
     apiKey, idioma = 'it', glosario = [], contexto = '', modo = 'balanced', crearSocket,
@@ -400,6 +410,7 @@ class AssemblyLiveTranscriber extends EventEmitter {
     msSilencioParaForzar = MS_SILENCIO_PARA_FORZAR,
     umbralSilencioRms = UMBRAL_SILENCIO_RMS,
     esperaAperturaMs = ESPERA_APERTURA_MS,
+    registroConexiones = { marcas: [] },
   } = {}) {
     super()
     if (!apiKey && !crearSocket) throw new Error('hace falta una API key de AssemblyAI')
@@ -428,7 +439,11 @@ class AssemblyLiveTranscriber extends EventEmitter {
     this._pendiente = []
     this._descartadosS = 0
     this._avisadoDelHueco = false
-    this._conexiones = []        // marcas de tiempo, para el freno de ritmo
+    // El freno de ritmo vive en `registroConexiones`, no en esta instancia:
+    // ver el porqué en el JSDoc del constructor. `_conexiones` sigue
+    // existiendo como acceso directo a sus marcas (las pruebas ya lo usan
+    // así) pero es un espejo del registro, no su propio almacén.
+    this._registroConexiones = registroConexiones
     this._quitarSalidas = null
     this._turno = null           // turno en curso; ver _apuntarParcial()
     this._ultimoAudioEn = null   // cuándo se le dio al socket el último audio
@@ -443,6 +458,16 @@ class AssemblyLiveTranscriber extends EventEmitter {
   }
 
   // ── Freno de ritmo de conexiones ────────────────────────────────────
+  /**
+   * Acceso directo a las marcas del registro compartido (ver el JSDoc de
+   * `registroConexiones` en el constructor). Reasignar aquí —como hace
+   * `_esperaPorRitmo()`— actualiza el registro, no sólo esta instancia, así
+   * que cualquier otra instancia que comparta el mismo `registroConexiones`
+   * ve el cambio.
+   */
+  get _conexiones () { return this._registroConexiones.marcas }
+  set _conexiones (marcas) { this._registroConexiones.marcas = marcas }
+
   /** Milisegundos que hay que esperar para no pasarse del límite. */
   _esperaPorRitmo () {
     const ahora = Date.now()

@@ -37,6 +37,18 @@ const os = require('os')
 const BACK = path.join(__dirname, '..', '..', 'node-backend', 'src')
 const { AssemblyLiveTranscriber } = require(path.join(BACK, 'assemblyLive'))
 const traductor = require(path.join(BACK, 'translator'))
+
+/**
+ * F036 (corrección) — el freno de conexiones por minuto de AssemblyAI es del
+ * PROCESO, no de cada `AssemblyLiveTranscriber`: las cuatro conexiones por
+ * minuto son de la cuenta, no de la instancia. Este registro se pasa a las
+ * tres construcciones del archivo (la sesión real, la prueba de la
+ * comprobación inicial y el botón «Probar» de Ajustes) para que las tres se
+ * vean entre sí. Sin esto, pulsar «Probar» varias veces abría sockets sin
+ * que el freno se enterara, y esos mismos sockets tampoco contaban para la
+ * reunión que empezara justo después.
+ */
+const registroConexionesStt = { marcas: [] }
 const contexto = require(path.join(BACK, 'contexto'))
 const db = require(path.join(BACK, 'db'))
 const { Autosave } = require(path.join(BACK, 'autosave'))
@@ -734,6 +746,7 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
     // El contexto va en italiano porque describe el audio que va a oír.
     contexto: [ctx?.tipo_proyecto && `Progetto: ${ctx.tipo_proyecto}.`,
                ctx?.contexto].filter(Boolean).join(' '),
+    registroConexiones: registroConexionesStt,
   })
 
   // Marian se carga una vez y se queda en memoria. Tarda unos 500 ms la
@@ -1078,13 +1091,14 @@ ipcMain.handle('app:estadoClaves', () => {
  *
  * La prueba de AssemblyAI reutiliza `start()`/`stop()` tal cual: es la misma
  * disciplina de sesión de `assemblyLive.js` (freno de ritmo, `Terminate` en
- * toda salida) descrita ahí arriba, y abrir un socket de prueba consume
+ * toda salida) descrita ahí arriba, y comparte `registroConexionesStt` con la
+ * sesión real (ver su declaración arriba): abrir un socket de prueba consume
  * igual una de las cuatro conexiones por minuto del plan — no hay un camino
- * aparte que la esquive.
+ * aparte que la esquive, y tampoco hay un registro aparte que no se entere.
  */
 async function probarClaveStt (clave) {
   if (!clave) return { ok: false, mensaje: 'Falta la clave de transcripción.' }
-  const t = new AssemblyLiveTranscriber({ apiKey: clave })
+  const t = new AssemblyLiveTranscriber({ apiKey: clave, registroConexiones: registroConexionesStt })
   const inicio = Date.now()
   try {
     await t.start()
@@ -1153,7 +1167,9 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
     for (let i = 0; i < muestras.length; i++) muestras[i] = pcm.readInt16LE(i * 2) / 32768
 
     const glosario = (ctx?.glosario || '').split(/[,\n·;]+/).map(x => x.trim()).filter(Boolean)
-    const t = new AssemblyLiveTranscriber({ apiKey: claves.stt, idioma: 'it', glosario })
+    const t = new AssemblyLiveTranscriber({
+      apiKey: claves.stt, idioma: 'it', glosario, registroConexiones: registroConexionesStt,
+    })
 
     const tConexion = Date.now()
     await t.start()

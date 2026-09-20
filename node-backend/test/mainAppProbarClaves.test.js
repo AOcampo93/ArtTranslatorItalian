@@ -43,19 +43,25 @@ function tramo (desde, hasta) {
 const CLAVE_REAL = 'AIzaSyCLAVEDEVERDAD1234567890ABCDEFG'
 
 describe('F036 — probarClaveStt', () => {
-  function montar ({ falla } = {}) {
+  function montar ({ falla, registroConexionesStt = { marcas: [] } } = {}) {
     const codigo = tramo('async function probarClaveStt', 'async function probarClaveLlm')
     const llamadas = []
+    const opciones = []
     class TranscriptorFalso {
-      constructor ({ apiKey }) { this.apiKey = apiKey }
+      constructor (opts) { opciones.push(opts); this.apiKey = opts.apiKey }
       async start () {
         llamadas.push('start')
         if (falla) throw falla
       }
       async stop () { llamadas.push('stop') }
     }
-    const fabrica = new Function('AssemblyLiveTranscriber', 'clasificarError', `${codigo}\n return probarClaveStt`)
-    return { probarClaveStt: fabrica(TranscriptorFalso, clasificarError), llamadas }
+    const fabrica = new Function(
+      'AssemblyLiveTranscriber', 'clasificarError', 'registroConexionesStt',
+      `${codigo}\n return probarClaveStt`)
+    return {
+      probarClaveStt: fabrica(TranscriptorFalso, clasificarError, registroConexionesStt),
+      llamadas, opciones,
+    }
   }
 
   test('sin clave, no llama a nada y dice que falta en castellano', async () => {
@@ -86,6 +92,23 @@ describe('F036 — probarClaveStt', () => {
     // (assemblyLive.test.js); esta prueba sólo exige que se llegue a llamar.
     assert.deepStrictEqual(llamadas, ['start', 'stop'])
     assert.ok(!r.mensaje.includes(CLAVE_REAL), 'un fallo del servidor no puede colar la clave')
+  })
+
+  test('corrección: la conexión de prueba entra en el mismo registro de conexiones que la reunión', async () => {
+    // El freno de ritmo (assemblyLive.test.js) es del REGISTRO, no de la
+    // instancia: si `probarClaveStt` no pasara `registroConexionesStt`, cada
+    // pulsación de «Probar» abriría con una ventana vacía y nunca contaría
+    // para el cupo de la sesión real ni al revés. Aquí se comprueba que el
+    // registro compartido, tal cual se lo pasa `probarClaveStt`, es el mismo
+    // objeto en las tres llamadas — la prueba real del freno, con marcas de
+    // verdad, ya vive en assemblyLive.test.js.
+    const registroConexionesStt = { marcas: [] }
+    const { probarClaveStt, opciones } = montar({ registroConexionesStt })
+    await probarClaveStt(CLAVE_REAL)
+    await probarClaveStt(CLAVE_REAL)
+    assert.strictEqual(opciones.length, 2)
+    assert.strictEqual(opciones[0].registroConexiones, registroConexionesStt)
+    assert.strictEqual(opciones[1].registroConexiones, registroConexionesStt)
   })
 })
 
@@ -154,8 +177,9 @@ describe('F036 — el estado que vuelve al renderer nunca contiene la clave', ()
       async stop () {}
     }
     const probarStt = ok => new Function(
-      'AssemblyLiveTranscriber', 'clasificarError', `${codigoStt}\n return probarClaveStt`,
-    )(ok ? TranscriptorOk : TranscriptorFalla, clasificarError)
+      'AssemblyLiveTranscriber', 'clasificarError', 'registroConexionesStt',
+      `${codigoStt}\n return probarClaveStt`,
+    )(ok ? TranscriptorOk : TranscriptorFalla, clasificarError, { marcas: [] })
 
     const codigoLlm = tramo('async function probarClaveLlm', "ipcMain.handle('app:probarClaveStt'")
     const probarLlm = ok => new Function(
@@ -173,5 +197,20 @@ describe('F036 — el estado que vuelve al renderer nunca contiene la clave', ()
     for (const r of resultados) {
       assert.ok(!JSON.stringify(r).includes(CLAVE_REAL), `se coló la clave en ${JSON.stringify(r)}`)
     }
+  })
+})
+
+describe('F036 (corrección) — el freno de conexiones es del proceso, no de la instancia', () => {
+  test('la sesión real y las dos pruebas de Ajustes usan el mismo registro compartido', () => {
+    // Comprobación a nivel de fuente: las pruebas de arriba ya demuestran que
+    // `probarClaveStt` recibe ese registro; esta comprueba que es el MISMO
+    // que usa la sesión real de la reunión (`empezarSesion`) y la prueba de
+    // la pantalla de preparación (`app:comprobar`) — las tres construcciones
+    // de `AssemblyLiveTranscriber` del archivo.
+    assert.match(FUENTE, /const registroConexionesStt = \{ ?marcas: \[\] ?\}/,
+      'debe declararse un registro de conexiones compartido a nivel de módulo')
+    const usos = FUENTE.match(/registroConexiones:\s*registroConexionesStt/g) || []
+    assert.strictEqual(usos.length, 3,
+      `las tres construcciones de AssemblyLiveTranscriber deben compartir el registro (encontradas: ${usos.length})`)
   })
 })

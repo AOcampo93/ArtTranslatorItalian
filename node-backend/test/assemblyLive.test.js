@@ -536,6 +536,26 @@ describe('freno al ritmo de conexiones', () => {
     assert.strictEqual(t._esperaPorRitmo(), 0, 'la ventana es móvil, de 60 s')
     await t.stop()
   })
+
+  test('corrección F036: dos instancias que comparten registroConexiones se frenan la una a la otra', async () => {
+    // Es exactamente el caso del botón «Probar» de Ajustes: una instancia
+    // nueva por cada pulsación, y otra instancia nueva para la sesión real
+    // de la reunión. Sin un registro compartido, cada una empieza con la
+    // ventana vacía y el freno no hace nada.
+    const registroConexiones = { marcas: [] }
+    const sesionReal = montar({ registroConexiones }).t
+    const pruebaDeClave = montar({ registroConexiones }).t
+
+    await sesionReal.start()
+    for (let i = 1; i < MAX_CONEXIONES_MIN; i++) sesionReal._conexiones.push(Date.now())
+    assert.ok(pruebaDeClave._esperaPorRitmo() > 0,
+      'el cupo que agotó la sesión real debe frenar también a la prueba de la clave')
+    await sesionReal.stop()
+
+    pruebaDeClave._conexiones = []
+    assert.strictEqual(sesionReal._esperaPorRitmo(), 0,
+      'y si la prueba de la clave limpia el registro compartido, la sesión real lo ve igual')
+  })
 })
 
 describe('caída de red', () => {
