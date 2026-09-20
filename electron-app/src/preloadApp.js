@@ -70,6 +70,12 @@ contextBridge.exposeInMainWorld('app', {
   guardarClaves: claves => ipcRenderer.invoke('app:guardarClaves', claves),
   /** Sólo dice CUÁLES hay, nunca su valor. */
   estadoClaves: () => ipcRenderer.invoke('app:estadoClaves'),
+  /**
+   * F036: el botón «Probar» de cada clave. La clave viaja una sola vez, para
+   * esta llamada, y no se guarda: el resultado que vuelve nunca la lleva.
+   */
+  probarClaveStt: clave => ipcRenderer.invoke('app:probarClaveStt', clave),
+  probarClaveLlm: clave => ipcRenderer.invoke('app:probarClaveLlm', clave),
 
   // ── Al cerrar la reunión ──────────────────────────────────────────
   exportarSesion: formato => ipcRenderer.invoke('app:exportarSesion', formato),

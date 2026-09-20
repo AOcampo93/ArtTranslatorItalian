@@ -42,7 +42,7 @@ const db = require(path.join(BACK, 'db'))
 const { Autosave } = require(path.join(BACK, 'autosave'))
 const { partirTurno, arrastrar, acabaCerrada } = require(path.join(BACK, 'frases'))
 const { MotorRespuestas, MotorResumen } = require(path.join(BACK, 'respuestas'))
-const { crearLlamador, clasificarError, sanear } = require(path.join(BACK, 'llm'))
+const { crearLlamador, clasificarError, sanear, proveedorDeClave, MODELOS, NOMBRE_PROVEEDOR } = require(path.join(BACK, 'llm'))
 const { ColaDeInformes } = require(path.join(BACK, 'informes'))
 const { percentil, duracionMs, costeStt, costeLlm } = require(path.join(BACK, 'coste'))
 const { calcularBounds, leerEstado, guardarEstado } = require(path.join(BACK, 'ventanaEstado'))
@@ -1065,6 +1065,56 @@ ipcMain.handle('app:estadoClaves', () => {
     informesDisponibles: Boolean(leerTokenInformes()),
   }
 })
+
+/**
+ * F036 — el botón «Probar» de cada clave en Ajustes.
+ *
+ * La clave que se prueba es la que el usuario acaba de escribir, tal cual
+ * llega del renderer: no pasa por `guardarClaves` ni por `leerClaves`, así
+ * que se puede probar una clave sin guardarla y sin pisar la que ya
+ * funcionaba. Lo que vuelve al renderer nunca lleva la clave — sólo el
+ * mensaje de `clasificarError` (F021), que ya sale saneado, o el proveedor y
+ * el modelo, que tampoco son la clave.
+ *
+ * La prueba de AssemblyAI reutiliza `start()`/`stop()` tal cual: es la misma
+ * disciplina de sesión de `assemblyLive.js` (freno de ritmo, `Terminate` en
+ * toda salida) descrita ahí arriba, y abrir un socket de prueba consume
+ * igual una de las cuatro conexiones por minuto del plan — no hay un camino
+ * aparte que la esquive.
+ */
+async function probarClaveStt (clave) {
+  if (!clave) return { ok: false, mensaje: 'Falta la clave de transcripción.' }
+  const t = new AssemblyLiveTranscriber({ apiKey: clave })
+  const inicio = Date.now()
+  try {
+    await t.start()
+    await t.stop()
+    return { ok: true, mensaje: `Clave válida: conectó en ${Date.now() - inicio} ms.` }
+  } catch (err) {
+    // Si algo llegó a abrirse a medias, `t.stop()` lo cierra con `Terminate`
+    // igual que en cualquier otra salida (ver `_registrarSalidas()` en
+    // `assemblyLive.js`); si nunca hubo socket, no hace nada.
+    try { await t.stop() } catch { /* ya está cerrado, o nunca se abrió */ }
+    return { ok: false, mensaje: clasificarError(err).mensaje }
+  }
+}
+
+/** La prueba del LLM: una llamada mínima, sólo para confirmar clave y modelo. */
+async function probarClaveLlm (clave) {
+  if (!clave) return { ok: false, mensaje: 'Falta la clave del modelo de lenguaje.' }
+  try {
+    const proveedor = proveedorDeClave(clave)
+    const llamar = crearLlamador({ clave })
+    await llamar('Responde solo con la palabra ok, en minúsculas y sin puntuación.', 'ok', { maxTokens: 5 })
+    const modelo = MODELOS[proveedor]
+    return { ok: true, mensaje: `Clave válida: ${NOMBRE_PROVEEDOR[proveedor]}, se usará ${modelo}.` }
+  } catch (err) {
+    return { ok: false, mensaje: clasificarError(err).mensaje }
+  }
+}
+
+ipcMain.handle('app:probarClaveStt', (_e, clave) => probarClaveStt(clave))
+ipcMain.handle('app:probarClaveLlm', (_e, clave) => probarClaveLlm(clave))
 
 /**
  * La comprobación de la pantalla de preparación.

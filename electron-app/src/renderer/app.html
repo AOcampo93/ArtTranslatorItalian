@@ -258,6 +258,15 @@
   textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
   .ancho { grid-column: 1 / -1; }
 
+  /* F036: la clave y su botón «Probar» van en la misma fila; el resultado
+     (verde/rojo, mensaje de F021) debajo, para que no empuje el botón. */
+  .clave-fila { display: flex; gap: 7px; align-items: center; }
+  .clave-fila input { flex: 1; }
+  .clave-fila button { flex: none; padding: 7px 12px; font-size: 12.5px; }
+  .resultado-clave { font-size: 11.5px; margin: 5px 0 0; line-height: 1.4; }
+  .resultado-clave.ok { color: var(--ok); }
+  .resultado-clave.mal { color: var(--mal); }
+
   .paso { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: baseline; padding: 8px 0; }
   .paso + .paso { border-top: 1px solid var(--linea); }
   .pt { font-size: 13px; }
@@ -538,8 +547,22 @@
       <h2>Tus claves</h2>
       <p class="ayuda">Se guardan cifradas en este equipo y no salen de él. El gasto corre por tu cuenta.</p>
       <div class="rejilla">
-        <div class="ancho"><label>Transcripción</label><input id="kSTT" type="password" placeholder="•••"></div>
-        <div class="ancho"><label>Respuestas y preguntas</label><input id="kLLM" type="password" placeholder="•••"></div>
+        <div class="ancho">
+          <label>Transcripción</label>
+          <div class="clave-fila">
+            <input id="kSTT" type="password" placeholder="•••">
+            <button class="sec" id="btnProbarStt" type="button">Probar</button>
+          </div>
+          <p class="resultado-clave oculto" id="resultadoStt"></p>
+        </div>
+        <div class="ancho">
+          <label>Respuestas y preguntas</label>
+          <div class="clave-fila">
+            <input id="kLLM" type="password" placeholder="•••">
+            <button class="sec" id="btnProbarLlm" type="button">Probar</button>
+          </div>
+          <p class="resultado-clave oculto" id="resultadoLlm"></p>
+        </div>
       </div>
     </section>
 
@@ -1286,6 +1309,47 @@ $('#btnGuardarAjustes').onclick = async () => {
   $('#kSTT').value = $('#kLLM').value = ''
   $('#ajustes').classList.add('oculto')
 }
+
+// ── Ajustes: probar claves (F036) ───────────────────────────────────────
+/**
+ * Pinta el resultado de una prueba de clave: verde si `ok`, rojo si no, con
+ * el mensaje de `clasificarError` (F021) que ya llegó saneado del proceso
+ * principal. Esta función nunca ve la clave — sólo el resultado, que ya la
+ * dejó atrás — así que no hay forma de que la pinte por accidente.
+ */
+function pintarResultadoClave (id, resultado) {
+  const p = $(`#resultado${id}`)
+  if (!p) return
+  p.classList.remove('oculto', 'ok', 'mal')
+  p.classList.add(resultado?.ok ? 'ok' : 'mal')
+  p.textContent = resultado?.mensaje || (resultado?.ok ? 'Clave válida.' : 'No se pudo comprobar.')
+}
+
+/**
+ * @param {string} id      'Stt' o 'Llm': sufijo de los ids en el HTML
+ * @param {string} campo   id del `<input>` con la clave
+ * @param {Function} fnApi  la llamada de `preloadApp.js` que hace la prueba
+ */
+async function probarClave (id, campo, fnApi) {
+  const clave = $(`#${campo}`).value.trim()
+  if (!clave) { pintarResultadoClave(id, { ok: false, mensaje: 'Escribe la clave antes de probarla.' }); return }
+  const boton = $(`#btnProbar${id}`)
+  const textoOriginal = boton.textContent
+  boton.disabled = true
+  boton.textContent = 'Probando…'
+  try {
+    const r = api ? await fnApi(clave) : { ok: true, mensaje: 'Modo demo: no hay comprobación real.' }
+    pintarResultadoClave(id, r)
+  } finally {
+    boton.disabled = false
+    boton.textContent = textoOriginal
+  }
+}
+
+// Guardas como en `irAjustes` de arriba: los DOM mínimos de otras pruebas
+// (`rendererBurbujas.test.js`) montan este mismo tramo sin estos botones.
+if ($('#btnProbarStt')) $('#btnProbarStt').onclick = () => probarClave('Stt', 'kSTT', c => api.probarClaveStt(c))
+if ($('#btnProbarLlm')) $('#btnProbarLlm').onclick = () => probarClave('Llm', 'kLLM', c => api.probarClaveLlm(c))
 
 // ── Puente con el proceso principal ───────────────────────────────────
 if (api) {

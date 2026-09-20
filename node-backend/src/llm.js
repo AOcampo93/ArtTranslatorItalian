@@ -412,6 +412,6 @@ function crearLlamador ({ clave, proveedor, modelo, fetchImpl, plazoMs = PLAZO_M
 
 module.exports = {
   crearLlamador, proveedorDeClave, MODELOS, LISTA_DE_MODELOS, MAX_TOKENS, PLAZO_MS,
-  clasificarError, sanear,
+  clasificarError, sanear, NOMBRE_PROVEEDOR,
 }
 module.exports._internos = { quitarVallas, API, motivoDelFallo, NOMBRE_PROVEEDOR }
