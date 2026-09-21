@@ -59,6 +59,23 @@ describe('la respuesta va en italiano, que es el requisito del cliente', () => {
     assert.match(P.promptRespuesta(BLOQUE), /no lo inventes/i)
   })
 
+  // F044. MEDIDO en el informe de v0.8.0: ante «Quante volte sei stata in
+  // Brasile?» el modelo contestaba «Sono stata in Brasile 9 volte» como si
+  // fuera del usuario — un hecho que no está ni en su perfil ni en el
+  // contexto. El prompt tiene que prohibirlo por su nombre, y dar una salida
+  // honesta en vez de dejar que el modelo la rellene por su cuenta.
+  test('F044: prohíbe inventar hechos personales del usuario', () => {
+    const p = P.promptRespuesta(BLOQUE)
+    assert.match(p, /hechos personales/i)
+    assert.match(p, /cifras?\s+o\s+vivencias?/i,
+      'debe nombrar el tipo de invención que se midió: cifras y vivencias')
+  })
+
+  test('F044: si falta el dato, pide esquivar o devolver la pregunta, no inventar', () => {
+    const p = P.promptRespuesta(BLOQUE)
+    assert.match(p, /esquive? o devuelva/i)
+  })
+
   test('NO pide glosa en español: el cliente quiso solo italiano', () => {
     const p = P.promptRespuesta(BLOQUE)
     assert.doesNotMatch(p, /glosa|traducción al español de la respuesta/i)

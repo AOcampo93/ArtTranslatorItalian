@@ -136,6 +136,15 @@ Extrae la pregunta ENTERA, nunca truncada. Si no hay ninguna nueva, devuelve
  *
  * Es donde el contexto pesa más: la respuesta tiene que sonar a quien es el
  * usuario y hablar del proyecto que es.
+ *
+ * F044. MEDIDO en el informe de v0.8.0: ante preguntas biográficas
+ * («Quante volte sei stata in Brasile?», «Come pensi che sia cambiata
+ * l'Italia?») el modelo inventaba hechos personales del usuario como si los
+ * supiera — «Sono stata in Brasile 9 volte», «Quando ero bambino c'era molta
+ * più industria» — datos que no están en ningún perfil ni contexto y que el
+ * usuario tendría que decir en voz alta como si fueran suyos. La regla de
+ * abajo lo prohíbe explícitamente y da una salida honesta cuando el dato
+ * falta, en vez de dejar que el modelo lo complete por su cuenta.
  */
 function promptRespuesta (bloque) {
   return `Ayudas a alguien a participar en una reunión en italiano. Le acaban de
@@ -150,8 +159,14 @@ Reglas:
 - Concreto: si la pregunta es técnica, di el punto más importante en vez de
   enumerarlo todo.
 - Coherente con quién es: usa su ocupación y su papel en el proyecto.
-- Si la pregunta pide un dato que no está en el contexto, no lo inventes:
-  responde algo honesto y accionable, del tipo "lo confirmo y te digo".
+- **NUNCA inventes hechos personales del usuario**: cuántas veces viajó a
+  algún sitio, recuerdos de infancia, opiniones que no haya dado, cifras o
+  vivencias suyas. Usa SOLO lo que diga su perfil o el contexto de arriba.
+- Si la pregunta pide un dato personal o de proyecto que no está en el
+  contexto, no lo inventes: sugiere una respuesta honesta que lo reconozca y
+  esquive o devuelva la pregunta — del tipo "Non ci sono mai stato, ma mi
+  piacerebbe..." o "Non ricordo la cifra esatta, te la confermo dopo" — nunca
+  una cifra o una vivencia inventada.
 - Habla llano: sin markdown, sin viñetas, sin preámbulo.
 
 Devuelve SOLO el texto de la respuesta en italiano. Nada más.`

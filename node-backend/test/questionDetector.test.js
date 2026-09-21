@@ -146,6 +146,68 @@ describe('el signo, cuando Whisper lo pone', () => {
   })
 })
 
+describe('F044 — las 8 frases reales del informe de v0.8.0', () => {
+  // MEDIDO: sesión Liz3t del 21/09/2026 (36 frases). El detector marcó estas
+  // 8 como pregunta y lanzó una respuesta; solo 3 eran preguntas de verdad.
+  // Los textos son los del campo "it" de esas 8 entradas `respuestaLlm`, tal
+  // cual llegaron — turnos completos, a veces de varias frases.
+  const CASOS = [
+    {
+      it: 'Adesso stiamo per partire, stiamo per partire per la Sicilia. Ho già la valigia pronta. E in questi tanti viaggi hai fatto anche dei viaggi in Brasile?',
+      esperado: false,
+      nota: 'afirmación sobre el propio viaje; el "?" final no abre con marca dirigida al oyente',
+    },
+    {
+      it: 'Mi fai ricordarti quante volte sei stata in Brasile? Perché Giulia per tanti anni è stata in Brasile.',
+      esperado: true,
+      nota: 'pregunta real, aunque no sea la última frase del turno',
+    },
+    {
+      it: "Perché nella mata c'è proprio l'energia, l'energia che arriva dalla terra e l'energia che arriva dagli alberi.",
+      esperado: false,
+      nota: '"perché" = "porque", no "por qué": explica, no pregunta',
+    },
+    {
+      it: "Come pensi che sia cambiata l'Italia nel tempo?",
+      esperado: true,
+      nota: 'pregunta real',
+    },
+    {
+      it: "Tipo se paragoni Bergamo quando eri bambina e oggi, o l'Italia Italia a quando eri piccola e adesso?",
+      esperado: true,
+      nota: 'pregunta real',
+    },
+    {
+      it: "Bergamo quando io ero bambina era una città piccolina E non so se, forse non tutti sanno, Bergamo è su due livelli. C'è una parte alta che si chiama Città Alta, è su una collina.",
+      esperado: false,
+      nota: 'afirmación descriptiva; "c\'è" no es una perífrasis de pregunta',
+    },
+    {
+      it: 'Ci sono dei vantaggi perché hanno molto valorizzato dei tesori medievali che ci sono a Bergamo.',
+      esperado: false,
+      nota: 'afirmación; "ci sono" no es una perífrasis de pregunta',
+    },
+    {
+      it: "Ci sono veramente delle opere d'arte medievali che quando io ero piccola manco sapevamo che ci fossero.",
+      esperado: false,
+      nota: 'afirmación',
+    },
+  ]
+
+  for (const c of CASOS) {
+    test(`${c.esperado ? 'acepta' : 'rechaza'}: "${c.it.slice(0, 50)}…" (${c.nota})`, () => {
+      assert.strictEqual(analizar(c.it).esPregunta, c.esperado)
+    })
+  }
+
+  test('de las 8, acepta exactamente las 3 preguntas y rechaza las 5 afirmaciones', () => {
+    const aciertos = CASOS.filter(c => analizar(c.it).esPregunta === c.esperado).length
+    assert.strictEqual(aciertos, 8, 'las 8 deben clasificarse como en el informe')
+    assert.strictEqual(CASOS.filter(c => c.esperado).length, 3)
+    assert.strictEqual(CASOS.filter(c => !c.esperado).length, 5)
+  })
+})
+
 describe('aviso sobre la hipótesis en vivo', () => {
   test('avisa antes de que la frase termine', () => {
     // Solo mira cómo empieza, así que puede avisar con la frase a medias.

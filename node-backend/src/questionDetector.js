@@ -47,6 +47,9 @@ const VERBOS_2A = [
   'hai visto', 'avete visto', 'ti va', 'vi va',
   // Percepción: son las de "¿me oyes?", que salen en toda videollamada.
   'senti', 'sentite', 'sente', 'vedi', 'vedete', 'vede',
+  // F044: "mi fai ricordarti..." — verbo modal dirigido que faltaba,
+  // medido en el informe de v0.8.0 («Quante volte sei stata in Brasile?»).
+  'fai', 'fate',
 ]
 
 /*
@@ -71,9 +74,18 @@ const CLITICOS = new Set(['mi', 'ti', 'ci', 'vi', 'si', 'lo', 'la', 'li', 'le', 
 const PERIFRASIS = [
   'mi puoi dire', 'mi potresti dire', 'mi spieghi', 'mi spiega',
   'vorrei sapere', 'mi dici', 'dimmi', 'ditemi',
-  'che ne pensi', 'che ne pensate', 'come funziona', 'come mai',
-  "c'è", 'ci sono', 'cè',
+  'che ne pensi', 'che ne pensate', 'cosa ne pensi', 'cosa ne pensate',
+  'come funziona', 'come mai',
 ]
+
+/*
+ * F044: "c'è" y "ci sono" ("hay") se quitaron de aquí — MEDIDO en el informe
+ * de v0.8.0: abrían como pregunta frases puramente descriptivas («C'è una
+ * parte alta che si chiama Città Alta…», «Ci sono dei vantaggi perché…»),
+ * 3 de las 5 afirmaciones que el detector confundía con preguntas. "Hay" es
+ * tan corriente en una frase declarativa que, sin signo de interrogación
+ * detrás, no distingue nada.
+ */
 
 /**
  * Relleno conversacional que precede al verdadero comienzo.
@@ -109,10 +121,31 @@ function normalizar (texto) {
     .trim()
 }
 
+/** Todas las frases del texto, en orden. */
+function todasLasFrases (texto) {
+  return (texto || '').split(/(?<=[.!?…])\s+/).filter(Boolean)
+}
+
 /** La última frase del texto: la que se está diciendo ahora. */
 function ultimaFrase (texto) {
-  const partes = (texto || '').split(/(?<=[.!?…])\s+/)
+  const partes = todasLasFrases(texto)
   return partes[partes.length - 1] || texto || ''
+}
+
+/**
+ * F044: la última frase del texto que termina en "?", si la hay.
+ *
+ * Antes solo se miraba la última frase a secas. MEDIDO en el informe de
+ * v0.8.0: en «Mi fai ricordarti quante volte sei stata in Brasile? Perché
+ * Giulia per tanti anni è stata in Brasile.» la pregunta real es la PRIMERA
+ * frase — la última es la explicación que sigue— y se perdía por completo.
+ */
+function ultimaConSigno (texto) {
+  const frases = todasLasFrases(texto)
+  for (let i = frases.length - 1; i >= 0; i--) {
+    if (/\?\s*$/.test(frases[i].trim())) return frases[i]
+  }
+  return null
 }
 
 /** Quita el relleno inicial y devuelve el resto. */
@@ -151,6 +184,45 @@ function abrePor (texto, lista) {
 }
 
 /**
+ * F044: por encima de esta longitud, una frase que abre con "perché" ya no
+ * cuenta como interrogativa sin signo.
+ *
+ * MEDIDO en el informe de v0.8.0: «Perché nella mata c'è proprio l'energia,
+ * l'energia che arriva dalla terra e l'energia che arriva dagli alberi.»
+ * (16 palabras) es una explicación ("porque"), no una pregunta ("¿por qué?"),
+ * y se colaba como las otras cinco. El caso de PLAN.md §9 que sí es pregunta
+ * —«Perché il budget non copre le ore extra»— tiene 8 palabras. Por escrito,
+ * "perché" es ambiguo entre "por qué" y "porque"; la longitud es la única
+ * señal barata que separa una pregunta directa de una frase que explica algo.
+ */
+const LIMITE_PALABRAS_PERCHE = 8
+
+/**
+ * Busca perífrasis, interrogativa o verbo en 2ª persona al inicio del texto
+ * ya normalizado y sin relleno. Devuelve null si no hay ninguna marca.
+ */
+function detectarApertura (norm) {
+  const perifrasis = abrePor(norm, PERIFRASIS)
+  if (perifrasis) return { motivo: 'perífrasis', apertura: perifrasis }
+
+  const interrogativa = abrePor(norm, INTERROGATIVAS)
+  if (interrogativa) {
+    const esPerche = interrogativa === 'perché' || interrogativa === 'perche'
+    const numPalabras = norm.split(' ').filter(Boolean).length
+    if (!esPerche || numPalabras <= LIMITE_PALABRAS_PERCHE) {
+      return { motivo: 'interrogativa', apertura: interrogativa }
+    }
+  }
+
+  // Verbo en 2ª persona al inicio: el patrón que el resto se pierde.
+  // Se prueba también saltando un clítico inicial ("mi senti").
+  const verbo = abrePor(norm, VERBOS_2A) || abrePor(sinClitico(norm), VERBOS_2A)
+  if (verbo) return { motivo: 'verbo-2a', apertura: verbo }
+
+  return null
+}
+
+/**
  * Analiza una frase italiana.
  * @param {string} texto
  * @returns {{
@@ -162,38 +234,44 @@ function abrePor (texto, lista) {
  */
 function analizar (texto) {
   const crudo = (texto || '').trim()
+  const nulo = { esPregunta: false, motivo: null, apertura: null, merecePena: false }
+  if (!crudo) return nulo
+
+  // 1. El signo, cuando Whisper lo pone. Es la señal más fiable de todas
+  //    — pero solo cuando cierra la única frase del turno. Si el turno
+  //    trae varias frases, un "?" al final de la última puede cerrar un
+  //    comentario que solo sigue una narración (ver `ultimaConSigno`):
+  //    hace falta además una apertura dirigida al oyente.
+  const frases = todasLasFrases(crudo)
+  const conSigno = ultimaConSigno(crudo)
+  if (conSigno) {
+    const normSigno = sinRelleno(normalizar(conSigno))
+    if (normSigno) {
+      const apertura = detectarApertura(normSigno)
+      if (frases.length <= 1 || apertura) {
+        return {
+          esPregunta: true,
+          motivo: 'signo',
+          apertura: apertura ? apertura.apertura : null,
+          merecePena: valeLaPena(normSigno),
+        }
+      }
+    }
+  }
+
+  // 2. Sin signo aprovechable: se mira solo la última frase, la que se
+  //    está diciendo ahora.
   const cola = ultimaFrase(crudo)
   const norm = sinRelleno(normalizar(cola))
-
-  const nulo = { esPregunta: false, motivo: null, apertura: null, merecePena: false }
   if (!norm) return nulo
 
-  // 1. El signo, cuando Whisper lo pone. Es la señal más fiable de todas.
-  const tieneSigno = /\?\s*$/.test(cola.trim())
-
-  // 2. Palabra interrogativa al inicio.
-  const interrogativa = abrePor(norm, INTERROGATIVAS)
-
-  // 3. Perífrasis.
-  const perifrasis = abrePor(norm, PERIFRASIS)
-
-  // 4. Verbo en 2ª persona al inicio: el patrón que el resto se pierde.
-  //    Se prueba también saltando un clítico inicial ("mi senti").
-  const verbo = abrePor(norm, VERBOS_2A) || abrePor(sinClitico(norm), VERBOS_2A)
-
-  const apertura = perifrasis || interrogativa || verbo
-  const esPregunta = tieneSigno || Boolean(apertura)
-  if (!esPregunta) return nulo
-
-  const motivo = tieneSigno ? 'signo'
-    : perifrasis ? 'perífrasis'
-    : interrogativa ? 'interrogativa'
-    : 'verbo-2a'
+  const apertura = detectarApertura(norm)
+  if (!apertura) return nulo
 
   return {
     esPregunta: true,
-    motivo,
-    apertura: apertura || null,
+    motivo: apertura.motivo,
+    apertura: apertura.apertura,
     merecePena: valeLaPena(norm),
   }
 }
@@ -226,6 +304,7 @@ function preguntaEnCamino (hipotesis) {
 
 module.exports = { analizar, preguntaEnCamino }
 module.exports._internos = {
-  normalizar, ultimaFrase, sinRelleno, sinClitico, abrePor, valeLaPena,
+  normalizar, ultimaFrase, todasLasFrases, ultimaConSigno, sinRelleno,
+  sinClitico, abrePor, detectarApertura, valeLaPena,
   INTERROGATIVAS, VERBOS_2A, PERIFRASIS, CORTESIA, RELLENO,
 }
