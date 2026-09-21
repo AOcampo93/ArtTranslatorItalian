@@ -66,6 +66,9 @@
      aunque la ventana ya tenga marco. Reducir el área de arrastre a la marca
      deja sitio de sobra alrededor de cada control para no rozarla sin querer. */
   .marca { font-weight: 600; font-size: 13px; letter-spacing: -.01em; -webkit-app-region: drag; }
+  /* A 440 px el retardo empujaba el engranaje a una segunda línea (visto en la
+     captura de v0.9.0): por debajo de 520 px se oculta y la barra cabe entera. */
+  @media (max-width: 519px) { #retardo { display: none !important; } }
   .estado { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx2); white-space: nowrap; }
   .punto { width: 8px; height: 8px; border-radius: 50%; background: var(--tx3); flex: none; }
   .punto.vivo { background: var(--ok); animation: latir 1.6s ease-in-out infinite; }
