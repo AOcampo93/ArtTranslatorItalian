@@ -103,6 +103,12 @@ async function main () {
   await esperar(150)
   await capturar('preparar-paso3-comprobacion')
 
+  // 5b) F045: tras la primera comprobación, el destaque (verde) pasa de
+  // «Comprobar» a «Siguiente», y «Comprobar otra vez» queda secundario.
+  await ejecutar(`document.getElementById('btnProbar').click()`)
+  await esperar(1100)
+  await capturar('preparar-paso3-tras-comprobar')
+
   // 6) Paso final — "Escuchar" listo, tras Saltar la comprobación.
   await ejecutar(`
     document.getElementById('btnSaltar').click()
@@ -115,6 +121,21 @@ async function main () {
   await ejecutar(`document.getElementById('btnEscuchar').click()`)
   await esperar(2200)
   await capturar('envivo-demo')
+
+  // 7a) F045: «de qué se está hablando» solo aparece escuchando, dentro de
+  // la conversación, como una tira plegada — y se expande al pulsarla,
+  // mostrando el contenido completo hasta abajo. `pintarContexto()` se
+  // llama directo (igual que `pintarListaConversaciones` más abajo): esperar
+  // a que el guion de la demo llegue ahí solo tardaría bastante más.
+  await ejecutar(`pintarContexto('Se negocia adelantar una entrega a la próxima semana. Hay dudas sobre '
+    + 'los plazos de integración con el ERP y sobre si el presupuesto cubre el mantenimiento. Falta '
+    + 'confirmar si el equipo de desarrollo ya fue avisado de los nuevos plazos y si el cliente acepta '
+    + 'el cambio de alcance para la fase 2.')`)
+  await esperar(150)
+  await capturar('envivo-demo-contexto-plegado')
+  await ejecutar(`document.getElementById('contexto').querySelector('summary').click()`)
+  await esperar(150)
+  await capturar('envivo-demo-contexto-expandido')
 
   // 7b) F042: la misma pantalla, ensanchada a 640 px — el umbral bajó de
   // 900 a 600, así que 640 es justo el ancho que antes se quedaba en una

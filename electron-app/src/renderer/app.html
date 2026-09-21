@@ -127,14 +127,17 @@
 
   /* ── Zona principal, en columna (F035) ──────────────────────────────
      Pedido del cliente: la ventana es angosta y alta, así que ya no caben
-     dos columnas lado a lado — transcripción ARRIBA y preguntas ABAJO, con
-     un reparto 60/40 del alto disponible. Se hace con `flex-grow` (6 y 4) y
+     dos columnas lado a lado — transcripción ARRIBA y preguntas ABAJO. F045:
+     pedido del cliente tras probar v0.8.0 — en la ventana angosta (la que
+     de verdad se usa en reunión) el reparto 60/40 dejaba las preguntas
+     demasiado pequeñas; ahí pasa a 50/50. Se hace con `flex-grow` (5 y 5) y
      no con un `%` fijo: así el reparto se mantiene si la ventana cambia de
-     alto, sin recalcular nada. */
+     alto, sin recalcular nada. Al ensanchar (`@media min-width: 600px` más
+     abajo) se vuelve al 60/40 de siempre: ese caso no cambió. */
   main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
   #conversacion {
-    flex: 6 1 0; overflow-y: auto; padding: var(--gutter) var(--gutter) var(--gutter);
+    flex: 5 1 0; overflow-y: auto; padding: var(--gutter) var(--gutter) var(--gutter);
     display: flex; flex-direction: column; gap: 10px; min-width: 0;
   }
 
@@ -183,22 +186,24 @@
      40% del alto, con `border-top` en vez de `border-left`: ya no es la
      columna de la derecha, es el panel de abajo. */
   #preguntas {
-    width: auto; flex: 4 1 0; border-left: none; border-top: 1px solid var(--linea);
+    width: auto; flex: 5 1 0; border-left: none; border-top: 1px solid var(--linea);
     background: var(--sup); display: flex; flex-direction: column; min-height: 0;
   }
 
   /* F041/F042: al ensanchar la ventana ya cabe la traducción a la izquierda y
      las preguntas a la derecha, lado a lado — angosta sigue en columna, que
-     es la regla de arriba y no cambia. Mismo reparto 60/40 que ya tenía
-     `flex: 6 1 0` / `flex: 4 1 0`; sólo cambia el eje, así que el separador
-     pasa de `border-top` a `border-left`. F042: el umbral baja de 900 a
-     600 px — el cliente lo pidió porque a 900 px casi nunca llegaba a verlo:
-     la ventana estándar es de 440 px y ensancharla hasta 900 es mucho más
-     gesto del que alguien hace a media reunión; a 600 ya cabe de sobra. */
+     es la regla de arriba y no cambia. F042: el umbral baja de 900 a 600 px
+     — el cliente lo pidió porque a 900 px casi nunca llegaba a verlo: la
+     ventana estándar es de 440 px y ensancharla hasta 900 es mucho más gesto
+     del que alguien hace a media reunión; a 600 ya cabe de sobra. F045: al
+     ensanchar se vuelve al reparto 60/40 de siempre (`flex: 6 1 0` /
+     `flex: 4 1 0`) — el 50/50 nuevo es solo para la columna angosta, de
+     arriba; sólo cambia el eje, así que el separador pasa de `border-top` a
+     `border-left`. */
   @media (min-width: 600px) {
     main#envivo { flex-direction: row; }
-    #conversacion { border-right: 1px solid var(--linea); }
-    #preguntas { border-top: none; border-left: 1px solid var(--linea); }
+    #conversacion { border-right: 1px solid var(--linea); flex: 6 1 0; }
+    #preguntas { border-top: none; border-left: 1px solid var(--linea); flex: 4 1 0; }
   }
 
   .titulo {
@@ -236,27 +241,34 @@
   .acciones { display: flex; gap: 6px; margin-top: 7px; }
   .acciones button { font-size: 11px; padding: 4px 9px; }
 
-  /* ── Contexto general, colapsado en un chip (F035) ─────────────────
+  /* ── Contexto general, colapsado en un chip (F035, movido a la
+     conversación en F045) ────────────────────────────────────────────
      Pedido del cliente: a 440 px de ancho, una barra entera de "De qué se
      está hablando" ya no cabe como sección propia sin robarle alto a la
      transcripción y a las preguntas. Es un `<details>` igual que antes —el
      comportamiento de abrir/cerrar no cambia—, pero el `summary` colapsado
-     se ve y se comporta como un chip pequeño, no como una barra a lo ancho. */
+     se ve y se comporta como un chip pequeño, no como una barra a lo ancho.
+     F045: pedido del cliente — antes vivía FUERA de `#envivo`, así que podía
+     quedar pintado incluso sin estar escuchando. Ahora es el primer hijo de
+     `#conversacion`, que solo se ve mientras `#envivo` está visible (esto
+     es, mientras se escucha): se oculta y aparece con la propia pantalla, sin
+     lógica aparte. Al estar dentro de la zona que ya hace scroll, el
+     `.cuerpo` ya no necesita su propio scroll interno — al abrirse se ve
+     completo, hasta abajo, con el resto de la conversación. */
   #contexto { border-top: none; background: transparent; flex: none; }
   #contexto summary {
-    display: inline-flex; align-items: center; gap: 6px; margin: 6px 0 0 var(--gutter);
+    display: inline-flex; align-items: center; gap: 6px; margin: 0 0 6px 0;
     padding: 3px 9px; cursor: pointer; font-size: 10px; font-weight: 600;
     letter-spacing: .05em; text-transform: uppercase; color: var(--tx3);
     background: var(--sup2); border: 1px solid var(--linea); border-radius: 999px;
-    list-style: none; max-width: calc(100% - 2 * var(--gutter));
+    list-style: none; max-width: 100%;
   }
   #contexto summary::-webkit-details-marker { display: none; }
   #contexto summary::before { content: '▸'; font-size: 9px; transition: transform .15s; flex: none; }
   #contexto[open] summary::before { transform: rotate(90deg); }
   #contexto .cuerpo {
-    margin: 4px var(--gutter) 0; padding: 8px 10px; font-size: 12.5px; color: var(--tx2);
-    max-height: 130px; overflow-y: auto; background: var(--sup); border: 1px solid var(--linea);
-    border-radius: 8px;
+    margin: 4px 0 0; padding: 8px 10px; font-size: 12.5px; color: var(--tx2);
+    background: var(--sup); border: 1px solid var(--linea); border-radius: 8px;
   }
 
   /* ── Pantalla de preparación ────────────────────────────────────── */
@@ -335,6 +347,28 @@
   .modo .op.no { opacity: .45; cursor: not-allowed; }
   .modo .op b { display: block; font-size: 13px; margin-bottom: 3px; }
   .modo .op span { font-size: 11.5px; color: var(--tx3); }
+
+  /* ── Interruptor (F045): el toggle único de «Permitir el envío» ────
+     Un `<input type=checkbox>` real por debajo (accesible, funciona con
+     teclado) pintado como una píldora que corre; visualmente oculto con
+     `position:absolute` y no con `display:none`, que lo sacaría del árbol
+     de tabulación. */
+  .interruptor { display: flex; align-items: center; gap: 10px; margin-top: 10px; cursor: pointer; width: fit-content; }
+  .interruptor input {
+    position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none;
+  }
+  .interruptor .pista {
+    position: relative; width: 36px; height: 21px; border-radius: 999px; flex: none;
+    background: var(--sup2); border: 1px solid var(--linea); transition: background .15s, border-color .15s;
+  }
+  .interruptor .pista::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px;
+    border-radius: 50%; background: var(--tx3); transition: transform .15s, background .15s;
+  }
+  .interruptor input:checked + .pista { background: var(--ok); border-color: var(--ok); }
+  .interruptor input:checked + .pista::after { transform: translateX(15px); background: #05231D; }
+  .interruptor input:focus-visible + .pista { outline: 2px solid var(--tx3); outline-offset: 2px; }
+  .interruptor .etiqueta { font-size: 13px; font-weight: 500; color: var(--tx2); }
 
   /* ── Panel de inicio (F032) ─────────────────────────────────────── */
   #inicio { flex: 1; overflow-y: auto; padding: 22px; }
@@ -576,6 +610,13 @@
 <!-- ══ En vivo ══════════════════════════════════════════════════════ -->
 <main class="oculto" id="envivo">
   <div id="conversacion">
+    <!-- F045: solo aparece mientras se escucha — al vivir dentro de
+         `#conversacion`, que solo se pinta dentro de `#envivo`, se oculta y
+         aparece con la propia pantalla en vivo, sin lógica aparte. -->
+    <details id="contexto" class="oculto">
+      <summary>De qué se está hablando</summary>
+      <div class="cuerpo" id="cuerpoContexto">Todavía no hay suficiente conversación.</div>
+    </details>
     <div class="vacio" id="vacio">
       <b>Escuchando el audio de tu computadora</b>
       Cuando alguien hable en italiano, la traducción aparecerá aquí.
@@ -589,17 +630,14 @@
   </aside>
 </main>
 
-<details id="contexto" class="oculto">
-  <summary>De qué se está hablando</summary>
-  <div class="cuerpo" id="cuerpoContexto">Todavía no hay suficiente conversación.</div>
-</details>
-
 <!-- ══ Ajustes ══════════════════════════════════════════════════════ -->
 <div id="ajustes" class="oculto">
   <div class="panel">
     <h1>Ajustes</h1>
 
-    <section class="tarjeta">
+    <!-- F045: pedido del cliente — se oculta por ahora (solo hay nube; local
+         no está disponible), pero el marcado se queda, no se borra. -->
+    <section class="tarjeta oculto">
       <h2>Modo de transcripción</h2>
       <div class="modo">
         <div class="op sel"><b>Nube</b><span>Rápido en cualquier equipo. Se paga por hora de reunión.</span></div>
@@ -638,14 +676,25 @@
       </div>
     </section>
 
+    <!-- F045: pedido del cliente — el selector de tres modos se oculta (el
+         marcado se queda, no se borra) y en su lugar va un aviso más un
+         interruptor único: «completo» encendido, «no» apagado. Protege la
+         privacidad dejando clara, con una frase, la única decisión que
+         queda: permitir el envío o no. -->
     <section class="tarjeta">
       <h2>Informe de la reunión</h2>
-      <p class="ayuda" id="txtInformes">Qué se manda al equipo para revisar cómo funciona la app.</p>
-      <div class="modo" id="modoInformes">
+      <p class="ayuda" id="txtInformes">Se generan informes de cada reunión y se envían al equipo para la
+        optimización de la app.</p>
+      <div class="modo oculto" id="modoInformes">
         <div class="op" data-valor="no"><b>No mandar nada</b><span>El informe se queda solo en este equipo.</span></div>
         <div class="op" data-valor="metricas"><b>Solo métricas</b><span>Tiempos y tamaños, nunca lo que se dijo.</span></div>
         <div class="op sel" data-valor="completo"><b>Completo</b><span>Incluye la transcripción, para revisar la calidad (beta).</span></div>
       </div>
+      <label class="interruptor">
+        <input type="checkbox" id="chkPermitirEnvio" checked>
+        <span class="pista"></span>
+        <span class="etiqueta">Permitir el envío</span>
+      </label>
     </section>
 
     <div class="fila">
@@ -1113,6 +1162,11 @@ $('#btnProbar').onclick = async () => {
   comprobado = true
   $('#btnProbar').disabled = false
   $('#btnProbar').textContent = 'Comprobar otra vez'
+  // F045: pedido del cliente — el destaque (verde) es de «Comprobar» hasta
+  // la primera comprobación; hecha esa, quien manda es «Siguiente», y
+  // «Comprobar otra vez» pasa a secundario, gris, como «Saltar».
+  $('#btnProbar').classList.add('sec')
+  $('#btnSiguiente3').classList.remove('sec')
   $('#btnSiguiente3').disabled = false
   revisarListo()
 }
@@ -1202,6 +1256,11 @@ function reiniciarAsistente () {
   comprobado = false
   contextoOmitido = false
   $('#btnSiguiente3').disabled = true
+  // F045: el destaque vuelve a «Comprobar» para la próxima reunión — la
+  // comprobación anterior no vale para esta.
+  $('#btnProbar').textContent = 'Comprobar'
+  $('#btnProbar').classList.remove('sec')
+  $('#btnSiguiente3').classList.add('sec')
   mostrarPasoAsistente('pasoPerfil')
 }
 
@@ -1358,18 +1417,22 @@ $('#btnParar').onclick = async () => {
   $('#inicio')?.classList.remove('oculto')
 }
 
-// ── Informe de la reunión (F039b): no | metricas | completo ───────────
-let modoInformesElegido = 'completo'
+// ── Informe de la reunión (F039b: no | metricas | completo; F045: el
+// selector de tres modos se oculta y el usuario solo decide «permitir el
+// envío o no» — encendido manda 'completo', apagado manda 'no'. 'metricas'
+// sigue existiendo como valor posible (lo puede mandar una versión vieja
+// guardada), pero esta pantalla ya no lo ofrece. ) ────────────────────────
+let permitirEnvioElegido = true
 
-function pintarModoInformes (modo) {
-  modoInformesElegido = modo
-  for (const op of $('#modoInformes')?.querySelectorAll('.op') || []) {
-    op.classList.toggle('sel', op.dataset.valor === modo)
-  }
+/** Pinta el interruptor según el modo guardado: cualquiera que no sea 'no' cuenta como encendido. */
+function pintarPermitirEnvio (modo) {
+  permitirEnvioElegido = modo !== 'no'
+  const c = $('#chkPermitirEnvio')
+  if (c) c.checked = permitirEnvioElegido
 }
 
-$('#modoInformes')?.querySelectorAll('.op').forEach(op => {
-  op.onclick = () => pintarModoInformes(op.dataset.valor)
+$('#chkPermitirEnvio')?.addEventListener('change', () => {
+  permitirEnvioElegido = Boolean($('#chkPermitirEnvio').checked)
 })
 
 /**
@@ -1393,11 +1456,11 @@ async function abrirAjustes () {
   if (estado) {
     pintarEstadoClave('Stt', estado.stt, estado.sttUltimos4)
     pintarEstadoClave('Llm', estado.llm, estado.llmUltimos4)
-    pintarModoInformes(estado.informes || 'completo')
+    pintarPermitirEnvio(estado.informes || 'completo')
     const txt = $('#txtInformes')
     if (txt) {
       txt.textContent = estado.informesDisponibles
-        ? 'Qué se manda al equipo para revisar cómo funciona la app.'
+        ? 'Se generan informes de cada reunión y se envían al equipo para la optimización de la app.'
         : 'La subida está desactivada en este equipo (falta la configuración de subida); el informe se queda local pase lo que elijas aquí.'
     }
   }
@@ -1408,8 +1471,8 @@ $('#btnCerrarAjustes').onclick = () => $('#ajustes').classList.add('oculto')
 $('#btnGuardarAjustes').onclick = async () => {
   // Solo se manda la clave que el usuario escribió: los campos se vacían tras
   // cada guardado, y mandar '' borraba la clave ya guardada al pulsar Guardar
-  // solo para cambiar el modo de informes.
-  const claves = { informes: modoInformesElegido }
+  // solo para cambiar el permiso de envío del informe.
+  const claves = { informes: permitirEnvioElegido ? 'completo' : 'no' }
   if ($('#kSTT').value.trim()) claves.stt = $('#kSTT').value.trim()
   if ($('#kLLM').value.trim()) claves.llm = $('#kLLM').value.trim()
   await api?.guardarClaves(claves)

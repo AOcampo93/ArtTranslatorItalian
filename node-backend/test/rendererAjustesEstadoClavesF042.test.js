@@ -21,7 +21,7 @@ const fs = require('fs')
 const path = require('path')
 
 const APP_HTML = path.join(__dirname, '..', '..', 'electron-app', 'src', 'renderer', 'app.html')
-const DESDE = '// ── Informe de la reunión (F039b)'
+const DESDE = '// ── Informe de la reunión ('
 const HASTA = '// ── Ajustes: probar claves (F036)'
 
 class Nodo {
@@ -30,8 +30,10 @@ class Nodo {
     this.id = ''
     this.value = ''
     this.disabled = false
+    this.checked = false
     this._texto = ''
     this._clases = new Set()
+    this._alEventos = {}
     this.classList = {
       add: (...c) => c.forEach(x => this._clases.add(x)),
       remove: (...c) => c.forEach(x => this._clases.delete(x)),
@@ -48,6 +50,7 @@ class Nodo {
   get textContent () { return this._texto }
   set textContent (v) { this._texto = String(v) }
   querySelectorAll () { return [] }
+  addEventListener (tipo, fn) { this._alEventos[tipo] = fn }
 }
 
 function montarDom () {
@@ -59,7 +62,7 @@ function montarDom () {
 
   const nodos = {}
   for (const id of [
-    'ajustes', 'modoInformes', 'txtInformes', 'kSTT', 'kLLM',
+    'ajustes', 'modoInformes', 'chkPermitirEnvio', 'txtInformes', 'kSTT', 'kLLM',
     'estadoStt', 'estadoLlm', 'btnAjustes', 'btnCerrarAjustes', 'btnGuardarAjustes',
   ]) {
     nodos[id] = new Nodo(id.startsWith('btn') ? 'button' : id.startsWith('k') ? 'input' : 'div')
@@ -73,7 +76,7 @@ function montarDom () {
 /** @param {object|null} api  `null` monta el modo de ejemplo (sin proceso principal) */
 function montar (api) {
   const { codigo, nodos, $ } = montarDom()
-  const fabrica = new Function('$', 'api', `${codigo}\n return { abrirAjustes, pintarEstadoClave }`)
+  const fabrica = new Function('$', 'api', `${codigo}\n return { abrirAjustes, pintarEstadoClave, pintarPermitirEnvio }`)
   return { ...fabrica($, api), nodos }
 }
 
@@ -125,5 +128,36 @@ describe('F042 — abrirAjustes() pinta el estado de las dos claves al abrir', (
     const { abrirAjustes, nodos } = montar(null)
     await abrirAjustes()
     assert.strictEqual(nodos.ajustes.classList.contains('oculto'), false)
+  })
+})
+
+// F045: el selector de tres modos del informe se oculta; en su lugar el
+// interruptor «Permitir el envío» es el que manda, y al abrir Ajustes
+// refleja el estado guardado (`informes`): cualquiera que no sea 'no' es
+// «encendido», porque 'completo' es el único valor que esta pantalla puede
+// volver a guardar.
+describe('F045 — el interruptor «Permitir el envío» refleja el estado guardado', () => {
+  test('informes: "completo" guardado -> el interruptor llega encendido', () => {
+    const { pintarPermitirEnvio, nodos } = montar(null)
+    pintarPermitirEnvio('completo')
+    assert.strictEqual(nodos.chkPermitirEnvio.checked, true)
+  })
+
+  test('informes: "no" guardado -> el interruptor llega apagado', () => {
+    const { pintarPermitirEnvio, nodos } = montar(null)
+    pintarPermitirEnvio('no')
+    assert.strictEqual(nodos.chkPermitirEnvio.checked, false)
+  })
+
+  test('abrirAjustes() con informes: "no" deja el interruptor apagado', async () => {
+    const api = {
+      estadoClaves: async () => ({
+        stt: false, llm: false, sttUltimos4: null, llmUltimos4: null,
+        informes: 'no', informesDisponibles: true,
+      }),
+    }
+    const { abrirAjustes, nodos } = montar(api)
+    await abrirAjustes()
+    assert.strictEqual(nodos.chkPermitirEnvio.checked, false)
   })
 })

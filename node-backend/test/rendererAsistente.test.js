@@ -112,6 +112,10 @@ function montar () {
   // atributo); esta prueba comprueba que el paso 3 lo habilita, así que el
   // DOM de mentira tiene que arrancar igual de deshabilitado.
   raiz.querySelector('#btnSiguiente3').disabled = true
+  // F045: `btnSiguiente3` también arranca con `class="sec"` en el HTML real
+  // (secundario, gris, como «Saltar») — el destaque es de «Comprobar» hasta
+  // la primera comprobación.
+  raiz.querySelector('#btnSiguiente3').classList.add('sec')
 
   const $ = sel => (raiz.encaja(sel) ? raiz : raiz.querySelector(sel))
   const crear = (t, c) => { const e = new Nodo(t); if (c) e.className = c; return e }
@@ -231,6 +235,43 @@ describe('F032 — el asistente avanza por pasos, no todo a la vez', () => {
     assert.strictEqual(a.paso('pasoFinal'), false)
     assert.strictEqual(a.raiz.querySelector('#btnSiguiente3').disabled, true,
       'la próxima comprobación tiene que volver a hacerse')
+  })
+})
+
+// F045 — pedido del cliente: el destaque (verde, sin clase `sec`) es de
+// «Comprobar otra vez» hasta la primera comprobación; hecha esa, el
+// destaque pasa a «Siguiente» y «Comprobar otra vez» queda secundario, gris,
+// como «Saltar». `comprobarDemo()` no depende de `api` (usa `esperar`), así
+// que esto corre igual de bien contra el bloque real, sin mocks.
+describe('F045 — el destaque del paso 3 pasa de «Comprobar» a «Siguiente»', () => {
+  test('antes de comprobar: «Comprobar» destacado, «Siguiente» secundario', () => {
+    const a = montar()
+    assert.strictEqual(a.raiz.querySelector('#btnProbar').classList.contains('sec'), false,
+      '«Comprobar» empieza destacado (sin la clase secundaria)')
+    assert.strictEqual(a.raiz.querySelector('#btnSiguiente3').classList.contains('sec'), true,
+      '«Siguiente» empieza secundario, como «Saltar»')
+  })
+
+  test('tras «Comprobar», el destaque pasa a «Siguiente» y «Comprobar otra vez» queda gris', async () => {
+    const a = montar()
+    await a.raiz.querySelector('#btnProbar').onclick()
+
+    assert.strictEqual(a.raiz.querySelector('#btnProbar').classList.contains('sec'), true,
+      '«Comprobar otra vez» ya no es el destacado')
+    assert.strictEqual(a.raiz.querySelector('#btnProbar').textContent, 'Comprobar otra vez')
+    assert.strictEqual(a.raiz.querySelector('#btnSiguiente3').classList.contains('sec'), false,
+      '«Siguiente» pasa a ser el destacado')
+  })
+
+  test('reiniciarAsistente() devuelve el destaque a «Comprobar», para la próxima reunión', async () => {
+    const a = montar()
+    await a.raiz.querySelector('#btnProbar').onclick()
+
+    a.reiniciarAsistente()
+
+    assert.strictEqual(a.raiz.querySelector('#btnProbar').classList.contains('sec'), false)
+    assert.strictEqual(a.raiz.querySelector('#btnProbar').textContent, 'Comprobar')
+    assert.strictEqual(a.raiz.querySelector('#btnSiguiente3').classList.contains('sec'), true)
   })
 })
 

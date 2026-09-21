@@ -76,6 +76,18 @@ describe('F042 — dos columnas al ensanchar la ventana (>= 600px, antes 900)', 
       'a >= 600px la vista en vivo tiene que pasar a fila (columnas lado a lado)')
   })
 
+  // F045: pedido del cliente — el reparto 50/50 nuevo es solo para la
+  // columna angosta (por debajo de 600px, ver `rendererVentanaColumna.test.js`).
+  // A >= 600px se queda el 60/40 de siempre.
+  test('F045: a partir de 600px el reparto vuelve a 60/40, no se queda en 50/50', () => {
+    const m = html.match(/@media \(min-width:\s*600px\)\s*\{([\s\S]*?)\n  \}\n/)
+    assert.ok(m, 'no se encontró el `@media (min-width: 600px) { ... }` de la vista en vivo')
+    assert.match(m[1], /#conversacion\s*\{[^}]*flex:\s*6\s+1\s+0/,
+      'a >= 600px #conversacion tiene que volver a flex: 6 1 0')
+    assert.match(m[1], /#preguntas\s*\{[^}]*flex:\s*4\s+1\s+0/,
+      'a >= 600px #preguntas tiene que volver a flex: 4 1 0')
+  })
+
   test('ya no queda una media query a 900px para esto: el umbral bajó, no se duplicó', () => {
     assert.doesNotMatch(html, /@media \(min-width:\s*900px\)/,
       'un 900px que quedara junto al 600px nuevo dejaría dos criterios contradictorios')

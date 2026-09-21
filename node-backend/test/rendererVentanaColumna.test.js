@@ -1,6 +1,11 @@
 /**
- * F035 — EN VIVO en columna: transcripción arriba (60%), preguntas abajo
- * (40%), contexto colapsado en un chip, todo cabiendo a 440 px.
+ * F035 — EN VIVO en columna: transcripción arriba, preguntas abajo,
+ * contexto colapsado en un chip, todo cabiendo a 440 px.
+ *
+ * F045: el reparto de la columna angosta pasó de 60/40 a 50/50 (pedido del
+ * cliente: a 440 px las preguntas quedaban demasiado pequeñas); la fila
+ * ancha (>= 600px) se queda en 60/40, sin cambios — eso se prueba en
+ * `rendererAjustesUi.test.js`, junto al resto de `@media`.
  *
  * La geometría de la VENTANA (alto del área de trabajo, ancho angosto,
  * pegada al borde, memoria de posición) se prueba aparte, sin Electron, en
@@ -28,16 +33,16 @@ function reglaDe (selector) {
   return m[1]
 }
 
-describe('F035 — transcripción arriba, preguntas abajo, reparto 60/40', () => {
+describe('F035/F045 — transcripción arriba, preguntas abajo, reparto 50/50', () => {
   before(() => assert.ok(fs.existsSync(APP_HTML)))
 
   test('main#envivo va en columna, no en fila', () => {
     assert.match(reglaDe('main'), /flex-direction:\s*column/)
   })
 
-  test('#conversacion (arriba) y #preguntas (abajo) se reparten 6/4 del alto', () => {
-    assert.match(reglaDe('#conversacion'), /flex:\s*6\s+1\s+0/)
-    assert.match(reglaDe('#preguntas'), /flex:\s*4\s+1\s+0/)
+  test('F045: #conversacion (arriba) y #preguntas (abajo) se reparten 50/50 del alto', () => {
+    assert.match(reglaDe('#conversacion'), /flex:\s*5\s+1\s+0/)
+    assert.match(reglaDe('#preguntas'), /flex:\s*5\s+1\s+0/)
   })
 
   test('#preguntas ya no es la columna de la derecha: sin ancho fijo ni borde a la izquierda', () => {
