@@ -28,8 +28,8 @@
  * Dos funciones puras, sin estado ni relojes, para que el mecanismo se pueda
  * probar con las cadenas exactas del archivo de una reunión real:
  *
- *  - `partirTurno(texto)` parte un turno en las **oraciones completas** (hasta
- *    el último `.?!…`) y la **cola** sin cerrar.
+ *  - `partirTurno(texto, { abreviaturas })` parte un turno en las **oraciones
+ *    completas** (hasta el último `.?!…`) y la **cola** sin cerrar.
  *  - `arrastrar(colaAnterior, turnoNuevo)` decide qué se manda junto a Marian.
  *
  * Quien las usa (`mainApp.js`) traduce las completas y las pinta como frase
@@ -83,6 +83,10 @@ const CIERRES = '"\'»”’)]'
  * de más es una oración que dejamos sin cerrar y por tanto una burbuja que
  * tarda más en salir. Las iniciales de nombre propio («Giuseppe G. Sulfaro»)
  * no hacen falta aquí: las cubre la regla de la letra suelta.
+ *
+ * Es la lista por defecto (F047): `partirTurno` y `acabaCerrada` aceptan otra
+ * por opción, y cada idioma trae la suya en `idiomas.js`. La del italiano se
+ * exporta tal cual para que el registro la señale sin copiarla.
  */
 const ABREVIATURAS = new Set([
   'sig', 'sigg', 'sig.ra', 'dott', 'dr', 'prof', 'avv', 'ing', 'arch', 'geom',
@@ -98,7 +102,7 @@ const ABREVIATURAS = new Set([
  * de la minúscula NO está aquí: vale para todos los terminadores, así que vive
  * en `finDeOracion`.
  */
-function puntoCierraOracion (texto, i) {
+function puntoCierraOracion (texto, i, abreviaturas = ABREVIATURAS) {
   // «3.5», «1.000», «art.5»: el punto pegado a lo que viene detrás no cierra
   // nada. Esta comprobación la hace además quien llama (exige espacio o fin de
   // texto detrás), y se deja aquí escrita porque es el caso que más se cita.
@@ -108,7 +112,7 @@ function puntoCierraOracion (texto, i) {
   if (palabra) {
     // Una letra suelta es una inicial («G.»), nunca un final de oración.
     if (palabra[1].length === 1) return false
-    if (ABREVIATURAS.has(palabra[1].toLowerCase())) return false
+    if (abreviaturas.has(palabra[1].toLowerCase())) return false
   }
 
   return true
@@ -124,7 +128,7 @@ function sigueEnMinuscula (texto, i) {
  * Si en `i` acaba una oración, devuelve el índice donde empieza la siguiente;
  * si no, `-1`.
  */
-function finDeOracion (texto, i) {
+function finDeOracion (texto, i, abreviaturas = ABREVIATURAS) {
   if (!TERMINADORES.includes(texto[i])) return -1
 
   // «?!», «...» y la comilla que cierra la cita van con la oración que acaba.
@@ -136,7 +140,7 @@ function finDeOracion (texto, i) {
   // final de oración.
   if (j + 1 < texto.length && !/\s/.test(texto[j + 1])) return -1
 
-  if (texto[i] === '.' && j === i && !puntoCierraOracion(texto, i)) return -1
+  if (texto[i] === '.' && j === i && !puntoCierraOracion(texto, i, abreviaturas)) return -1
 
   // Un terminador seguido de minúscula no cierra oración, sea `.`, `?`, `!` o
   // `…`, vaya solo o en racha, y esté o no dentro de comillas. El final
@@ -158,20 +162,23 @@ function finDeOracion (texto, i) {
  * Parte un turno en oraciones completas y cola sin cerrar.
  *
  * @param {string} texto el turno tal como lo entrega el transcriptor
+ * @param {object} [opciones]
+ * @param {Set<string>} [opciones.abreviaturas] las del idioma de la reunión
+ *   (F047); por defecto, las italianas de arriba
  * @returns {{completas: string, cola: string, oraciones: string[]}}
  *   `completas` es el texto hasta el último final de oración (cadena vacía si
  *   el turno no cierra ninguna), `cola` el resto sin cerrar, y `oraciones` el
  *   desglose de `completas`, que está para poder comprobar dónde cayó cada
  *   límite sin tener que adivinarlo desde fuera.
  */
-function partirTurno (texto) {
+function partirTurno (texto, { abreviaturas = ABREVIATURAS } = {}) {
   const limpio = String(texto ?? '').trim()
   if (!limpio) return { completas: '', cola: '', oraciones: [] }
 
   const oraciones = []
   let corte = 0
   for (let i = 0; i < limpio.length; i++) {
-    const fin = finDeOracion(limpio, i)
+    const fin = finDeOracion(limpio, i, abreviaturas)
     if (fin < 0) continue
     const oracion = limpio.slice(corte, fin).trim()
     if (oracion) oraciones.push(oracion)
@@ -225,10 +232,12 @@ function arrastrar (colaAnterior, turnoNuevo) {
  * se define como «no le queda cola»: así hay UN solo criterio de dónde acaba
  * una oración en todo el proyecto. Con dos definiciones, una burbuja podría
  * guardarse diciendo que acaba cerrada y volver a partirse por otro sitio.
+ * Por eso recibe las mismas opciones que `partirTurno`: con otro idioma, las
+ * dos tienen que partir con las mismas abreviaturas.
  */
-function acabaCerrada (texto) {
-  const partido = partirTurno(texto)
+function acabaCerrada (texto, opciones) {
+  const partido = partirTurno(texto, opciones)
   return Boolean(partido.completas) && partido.cola === ''
 }
 
-module.exports = { partirTurno, arrastrar, acabaCerrada, TOPE_ARRASTRE }
+module.exports = { partirTurno, arrastrar, acabaCerrada, TOPE_ARRASTRE, ABREVIATURAS }

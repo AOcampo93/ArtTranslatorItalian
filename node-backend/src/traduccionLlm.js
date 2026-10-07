@@ -29,7 +29,9 @@
 
 'use strict'
 
-const { promptTraduccion } = require('../../shared/prompts')
+// El de siempre, el italiano: es lo que se usa si quien construye el traductor
+// no dice otra cosa (F047). Cada idioma trae el suyo en `idiomas.js`.
+const { promptTraduccion: promptTraduccionItaliano } = require('../../shared/prompts')
 
 /** Quita las vallas de markdown que el modelo añade aunque se le prohíba. */
 function quitarVallas (bruto) {
@@ -121,12 +123,16 @@ function limpiar (bruto) {
  *   `MotorRespuestas`: el contexto de la reunión y el glosario van en el
  *   sistema, no en cada frase.
  * @param {number} [opts.plazoMs]
+ * @param {Function} [opts.promptTraduccion] (bloque) => prompt del sistema; el
+ *   del idioma de la reunión (F047). Por defecto, el italiano de siempre.
  * @param {{ traducir: (texto: string) => Promise<object> }} opts.respaldo
  *   Marian, ya cargado. Su resultado se devuelve TAL CUAL en el fallback —
  *   es él quien anota `traductor: 'marian'` en lo que devuelve.
  * @returns {{ traducir: (texto: string) => Promise<{ es: string, ms: number, traductor: 'llm'|'marian', modelo?: string|null }> }}
  */
-function crearTraductorLlm ({ llamar, bloqueContexto, plazoMs = 3000, respaldo } = {}) {
+function crearTraductorLlm ({
+  llamar, bloqueContexto, plazoMs = 3000, respaldo, promptTraduccion = promptTraduccionItaliano,
+} = {}) {
   if (typeof llamar !== 'function') {
     throw new Error('hace falta una función para llamar al LLM')
   }

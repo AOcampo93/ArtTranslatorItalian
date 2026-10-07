@@ -37,6 +37,7 @@ const os = require('os')
 const BACK = path.join(__dirname, '..', '..', 'node-backend', 'src')
 const { AssemblyLiveTranscriber } = require(path.join(BACK, 'assemblyLive'))
 const traductor = require(path.join(BACK, 'translator'))
+const { obtenerIdioma } = require(path.join(BACK, 'idiomas'))
 
 /**
  * F036 (corrección) — el freno de conexiones por minuto de AssemblyAI es del
@@ -233,8 +234,13 @@ const aRenderer = (canal, datos) => {
  * LLM con Marian de respaldo (`traduccionLlm.js`); sin clave, Marian directo,
  * envuelto para que su resultado también lleve `traductor: 'marian'`— así
  * `procesarTurno` no necesita mirar aparte si hay clave.
+ *
+ * F047: `idioma` es la entrada del registro (`idiomas.js`) del idioma de la
+ * reunión, y de ella salen todas las piezas que dependen del idioma —el modelo
+ * de Marian, el detector de preguntas y los tres prompts—; el resto del motor
+ * es común. Sin ella, el italiano de siempre.
  */
-function montarMotores ({ perfil, ctx, claveLlm, autosave }) {
+function montarMotores ({ perfil, ctx, claveLlm, autosave, idioma = obtenerIdioma() }) {
   let llamar = null
   let motivo = 'Para ver aquí respuestas sugeridas, añade una clave en Ajustes.'
 
@@ -255,7 +261,9 @@ function montarMotores ({ perfil, ctx, claveLlm, autosave }) {
   // — igual marca que deja el LLM, así el .jsonl no distingue "con clave" de
   // "sin clave" por su forma, sólo por este campo.
   const traductorMarian = {
-    traducir: async (texto) => ({ ...(await traductor.traducir(texto)), traductor: 'marian' }),
+    traducir: async (texto) => ({
+      ...(await traductor.traducir(texto, idioma.modeloMarian)), traductor: 'marian',
+    }),
   }
 
   if (!llamar) {
@@ -286,7 +294,9 @@ function montarMotores ({ perfil, ctx, claveLlm, autosave }) {
   // sólo para el autoguardado — el motor ya tiene su propia `_vistas`.
   const preguntasEnCurso = new Map()
 
-  const motor = new MotorRespuestas({ llamar, bloqueContexto })
+  const motor = new MotorRespuestas({
+    llamar, bloqueContexto, promptRespuesta: idioma.promptRespuesta, detector: idioma.detector,
+  })
   motor.on('pregunta', p => {
     preguntasEnCurso.set(p.id, { it: p.it, es: p.es, manual: Boolean(p.manual) })
     aRenderer('app:pregunta', { id: p.id, it: p.it, es: p.es })
@@ -311,14 +321,16 @@ function montarMotores ({ perfil, ctx, claveLlm, autosave }) {
     }
   })
 
-  const resumen = new MotorResumen({ llamar, bloqueContexto })
+  const resumen = new MotorResumen({ llamar, bloqueContexto, promptResumen: idioma.promptResumen })
   resumen.on('contexto', c => aRenderer('app:contexto', c.texto))
 
   // F040: con clave, la traducción IT→ES la hace el mismo LLM que redacta las
   // respuestas — mismo `llamar`, mismo `bloqueContexto` (contexto y glosario
   // en el sistema). Marian sólo entra si el LLM falla, tarda más del plazo o
   // devuelve vacío.
-  const traductorLlm = crearTraductorLlm({ llamar, bloqueContexto, respaldo: traductorMarian })
+  const traductorLlm = crearTraductorLlm({
+    llamar, bloqueContexto, respaldo: traductorMarian, promptTraduccion: idioma.promptTraduccion,
+  })
 
   return { motor, resumen, traductor: traductorLlm }
 }
@@ -425,10 +437,15 @@ const nuevoIdProvisional = () => `pv${++nProvisional}`
  * componemos nosotros —partiendo o uniendo— el transcriptor no la ha medido:
  * la medida verdadera es la del texto que se guarda, y leerla de nuestra propia
  * cadena no es inventar nada.
+ *
+ * `abreviaturas` (F047) son las del idioma de la reunión, las MISMAS con las que
+ * `procesarTurno` parte el turno: con dos criterios de dónde acaba una oración
+ * una línea podría guardarse diciendo que acaba cerrada y volver a partirse
+ * por otro sitio. `undefined` deja las italianas de siempre.
  */
-function acabaEnPuntuacionDeLinea (textoLinea, turno) {
+function acabaEnPuntuacionDeLinea (textoLinea, turno, abreviaturas) {
   if (textoLinea === String(turno.texto ?? '').trim()) return turno.acabaEnPuntuacion ?? null
-  return acabaCerrada(textoLinea)
+  return acabaCerrada(textoLinea, { abreviaturas })
 }
 
 /**
@@ -470,7 +487,7 @@ async function traducirLinea (s, texto, turno, extra = {}) {
     forzado: Boolean(turno.forzado),
     msTurno: turno.msTurno ?? null,
     msHolgura: turno.msHolgura ?? null,
-    acabaEnPuntuacion: acabaEnPuntuacionDeLinea(texto, turno),
+    acabaEnPuntuacion: acabaEnPuntuacionDeLinea(texto, turno, s.idioma?.abreviaturas),
     motivoCorte: turno.motivoCorte ?? null,
     // F037. `arrastre`: la línea lleva pegada delante la cola de un turno
     // anterior, o sea que Marian la vio entera. `msProvisional`: cuánto tardó
@@ -653,7 +670,7 @@ async function procesarTurno (s, turno, llegada) {
     : s.empiezaAMedias === true
   s.empiezaAMedias = false
 
-  const { completas, cola } = partirTurno(union.texto)
+  const { completas, cola } = partirTurno(union.texto, { abreviaturas: s.idioma?.abreviaturas })
   // Si se arrastró, la burbuja que ya está en pantalla es la que hay que
   // sustituir: la definitiva ocupa SU sitio, no se añade otra debajo.
   let aSustituir = union.arrastre ? colaPrevia.id : null
@@ -752,7 +769,17 @@ async function procesarTurno (s, turno, llegada) {
 }
 
 // ── La reunión ────────────────────────────────────────────────────────
-async function empezarSesion ({ perfil, contexto: ctx }) {
+/**
+ * Arranca la reunión.
+ *
+ * `idioma` (F047) es la entrada del registro (`idiomas.js`) del idioma de la
+ * reunión, ya resuelta: la resuelve `iniciarReunion`, que es por donde entra
+ * `app:empezar`. De ella salen el código y la etiqueta de contexto para el STT,
+ * el modelo de Marian, las abreviaturas del troceo y —por `montarMotores`— el
+ * detector y los prompts. Si falta, cada pieza cae en su propio valor por
+ * defecto, que es el italiano de siempre: quien llame como antes no nota nada.
+ */
+async function empezarSesion ({ perfil, contexto: ctx, idioma }) {
   if (sesion) return { ok: true, yaCorriendo: true }
 
   const claves = leerClaves()
@@ -783,22 +810,36 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
 
   const glosario = (ctx?.glosario || '').split(/[,\n·;]+/).map(s => s.trim()).filter(Boolean)
 
+  // Sin etiqueta (idioma sin resolver, o uno que no la trae) el tipo de proyecto
+  // entra igual, sólo que sin el rótulo delante.
+  const etiquetaProyecto = idioma?.prefijoContexto ? `${idioma.prefijoContexto}: ` : ''
   const transcriptor = new AssemblyLiveTranscriber({
     apiKey: claves.stt,
-    idioma: 'it',
+    // `undefined` cae en el 'it' del propio transcriptor.
+    idioma: idioma?.codigoStt,
     glosario,
-    // El contexto va en italiano porque describe el audio que va a oír.
-    contexto: [ctx?.tipo_proyecto && `Progetto: ${ctx.tipo_proyecto}.`,
+    // El contexto va en el idioma de la reunión porque describe el audio que va
+    // a oír.
+    contexto: [ctx?.tipo_proyecto && `${etiquetaProyecto}${ctx.tipo_proyecto}.`,
                ctx?.contexto].filter(Boolean).join(' '),
     registroConexiones: registroConexionesStt,
   })
 
   // Marian se carga una vez y se queda en memoria. Tarda unos 500 ms la
   // primera vez, así que se hace ANTES de abrir la sesión de transcripción:
-  // esa sí cuesta dinero mientras está abierta.
-  await traductor.cargar()
+  // esa sí cuesta dinero mientras está abierta. Sólo el modelo de este idioma;
+  // sin idioma, el italiano.
+  await traductor.cargar(idioma?.modeloMarian, idioma?.calentamientoMarian)
 
-  const idSesion = db.startSession('assemblyai/universal-3-5-pro')
+  // F047 — el idioma de la reunión se escribe en la fila de `sessions` y en la
+  // cabecera del archivo. Esas dos escrituras están en el tramo que
+  // `mainAppSesionF030.test.js` ejecuta SUELTO, con siete nombres y ninguno es
+  // `idioma`, y esa prueba no se puede tocar (PLAN.md §0.20): de ahí el
+  // `typeof`, que es la única lectura de un nombre que puede no existir sin
+  // lanzar `ReferenceError`. En producción `idioma` es siempre un parámetro de
+  // esta función.
+  const idSesion = db.startSession('assemblyai/universal-3-5-pro',
+    { language: typeof idioma === 'undefined' ? undefined : idioma?.codigo })
   // `inicio` fija el nombre del archivo (F030): `idSesion` es un
   // autoincremento de `db.js` que vuelve a 1 si la base se reinicia, y dos
   // reuniones con el mismo id fundieron sus frases en un solo `.jsonl` —
@@ -822,6 +863,8 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
     // F042: para poder verificar en el informe que la reunión de verdad tenía
     // clave y no es casualidad que tradujera bien.
     claves: { stt: !!claves.stt, llm: !!claves.llm },
+    // F047: ver el `typeof` de arriba. `undefined` se escribe como 'it'.
+    idioma: typeof idioma === 'undefined' ? undefined : idioma?.codigo,
   })
 
   // F040 (corrección): `traductorSesion` es el elegido para ESTA sesión — el
@@ -835,7 +878,9 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   // nombre se separa del módulo; el objeto de sesión sigue exponiendo
   // `traductor` porque es el campo que el resto del archivo (`s.traductor`)
   // ya espera.
-  const { motor, resumen, traductor: traductorSesion } = montarMotores({ perfil, ctx, claveLlm: claves.llm, autosave })
+  const { motor, resumen, traductor: traductorSesion } = montarMotores({
+    perfil, ctx, claveLlm: claves.llm, autosave, idioma,
+  })
   sesion = {
     transcriptor, autosave, idSesion, motor, resumen, traductor: traductorSesion, inicio: Date.now(), frases: 0,
     // F040: cuántas frases definitivas se tradujeron con el LLM y cuántas con
@@ -869,6 +914,12 @@ async function empezarSesion ({ perfil, contexto: ctx }) {
   const s = sesion
 
   transcriptor.on('parcial', p => aRenderer('app:parcial', p.texto))
+
+  // F047: el idioma de la sesión, para lo que se decide turno a turno —hoy, qué
+  // abreviaturas no cierran oración—. Se asigna aquí y no dentro del literal de
+  // la sesión porque `mainAppFrase.test.js` ejecuta ese literal suelto, sin
+  // `idioma`; mientras valga `undefined`, `partirTurno` usa las italianas.
+  s.idioma = idioma
 
   // `msTranscribir` lo sella el transcriptor: es la pierna de OÍR, y sin ella
   // el cronómetro arrancaba con el texto YA en la mano, o sea que medía sólo
@@ -1031,7 +1082,25 @@ async function pararSesion (motivo = 'el usuario paró', graciaMs = GRACIA_EN_VU
 }
 
 // ── IPC ───────────────────────────────────────────────────────────────
-ipcMain.handle('app:empezar', (_e, datos) => empezarSesion(datos))
+/**
+ * La puerta de `app:empezar` (F047): lee `idioma` del objeto que manda la
+ * interfaz, lo resuelve en el registro y arranca con la entrada.
+ *
+ * Sin `idioma`, italiano: la interfaz de hoy no lo manda. Un código que no
+ * existe NO cae en italiano —la reunión se transcribiría en un idioma que
+ * nadie pidió y sin avisar—: se devuelve como cualquier otro motivo de no
+ * arrancar, que es lo que la interfaz ya sabe pintar.
+ */
+async function iniciarReunion (datos) {
+  let idioma
+  try {
+    idioma = obtenerIdioma(datos?.idioma)
+  } catch (err) {
+    return { ok: false, motivo: err.message }
+  }
+  return empezarSesion({ ...datos, idioma })
+}
+ipcMain.handle('app:empezar', (_e, datos) => iniciarReunion(datos))
 ipcMain.handle('app:parar', () => pararSesion())
 
 /** El audio llega en bloques de 100 ms desde el renderer. */
@@ -1246,21 +1315,24 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
   // Se mide de punta a punta —oír, transcribir, traducir— porque es el número
   // que el usuario va a sentir. Medir una pieza sola no dice nada útil.
   try {
-    const wav = fs.readFileSync(rutaFixture())
+    // F047: el idioma viaja en el mismo objeto que ya llega con el glosario. Un
+    // código que no existe cae en el `catch` de abajo y sale como el fallo que es.
+    const idioma = obtenerIdioma(ctx?.idioma)
+    const wav = fs.readFileSync(rutaFixture(idioma.muestra))
     const pcm = wav.subarray(44)
     const muestras = new Float32Array(pcm.length / 2)
     for (let i = 0; i < muestras.length; i++) muestras[i] = pcm.readInt16LE(i * 2) / 32768
 
     const glosario = (ctx?.glosario || '').split(/[,\n·;]+/).map(x => x.trim()).filter(Boolean)
     const t = new AssemblyLiveTranscriber({
-      apiKey: claves.stt, idioma: 'it', glosario, registroConexiones: registroConexionesStt,
+      apiKey: claves.stt, idioma: idioma.codigoStt, glosario, registroConexiones: registroConexionesStt,
     })
 
     const tConexion = Date.now()
     await t.start()
     r.red = { ok: true, valor: `${Date.now() - tConexion} ms` }
 
-    await traductor.cargar()
+    await traductor.cargar(idioma.modeloMarian, idioma.calentamientoMarian)
 
     // Las dos piernas salen de la misma fuente que en la reunión de verdad:
     // el transcriptor sella lo que costó oír y el traductor lo que costó
@@ -1270,7 +1342,7 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
     let italiano = null, msExtremo = null
     t.once('frase', async ({ texto, msTranscribir }) => {
       italiano = texto
-      const tr = await traductor.traducir(texto)
+      const tr = await traductor.traducir(texto, idioma.modeloMarian)
       msExtremo = msTranscribir + tr.ms
     })
 
@@ -1296,11 +1368,15 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
   return r
 })
 
-/** El audio de prueba, tanto en desarrollo como dentro del paquete. */
-function rutaFixture () {
+/**
+ * El audio de prueba, tanto en desarrollo como dentro del paquete. `nombre` es
+ * la muestra del idioma de la reunión (`idiomas.js`): cada idioma comprueba la
+ * cadena con su propio audio.
+ */
+function rutaFixture (nombre) {
   const candidatos = [
-    path.join(process.resourcesPath || '', 'node-backend', 'test', 'fixtures', 'italiano.wav'),
-    path.join(__dirname, '..', '..', 'node-backend', 'test', 'fixtures', 'italiano.wav'),
+    path.join(process.resourcesPath || '', 'node-backend', 'test', 'fixtures', nombre),
+    path.join(__dirname, '..', '..', 'node-backend', 'test', 'fixtures', nombre),
   ]
   for (const c of candidatos) if (c && fs.existsSync(c)) return c
   throw new Error('no se encuentra el audio de prueba')
@@ -1371,6 +1447,8 @@ function listarConversaciones () {
       inicio: cabecera?.inicio || null,
       perfil: cabecera?.perfil?.nombre || null,
       contexto: cabecera?.contexto?.nombre || null,
+      // F047: las reuniones de antes de la V2 no traen el campo y eran italiano.
+      idioma: cabecera?.idioma || 'it',
       idSesion: cabecera?.id ?? null,
       frases, preguntas, duracionMs: duracion,
       latenciaP50, latenciaP95,
@@ -1423,6 +1501,8 @@ function leerConversacion (ruta) {
     inicio: cabecera?.inicio || null,
     perfil: cabecera?.perfil?.nombre || null,
     contexto: cabecera?.contexto?.nombre || null,
+    // F047: igual que en la lista, una cabecera sin el campo es italiano.
+    idioma: cabecera?.idioma || 'it',
     frases,
     preguntas: ensamblarPreguntas(entradas),
   }

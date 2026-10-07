@@ -8,7 +8,7 @@
  *
  * Medido en Apple M5 / Node 25: p50 131 ms, rango 120-139 ms, 101 MB en q8.  [medido]
  *
- * Dos cosas que este módulo hace y que no son obvias:
+ * Tres cosas que este módulo hace y que no son obvias:
  *
  * 1. **Trocea las frases largas.** Los modelos NMT tipo Marian degeneran en
  *    repetición cuando la entrada es larga, y Whisper entrega tramos largos sin
@@ -17,45 +17,65 @@
  * 2. **Vigila la repetición.** Si el modelo entra en bucle, es mejor devolver
  *    el trozo truncado que una frase repetida veinte veces, porque el usuario
  *    la leería como si el interlocutor la hubiera dicho así.
+ * 3. **Un modelo por idioma, y sólo el que se pide.** Desde F047 el módulo guarda
+ *    un mapa `modelo → pipeline` en vez de un único pipeline: el registro de
+ *    idiomas (`idiomas.js`) dice qué modelo usa cada idioma y aquí sólo se carga
+ *    ese, porque cada modelo de más es memoria y tiempo de arranque para un
+ *    idioma que nadie va a oír. Sin argumento todo vale `MODELO` (it→es), de modo
+ *    que quien llama como antes —incluido el código legado— no nota nada.
  */
 
 'use strict'
 
 const MODELO = 'Xenova/opus-mt-it-es'
 
+// La palabra con la que se paga la primera inferencia en frío. Es del idioma de
+// origen del modelo; con otra cualquiera el efecto sería el mismo, pero una
+// palabra del propio idioma no le pide a Marian nada raro.
+const CALENTAMIENTO = 'ciao'
+
 // Por encima de esto troceamos. Marian se entrenó con frases, no con párrafos.
 const MAX_PALABRAS_POR_TROZO = 40
 // Techo duro de salida: si el modelo se desboca, cortamos en vez de esperar.
 const MAX_TOKENS_SALIDA = 256
 
-let _pipe = null
-let _cargando = null
+// Un pipeline por modelo, y la carga en curso de cada uno aparte: dos llamadas
+// a `cargar(modelo)` a la vez comparten la misma carga en vez de abrir dos.
+const _pipes = new Map()
+const _cargando = new Map()
 
 /**
  * Carga el modelo una sola vez y lo deja caliente.
  * Llamar en el arranque de la app, no al pulsar Escuchar: así el tiempo de
  * carga se esconde detrás de la pantalla de preparación.  (PLAN.md §11)
+ *
+ * @param {string} [modelo]        por defecto, it→es
+ * @param {string} [calentamiento] palabra de la primera inferencia en frío
  */
-async function cargar () {
-  if (_pipe) return _pipe
-  if (_cargando) return _cargando
+async function cargar (modelo = MODELO, calentamiento = CALENTAMIENTO) {
+  if (_pipes.has(modelo)) return _pipes.get(modelo)
+  if (_cargando.has(modelo)) return _cargando.get(modelo)
 
-  _cargando = (async () => {
+  const carga = (async () => {
     const { pipeline } = await import('@huggingface/transformers')
     const t0 = Date.now()
-    _pipe = await pipeline('translation', MODELO, { dtype: 'q8' })
-    console.log(`[traductor] modelo listo en ${Date.now() - t0} ms`)
+    const pipe = await pipeline('translation', modelo, { dtype: 'q8' })
+    // Se apunta antes de calentar, igual que cuando esto era un singleton:
+    // quien llame mientras se calienta recibe el pipeline sin esperar.
+    _pipes.set(modelo, pipe)
+    console.log(`[traductor] modelo ${modelo} listo en ${Date.now() - t0} ms`)
     // Primera inferencia en frío: la pagamos aquí y no en la primera frase real.
-    await _pipe('ciao')
-    return _pipe
+    await pipe(calentamiento)
+    return pipe
   })()
 
-  return _cargando
+  _cargando.set(modelo, carga)
+  return carga
 }
 
 /** ¿Está el modelo cargado y listo para traducir sin esperar? */
-function estaListo () {
-  return _pipe !== null
+function estaListo (modelo = MODELO) {
+  return _pipes.has(modelo)
 }
 
 /**
@@ -107,15 +127,16 @@ function pareceRepetido (texto) {
 }
 
 /**
- * Traduce un texto italiano a español.
- * @param {string} italiano
+ * Traduce un texto a español con el modelo pedido (por defecto, italiano).
+ * @param {string} italiano  el texto original; el nombre es el de cuando sólo había un idioma
+ * @param {string} [modelo]  por defecto, it→es
  * @returns {Promise<{ es: string, ms: number, trozos: number, truncado: boolean }>}
  */
-async function traducir (italiano) {
+async function traducir (italiano, modelo = MODELO) {
   const limpio = (italiano || '').trim()
   if (!limpio) return { es: '', ms: 0, trozos: 0, truncado: false }
 
-  const pipe = await cargar()
+  const pipe = await cargar(modelo)
   const t0 = Date.now()
 
   const trozos = trocear(limpio)
@@ -144,7 +165,7 @@ async function traducir (italiano) {
   }
 }
 
-module.exports = { cargar, estaListo, traducir, MODELO }
+module.exports = { cargar, estaListo, traducir, MODELO, CALENTAMIENTO }
 
 // Exportado solo para las pruebas: no forma parte de la API del módulo.
 module.exports._internos = { trocear, pareceRepetido }

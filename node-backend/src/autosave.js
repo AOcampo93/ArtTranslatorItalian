@@ -27,6 +27,15 @@ const fs = require('fs')
 const path = require('path')
 
 /**
+ * El idioma de una reunión cuya cabecera no lo dice (F047): todas las grabadas
+ * antes de que existiera el segundo idioma eran italiano. Quien LEE una cabecera
+ * vieja aplica el mismo valor (`mainApp.js`, `listarConversaciones`), y quien
+ * ESCRIBE una sin decir idioma lo deja escrito, para que el archivo nuevo ya no
+ * dependa de esa suposición.
+ */
+const IDIOMA_POR_DEFECTO = 'it'
+
+/**
  * Hueco máximo, hacia adelante, entre dos líneas seguidas de una reunión en
  * curso antes de que `Autosave.detectarMezcla()` sospeche que en realidad
  * son dos reuniones distintas. `[estimado]`: no hay todavía una medición de
@@ -165,8 +174,13 @@ class Autosave {
    * clave de transcripción y de LLM al arrancar, para poder comprobar en el
    * informe que una reunión bien traducida de verdad tenía clave y no fue
    * casualidad.
+   *
+   * `idioma` (F047): el código del idioma de la reunión (`'it'`, y el de cada
+   * idioma que se añada). Es el de la cabecera, no el de cada frase: el campo
+   * `it` de las líneas sigue siendo «el texto original» sea cual sea el idioma.
+   * Sin él se escribe `'it'`.
    */
-  guardarCabecera ({ perfil, contexto, version, inicio, id, claves } = {}) {
+  guardarCabecera ({ perfil, contexto, version, inicio, id, claves, idioma } = {}) {
     this.escribir({
       tipo: 'cabecera',
       perfil: perfil || null,
@@ -175,6 +189,7 @@ class Autosave {
       inicio: (inicio ? new Date(inicio) : this.inicio).toISOString(),
       id: id !== undefined ? id : this.idSesion,
       claves: { stt: Boolean(claves?.stt), llm: Boolean(claves?.llm) },
+      idioma: idioma || IDIOMA_POR_DEFECTO,
     })
   }
 

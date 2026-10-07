@@ -40,9 +40,15 @@
 'use strict'
 
 const { EventEmitter } = require('events')
-const { analizar } = require('./questionDetector')
-const { promptRespuesta, promptResumen } = require('../../shared/prompts')
 const { clasificarError } = require('./llm')
+
+// Lo de siempre, el italiano: es lo que usan los dos motores si quien los
+// construye no dice otra cosa (F047). Cada idioma trae lo suyo en `idiomas.js`.
+const detectorItaliano = require('./questionDetector')
+const {
+  promptRespuesta: promptRespuestaItaliano,
+  promptResumen: promptResumenItaliano,
+} = require('../../shared/prompts')
 
 /** Tope de la respuesta. Es funcional: se lee de un vistazo mientras esperan. */
 const MAX_CARACTERES = 500
@@ -135,14 +141,23 @@ class MotorRespuestas extends EventEmitter {
    * @param {object} opts
    * @param {Function} opts.llamar       (systemPrompt, userContent) => Promise<string>
    * @param {Function} [opts.bloqueContexto] () => string, el perfil y la reunión
+   * @param {Function} [opts.promptRespuesta] (bloque) => prompt del sistema; el
+   *   del idioma de la reunión (F047). Por defecto, el italiano.
+   * @param {{ analizar: Function }} [opts.detector] el detector de preguntas del
+   *   idioma de la reunión (F047), con la forma de `questionDetector.js`. Por
+   *   defecto, el italiano.
    */
-  constructor ({ llamar, bloqueContexto } = {}) {
+  constructor ({
+    llamar, bloqueContexto, promptRespuesta = promptRespuestaItaliano, detector = detectorItaliano,
+  } = {}) {
     super()
     if (typeof llamar !== 'function') {
       throw new Error('hace falta una función para llamar al LLM')
     }
     this.llamar = llamar
     this.bloqueContexto = bloqueContexto || (() => '')
+    this.promptRespuesta = promptRespuesta
+    this.detector = detector
 
     this._vistas = []          // { id, it, es }
     this._recientes = []       // últimas frases, para el contexto inmediato
@@ -170,7 +185,7 @@ class MotorRespuestas extends EventEmitter {
     this._recientes.push({ it: texto, es: es || '' })
     if (this._recientes.length > FRASES_DE_CONTEXTO) this._recientes.shift()
 
-    const a = analizar(texto)
+    const a = this.detector.analizar(texto)
     if (!a.esPregunta) return null
 
     // El detector separa además lo que merece una llamada de lo que no: una
@@ -276,7 +291,7 @@ class MotorRespuestas extends EventEmitter {
       // Dentro del try a propósito: `bloqueContexto()` consulta la base de
       // datos y puede fallar. Fuera, ese fallo no emitiría nada y dejaría
       // «Preparando…» para siempre.
-      const sistema = promptRespuesta(this.bloqueContexto())
+      const sistema = this.promptRespuesta(this.bloqueContexto())
       const anteriores = this._recientes
         .filter(f => f.it !== pregunta.it)
         .map(f => `- ${f.it}`)
@@ -376,17 +391,22 @@ class MotorResumen extends EventEmitter {
    * @param {object} opts
    * @param {Function} opts.llamar              (sistema, usuario, opciones) => Promise<string>
    * @param {Function} [opts.bloqueContexto]    () => string
+   * @param {Function} [opts.promptResumen]     (bloque) => prompt del sistema; el del
+   *   idioma de la reunión (F047). Por defecto, el italiano.
    * @param {Function} [opts.ahora]             inyectable: así se prueba sin esperar 2 minutos
    * @param {number}   [opts.intervaloMs]
    * @param {number}   [opts.minFrases]
    */
-  constructor ({ llamar, bloqueContexto, ahora, intervaloMs, minFrases } = {}) {
+  constructor ({
+    llamar, bloqueContexto, promptResumen = promptResumenItaliano, ahora, intervaloMs, minFrases,
+  } = {}) {
     super()
     if (typeof llamar !== 'function') {
       throw new Error('hace falta una función para llamar al LLM')
     }
     this.llamar = llamar
     this.bloqueContexto = bloqueContexto || (() => '')
+    this.promptResumen = promptResumen
     this.ahora = ahora || (() => Date.now())
     this.intervaloMs = intervaloMs ?? INTERVALO_RESUMEN_MS
     this.minFrases = minFrases ?? MIN_FRASES_RESUMEN
@@ -445,7 +465,7 @@ class MotorResumen extends EventEmitter {
 
   async _resumir (frases) {
     this.stats.llamadas++
-    const sistema = promptResumen(this.bloqueContexto())
+    const sistema = this.promptResumen(this.bloqueContexto())
     const usuario = `Lo que se ha dicho:\n${frases.map(f => `- ${f}`).join('\n')}`
 
     const bruto = await this.llamar(sistema, usuario, { json: true })

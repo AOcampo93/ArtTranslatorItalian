@@ -51,7 +51,8 @@ async function init () {
       ai_model    TEXT,
       line_count  INTEGER DEFAULT 0,
       profile_id  INTEGER,
-      context_id  INTEGER
+      context_id  INTEGER,
+      language    TEXT    NOT NULL DEFAULT 'it'
     );
 
     CREATE TABLE IF NOT EXISTS transcripts (
@@ -103,7 +104,11 @@ async function init () {
   // Migración de bases anteriores: ALTER TABLE falla si la columna ya está,
   // así que se intenta y se ignora el error. Es más simple que consultar el
   // esquema y no tiene efecto si ya está migrada.
-  for (const col of ['profile_id INTEGER', 'context_id INTEGER']) {
+  //
+  // `language` (F047): el idioma de la reunión. Las filas de antes de la V2 son
+  // todas italiano, y el DEFAULT constante es lo que deja `ALTER TABLE` rellenar
+  // las filas que ya existen (un NOT NULL sin DEFAULT lo rechaza).
+  for (const col of ['profile_id INTEGER', 'context_id INTEGER', "language TEXT NOT NULL DEFAULT 'it'"]) {
     try { db.run(`ALTER TABLE sessions ADD COLUMN ${col}`) } catch { /* ya existe */ }
   }
 
@@ -185,11 +190,17 @@ function get (sql, params = []) {
 
 // ── Public API ────────────────────────────────────────────────────────────
 
-/** Create a new session row. Returns the new session id. */
-function startSession (aiModel, { profileId = null, contextId = null } = {}) {
+/**
+ * Create a new session row. Returns the new session id.
+ * `language` (F047) is the code of the meeting's language; 'it' if not given.
+ */
+function startSession (aiModel, { profileId = null, contextId = null, language } = {}) {
   const id = run(
-    'INSERT INTO sessions (started_at, ai_model, profile_id, context_id) VALUES (?, ?, ?, ?)',
-    [new Date().toISOString(), aiModel, profileId, contextId]
+    'INSERT INTO sessions (started_at, ai_model, profile_id, context_id, language) VALUES (?, ?, ?, ?, ?)',
+    // `||` y no un valor por defecto de parámetro: la columna es NOT NULL, y un
+    // `null` o una cadena vacía (que un valor por defecto deja pasar) harían
+    // fallar el INSERT, o sea, el arranque de la reunión, por un dato accesorio.
+    [new Date().toISOString(), aiModel, profileId, contextId, language || 'it']
   )
   persist()
   return id
