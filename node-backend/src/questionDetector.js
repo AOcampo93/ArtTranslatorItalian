@@ -70,6 +70,25 @@ const VERBOS_2A = [
  */
 const CLITICOS = new Set(['mi', 'ti', 'ci', 'vi', 'si', 'lo', 'la', 'li', 'le', 'ne', 'gli'])
 
+/**
+ * F049. «Sai,» y «Senti,» con coma al inicio son muletillas («¿sabes?»,
+ * «oye»), no una pregunta. MEDIDO en los informes v0.6–v0.9 (PLAN.md §17.4,
+ * fila 7): «Sai, a me piace molto l'arte brasiliana.» salía como pregunta por
+ * el verbo «sai». Lo que decide es la coma: «Sai dov'è il documento» sí
+ * pregunta, y una frase que cierra con «?» es pregunta pase lo que pase (ver
+ * `sinMuletilla`).
+ */
+const MULETILLA_INICIAL = /^\s*(?:sai|senti)\s*,\s*/i
+
+/**
+ * F049. Pronombres que dirigen al oyente una frase con «?» aunque no abra con
+ * interrogativa ni con verbo en 2ª persona: «E tu la usi?». Solo valen con el
+ * signo —«Tu lavori con noi» es una afirmación— y solo para la puerta del
+ * turno de varias frases (ver `analizar`). «Lei» queda fuera a propósito: casi
+ * siempre es «ella» (ver `promptTraduccion`).
+ */
+const PRONOMBRES_2A = ['tu', 'voi']
+
 /** Perífrasis que introducen pregunta indirecta. */
 const PERIFRASIS = [
   'mi puoi dire', 'mi potresti dire', 'mi spieghi', 'mi spiega',
@@ -167,6 +186,17 @@ function sinRelleno (normalizado) {
   return palabras.join(' ')
 }
 
+/**
+ * F049. Quita la muletilla «Sai,»/«Senti,» del inicio de una frase CRUDA —con
+ * su coma, que `normalizar` borra—, salvo que la frase cierre con «?»: ahí el
+ * signo manda y la frase se deja entera. Lo que queda se evalúa como siempre:
+ * «Sai, hai finito il report» sigue siendo pregunta por el «hai».
+ */
+function sinMuletilla (frase) {
+  const f = (frase || '').trim()
+  return /\?\s*$/.test(f) ? f : f.replace(MULETILLA_INICIAL, '')
+}
+
 /** Quita un único pronombre clítico inicial, si lo hay. */
 function sinClitico (normalizado) {
   const palabras = normalizado.split(' ')
@@ -194,14 +224,28 @@ function abrePor (texto, lista) {
  * —«Perché il budget non copre le ore extra»— tiene 8 palabras. Por escrito,
  * "perché" es ambiguo entre "por qué" y "porque"; la longitud es la única
  * señal barata que separa una pregunta directa de una frase que explica algo.
+ *
+ * F049: esa señal solo vale cuando la frase NO trae puntuación al final. Si
+ * cierra con «.», «!» o «…» el transcriptor ya dijo que es una afirmación —
+ * MEDIDO en v0.9: «Perché nella mata c'è proprio l'energia.» (6 palabras) se
+ * colaba por debajo del límite— y con «?» explícito «perché» es siempre
+ * pregunta, sea cual sea la longitud. Acaban en puntuación el 96–97 % de las
+ * frases (PLAN.md §17.2) [medido]; el resto, las que llegan sin signo, conserva
+ * el criterio de longitud de F044.
  */
 const LIMITE_PALABRAS_PERCHE = 8
 
 /**
  * Busca perífrasis, interrogativa o verbo en 2ª persona al inicio del texto
  * ya normalizado y sin relleno. Devuelve null si no hay ninguna marca.
+ *
+ * @param {string} norm
+ * @param {{conSigno?: boolean, afirmada?: boolean}} [cierre] cómo cierra la
+ *   frase de la que sale `norm` (F049): con «?» explícito, «perché» abre
+ *   siempre una pregunta; si cierra con punto, exclamación o puntos
+ *   suspensivos, nunca. Sin ninguna de las dos decide la longitud (F044).
  */
-function detectarApertura (norm) {
+function detectarApertura (norm, { conSigno = false, afirmada = false } = {}) {
   const perifrasis = abrePor(norm, PERIFRASIS)
   if (perifrasis) return { motivo: 'perífrasis', apertura: perifrasis }
 
@@ -209,7 +253,9 @@ function detectarApertura (norm) {
   if (interrogativa) {
     const esPerche = interrogativa === 'perché' || interrogativa === 'perche'
     const numPalabras = norm.split(' ').filter(Boolean).length
-    if (!esPerche || numPalabras <= LIMITE_PALABRAS_PERCHE) {
+    const esPorque = esPerche && !conSigno &&
+      (afirmada || numPalabras > LIMITE_PALABRAS_PERCHE)
+    if (!esPorque) {
       return { motivo: 'interrogativa', apertura: interrogativa }
     }
   }
@@ -241,31 +287,43 @@ function analizar (texto) {
   //    — pero solo cuando cierra la única frase del turno. Si el turno
   //    trae varias frases, un "?" al final de la última puede cerrar un
   //    comentario que solo sigue una narración (ver `ultimaConSigno`):
-  //    hace falta además una apertura dirigida al oyente.
+  //    hace falta además que la propia frase se dirija al oyente.
+  //
+  //    F049. «Dirigida al oyente» incluía solo la apertura (interrogativa,
+  //    perífrasis o verbo en 2ª persona), y por eso «…per i lettini. E tu la
+  //    usi?» se perdía: «tu la usi» no abre con ninguna de las tres, así que
+  //    la puerta lo descartaba y el paso 2 miraba la misma frase y tampoco
+  //    hallaba apertura. El pronombre «tu»/«voi» es la marca más explícita de
+  //    todas. La narración que cierra con «?» y sin esa marca (F044: «E in
+  //    questi tanti viaggi hai fatto…?») sigue sin pasar.
   const frases = todasLasFrases(crudo)
   const conSigno = ultimaConSigno(crudo)
   if (conSigno) {
     const normSigno = sinRelleno(normalizar(conSigno))
     if (normSigno) {
-      const apertura = detectarApertura(normSigno)
-      if (frases.length <= 1 || apertura) {
+      const apertura = detectarApertura(normSigno, { conSigno: true })
+      const dirigida = apertura ? apertura.apertura : abrePor(normSigno, PRONOMBRES_2A)
+      if (frases.length <= 1 || dirigida) {
         return {
           esPregunta: true,
           motivo: 'signo',
-          apertura: apertura ? apertura.apertura : null,
-          merecePena: valeLaPena(normSigno),
+          apertura: dirigida || null,
+          merecePena: valeLaPena(normSigno, true),
         }
       }
     }
   }
 
   // 2. Sin signo aprovechable: se mira solo la última frase, la que se
-  //    está diciendo ahora.
+  //    está diciendo ahora. F049: sin la muletilla «Sai,»/«Senti,» del
+  //    inicio, y sabiendo si la frase cierra con punto (ver
+  //    `LIMITE_PALABRAS_PERCHE`).
   const cola = ultimaFrase(crudo)
-  const norm = sinRelleno(normalizar(cola))
+  const afirmada = /[.!…]\s*$/.test(cola)
+  const norm = sinRelleno(normalizar(sinMuletilla(cola)))
   if (!norm) return nulo
 
-  const apertura = detectarApertura(norm)
+  const apertura = detectarApertura(norm, { afirmada })
   if (!apertura) return nulo
 
   return {
@@ -277,22 +335,37 @@ function analizar (texto) {
 }
 
 /**
- * Triaje gratis: separa lo que merece una llamada al LLM de lo que no.
- * Una fórmula social o un fragmento de tres palabras no se responden.
+ * Mínimo de palabras, sin el relleno inicial, para que una pregunta merezca una
+ * llamada al LLM. Sin signo son 4. Con «?» explícito bastan 3 (F049): MEDIDO en
+ * v0.9 (PLAN.md §17.4, fila 7), «E tu la usi?» —«tu la usi» tras quitar «e»—
+ * era una pregunta clara que el triaje descartaba. El signo es fiable porque el
+ * 96–97 % de las frases acaba en puntuación (PLAN.md §17.2) [medido].
  */
-function valeLaPena (normalizado) {
+const MIN_PALABRAS_SIN_SIGNO = 4
+const MIN_PALABRAS_CON_SIGNO = 3
+
+/**
+ * Triaje gratis: separa lo que merece una llamada al LLM de lo que no.
+ * Una fórmula social o un fragmento corto no se responden. La fórmula social
+ * manda sobre el signo: «Mi sentite bene?» sigue sin gastar una llamada.
+ * @param {string} normalizado
+ * @param {boolean} [conSigno] la frase cerraba con «?»
+ */
+function valeLaPena (normalizado, conSigno = false) {
   if (CORTESIA.some(f => normalizado === f || normalizado.startsWith(f + ' ') || normalizado.includes(' ' + f))) {
     return false
   }
-  return normalizado.split(' ').filter(Boolean).length >= 4
+  const minimo = conSigno ? MIN_PALABRAS_CON_SIGNO : MIN_PALABRAS_SIN_SIGNO
+  return normalizado.split(' ').filter(Boolean).length >= minimo
 }
 
 /**
  * Detección sobre la hipótesis en vivo: permite avisar "pregunta en camino"
- * antes de que la frase termine, porque solo mira cómo empieza.
+ * antes de que la frase termine, porque solo mira cómo empieza. Tampoco la
+ * dispara la muletilla «Sai,» (F049).
  */
 function preguntaEnCamino (hipotesis) {
-  const norm = sinRelleno(normalizar(ultimaFrase(hipotesis)))
+  const norm = sinRelleno(normalizar(sinMuletilla(ultimaFrase(hipotesis))))
   if (!norm) return false
   return Boolean(
     abrePor(norm, PERIFRASIS) ||
@@ -305,6 +378,6 @@ function preguntaEnCamino (hipotesis) {
 module.exports = { analizar, preguntaEnCamino }
 module.exports._internos = {
   normalizar, ultimaFrase, todasLasFrases, ultimaConSigno, sinRelleno,
-  sinClitico, abrePor, detectarApertura, valeLaPena,
-  INTERROGATIVAS, VERBOS_2A, PERIFRASIS, CORTESIA, RELLENO,
+  sinMuletilla, sinClitico, abrePor, detectarApertura, valeLaPena,
+  INTERROGATIVAS, VERBOS_2A, PERIFRASIS, CORTESIA, RELLENO, PRONOMBRES_2A,
 }

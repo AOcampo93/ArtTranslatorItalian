@@ -1088,7 +1088,7 @@ leyendo solo ese texto sabría si es pregunta. Tres capas:
 
 | Capa | Coste | Qué atrapa |
 |---|---|---|
-| Palabras de apertura italianas | gratis | `che · cosa · come · quando · perché · quale · quanto · c'è` y, clave, el **verbo en 2ª persona al inicio** — `hai · avete · puoi · potete · sai · sapete · vuoi · riesci` — que es el patrón interrogativo sin palabra interrogativa, justo el que se perdía arriba. Corre sobre la hipótesis en vivo, así que el aviso aparece *antes* de que la frase termine |
+| Palabras de apertura italianas | gratis | `che · cosa · come · quando · perché · quale · quanto · c'è` y, clave, el **verbo en 2ª persona al inicio** — `hai · avete · puoi · potete · sai · sapete · vuoi · riesci` — que es el patrón interrogativo sin palabra interrogativa, justo el que se perdía arriba. Corre sobre la hipótesis en vivo, así que el aviso aparece *antes* de que la frase termine. **Ajustado con datos:** `c'è` dejó de abrir pregunta en F044; desde F049, «Sai,» o «Senti,» con coma son muletilla y «perché» con punto es «porque» (§17.4) |
 | `--prompt` con ejemplos puntuados | gratis | Induce a Whisper a escribir `?`. Ayuda, no resuelve |
 | Escáner LLM periódico | ~1 llamada / 40 s | La red que atrapa lo que solo el contexto delata |
 

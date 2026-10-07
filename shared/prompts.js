@@ -70,6 +70,12 @@ const ESPANOL_DE_MEXICO = 'usa «ustedes» y nunca «vosotros» ni sus formas (s
  * F048: `anteriores` son las últimas frases definitivas de la reunión, en el
  * idioma original y en orden (ver `conAnteriores`). Sin ellas, el texto es el
  * de siempre salvo por la línea del español de México.
+ *
+ * F049: el «?» del original decide si la traducción es pregunta. Medido en los
+ * informes v0.6–v0.9 (PLAN.md §17.4, fila 6): «Perché Giulia per tanti anni è
+ * stata in Brasile.» —una explicación, con punto— salía «¿Por qué Giulia…?».
+ * El transcriptor puntúa el 96–97 % de las frases (PLAN.md §17.2) [medido],
+ * así que el «?» es una señal fiable y se obedece al pie de la letra.
  */
 function promptTraduccion (bloque, anteriores) {
   return `Eres un traductor profesional de italiano a español, para una
@@ -83,6 +89,12 @@ Escribe en español de México: ${ESPANOL_DE_MEXICO}.
 «lei»/«Lei» se traduce como «ella» (tercera persona), salvo que el contexto
 muestre un tratamiento formal evidente hacia el interlocutor —ahí es «usted».
 Por defecto es «ella»: es el caso más frecuente en una reunión de trabajo.
+
+Preguntas: si la frase en italiano no lleva «?», la traducción no es una
+pregunta, así que no pongas «¿» ni «?». «Perché» al inicio de una frase sin «?»
+es «porque» (explica algo), nunca «por qué»: «Perché il cliente ha cambiato
+idea.» es «Porque el cliente cambió de opinión.». Si la frase sí lleva «?»,
+tradúcela como pregunta, con «¿…?».
 
 Devuelve SOLO la traducción. Sin comillas, sin comentarios, sin prefijos como
 "Traducción:", sin markdown. Nada más que el texto en español.`
@@ -181,6 +193,14 @@ Extrae la pregunta ENTERA, nunca truncada. Si no hay ninguna nueva, devuelve
  * usuario tendría que decir en voz alta como si fueran suyos. La regla de
  * abajo lo prohíbe explícitamente y da una salida honesta cuando el dato
  * falta, en vez de dejar que el modelo lo complete por su cuenta.
+ *
+ * F049. Dos fallos más, MEDIDOS en los informes v0.6–v0.9 (PLAN.md §17.4,
+ * fila 8): ante «Hai fatto delle ricerche sull'azienda?» la respuesta afirmaba
+ * a qué se dedicaba la empresa cuando el contexto no decía nada de ella, y ante
+ * «Posso avere il tuo nome?» soltaba nombre, empresa y proyectos del perfil.
+ * Lo primero es inventar algo del interlocutor —que el usuario diría en voz
+ * alta como cierto—; lo segundo, regalar datos que nadie pidió. Por eso la
+ * regla «coherente con quién es» ya no manda recitar la ocupación y el papel.
  */
 function promptRespuesta (bloque) {
   return `Ayudas a alguien a participar en una reunión en italiano. Le acaban de
@@ -194,10 +214,19 @@ Reglas:
   vistazo y decirlo mientras el otro espera. Una respuesta larga no le sirve.
 - Concreto: si la pregunta es técnica, di el punto más importante en vez de
   enumerarlo todo.
-- Coherente con quién es: usa su ocupación y su papel en el proyecto.
+- Coherente con quién es: que suene a su ocupación y a su papel en el
+  proyecto, sin recitar el perfil.
+- **Del perfil usa SOLO lo que la pregunta pide.** Si preguntan el nombre, di
+  el nombre y nada más: ni la empresa, ni el cargo, ni los proyectos. Nadie se
+  presenta de más si no se lo piden.
 - **NUNCA inventes hechos personales del usuario**: cuántas veces viajó a
   algún sitio, recuerdos de infancia, opiniones que no haya dado, cifras o
   vivencias suyas. Usa SOLO lo que diga su perfil o el contexto de arriba.
+- **No afirmes nada sobre el interlocutor ni sobre su empresa que no esté en la
+  transcripción o en el contexto de arriba**: a qué se dedica, qué sistemas
+  usa, qué busca, qué puesto ofrece. Si preguntan si investigó la empresa y el
+  contexto no dice nada de ella, no finjas que la conoce: la respuesta le pide
+  al interlocutor que se la cuente.
 - Si la pregunta pide un dato personal o de proyecto que no está en el
   contexto, no lo inventes: sugiere una respuesta honesta que lo reconozca y
   esquive o devuelva la pregunta — del tipo "Non ci sono mai stato, ma mi

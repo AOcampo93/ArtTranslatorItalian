@@ -208,6 +208,44 @@ describe('F044 — las 8 frases reales del informe de v0.8.0', () => {
   })
 })
 
+describe('F049 — las cuatro frases del informe de v0.9 (PLAN.md §17.4, fila 7)', () => {
+  // MEDIDO: dos falsos positivos, un falso negativo y un triaje que descartaba
+  // una pregunta corta con «?». Son frases de vídeos públicos, tal cual
+  // llegaron de AssemblyAI (con su puntuación).
+  const CASOS = [
+    {
+      it: "Sai, a me piace molto l'arte brasiliana.",
+      esPregunta: false,
+      nota: '«Sai,» con coma es una muletilla, no el verbo',
+    },
+    {
+      it: "Perché nella mata c'è proprio l'energia.",
+      esPregunta: false,
+      nota: '«perché» que abre una frase que cierra con punto es «porque»',
+    },
+    {
+      it: 'Le lenzuola e le coperte per i lettini. E tu la usi?',
+      esPregunta: true,
+      merecePena: true,
+      nota: 'turno de varias frases que acaba en «?» dirigido al oyente («tu»)',
+    },
+    {
+      it: 'E tu la usi?',
+      esPregunta: true,
+      merecePena: true,
+      nota: 'con «?» explícito bastan 3 palabras para merecer respuesta',
+    },
+  ]
+
+  for (const c of CASOS) {
+    test(`${c.esPregunta ? 'detecta' : 'NO detecta'}: "${c.it.slice(0, 50)}" (${c.nota})`, () => {
+      const r = analizar(c.it)
+      assert.strictEqual(r.esPregunta, c.esPregunta)
+      if (c.merecePena !== undefined) assert.strictEqual(r.merecePena, c.merecePena)
+    })
+  }
+})
+
 describe('aviso sobre la hipótesis en vivo', () => {
   test('avisa antes de que la frase termine', () => {
     // Solo mira cómo empieza, así que puede avisar con la frase a medias.

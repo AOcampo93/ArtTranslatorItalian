@@ -117,6 +117,32 @@ describe('F040 — la traducción por LLM pide SOLO la traducción', () => {
   })
 })
 
+// F049. MEDIDO en los informes v0.6–v0.9 (PLAN.md §17.4, filas 6 y 8): «Perché
+// Giulia per tanti anni è stata in Brasile.» salía «¿Por qué Giulia…?», y las
+// respuestas afirmaban cosas de la empresa que nadie había dicho o recitaban
+// todo el perfil ante «Posso avere il tuo nome?». Aquí solo se verifica que el
+// texto lleva las reglas; que el modelo las cumpla lo comprueba el líder con el
+// LLM real.
+describe('F049 — las reglas nuevas están escritas en los prompts', () => {
+  // Los saltos de línea del prompt no son parte de la regla: se comparan con
+  // los espacios colapsados.
+  const plano = texto => texto.replace(/\s+/g, ' ')
+
+  test('la traducción: sin «?» en el original no hay pregunta, y «perché» es «porque»', () => {
+    const p = plano(P.promptTraduccion(BLOQUE))
+    assert.match(p, /no lleva «\?», la traducción no es una pregunta/)
+    assert.match(p, /no pongas «¿» ni «\?»/)
+    assert.match(p, /«Perché» al inicio de una frase sin «\?» es «porque»/)
+  })
+
+  test('la respuesta: nada del interlocutor que no conste, y del perfil solo lo que se pide', () => {
+    const p = plano(P.promptRespuesta(BLOQUE))
+    assert.match(p, /nada sobre el interlocutor ni sobre su empresa que no esté en la transcripción o en el contexto/)
+    assert.match(p, /Del perfil usa SOLO lo que la pregunta pide/)
+    assert.match(p, /Si preguntan el nombre, di el nombre y nada más/)
+  })
+})
+
 describe('el refinado NO traduce, solo corrige terminología', () => {
   test('deja claro que recibe una traducción ya hecha', () => {
     const p = P.promptRefinado(BLOQUE)
