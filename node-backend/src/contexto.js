@@ -225,6 +225,161 @@ function promptParaWhisper ({ contexto } = {}) {
   }
 }
 
+// ── Términos clave para la transcripción (F048) ─────────────────────────────
+
+/**
+ * Los límites de `keyterms_prompt` de AssemblyAI `[verificado en
+ * assemblyai.com/docs/streaming/prompting-and-keyterms, 07-10-2026]`: 100
+ * términos por sesión y 50 caracteres como mucho cada uno. Con más de 100 la
+ * solicitud da error; un término de más de 50 se ignora sin avisar.
+ */
+const MAX_KEYTERMS = 100
+const MAX_CARACTERES_KEYTERM = 50
+
+/**
+ * Palabras cortas que pueden ir DENTRO de un nombre: «Università di Bologna»,
+ * «Bank of America». Solo en minúscula: «De Luca» o «The Hague» empiezan por
+ * una palabra con mayúscula como cualquier otra.
+ */
+const CONECTORES = new Set(['de', 'del', 'di', 'della', 'da', 'of', 'the'])
+
+/** Lo que cierra una oración, con las comillas y paréntesis que pueden ir detrás. */
+const RE_CIERRA_ORACION = /[.!?…]["'”»’)\]]*$/
+/** Lo que corta una secuencia en medio: «Nacional, trabajo», «(IPN)», «“Rossi”». */
+const RE_ABRE_CORTE = /^[("«“\[¿¡]/
+const RE_CIERRA_CORTE = /[,;:.!?…)"»”\]]$/
+
+/**
+ * 'sigla' (SAP, ACME), 'capitalizada' (Cumbres), 'conector' (del) u 'otra'.
+ * Una sola letra no es nada: «A», «E» y las iniciales no hacen un nombre.
+ */
+function clasificar (palabra) {
+  if (CONECTORES.has(palabra)) return 'conector'
+  const letras = palabra.match(/\p{L}/gu) || []
+  if (letras.length < 2) return 'otra'
+  if (!/\p{Ll}/u.test(palabra)) {
+    return letras.filter(l => /\p{Lu}/u.test(l)).length >= 2 ? 'sigla' : 'otra'
+  }
+  return /^\p{Lu}/u.test(palabra) ? 'capitalizada' : 'otra'
+}
+
+/** Las palabras de una línea, con lo que hace falta saber de cada una para agruparlas. */
+function palabrasDe (linea) {
+  const palabras = []
+  let inicioOracion = true
+  for (const crudo of linea.split(/\s+/)) {
+    if (!crudo) continue
+    const limpia = crudo.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+    palabras.push({
+      limpia,
+      tipo: limpia ? clasificar(limpia) : 'otra',
+      abre: RE_ABRE_CORTE.test(crudo),
+      cierra: RE_CIERRA_CORTE.test(crudo),
+      inicioOracion,
+    })
+    inicioOracion = RE_CIERRA_ORACION.test(crudo)
+  }
+  return palabras
+}
+
+/**
+ * Los nombres propios de unos textos: secuencias de palabras con mayúscula o
+ * siglas en mayúsculas («Monica Belluci», «ACME NORTE»), en el orden en que
+ * aparecen y sin quitar repetidos. Función pura.
+ *
+ * Es una heurística de mayúsculas, sin diccionario, y por eso vale para
+ * cualquier idioma. Sus reglas, por el error que evita cada una:
+ *
+ *  - Una palabra con mayúscula a principio de oración solo cuenta si la sigue
+ *    otra con mayúscula («Analista egresada…» no es un nombre; «Monica Belluci
+ *    es…» sí). Ni siquiera un conector la salva: «Analista de México» deja
+ *    «México», no la frase entera.
+ *  - Un conector (de, del, di, della, da, of, the) une dos tramos solo si lo que
+ *    le sigue es UNA palabra con mayúscula: «Universidad Nacional Autónoma de
+ *    México», «Bank of America». Delante de dos o más empieza otro nombre: «ZETA
+ *    Cumbres del Instituto Tecnologico Andino» son dos, y unidos serían un
+ *    término demasiado largo para ayudar a nadie.
+ *  - Una coma, un paréntesis o unas comillas cortan la secuencia.
+ *
+ * @param {Array<string>|string} textos  los campos de donde sacar nombres
+ * @returns {string[]}
+ */
+function nombresPropios (textos) {
+  const nombres = []
+  for (const texto of [].concat(textos ?? [])) {
+    if (typeof texto !== 'string') continue
+    for (const linea of texto.split(/\n+/)) {
+      const palabras = palabrasDe(linea)
+      const n = palabras.length
+      const esNombre = p => p.tipo === 'sigla' || p.tipo === 'capitalizada'
+      // `k` va pegada a la anterior, sin coma ni paréntesis entre las dos.
+      const junto = k => !palabras[k - 1].cierra && !palabras[k].abre
+
+      let i = 0
+      while (i < n) {
+        if (!esNombre(palabras[i])) { i++; continue }
+        let j = i + 1
+        while (j < n && esNombre(palabras[j]) && junto(j)) j++
+        if (j - i === 1 && palabras[i].inicioOracion && palabras[i].tipo === 'capitalizada') {
+          i = j
+          continue
+        }
+
+        const partes = palabras.slice(i, j).map(p => p.limpia)
+        for (;;) {
+          let k = j
+          while (k < n && palabras[k].tipo === 'conector' && junto(k)) k++   // «of the»
+          if (k === j || k >= n || !esNombre(palabras[k]) || !junto(k)) break
+          let m = k + 1
+          while (m < n && esNombre(palabras[m]) && junto(m)) m++
+          if (m - k !== 1) break
+          partes.push(...palabras.slice(j, m).map(p => p.limpia))
+          j = m
+        }
+        nombres.push(partes.join(' '))
+        i = j
+      }
+    }
+  }
+  return nombres
+}
+
+/**
+ * La lista que se manda a AssemblyAI como `keyterms_prompt`: el glosario manual
+ * del contexto primero —es lo que el usuario escribió y manda—, y después los
+ * nombres propios del nombre, el tipo de proyecto y la descripción del contexto
+ * y del nombre y la descripción del perfil. Hasta F048 el glosario venía vacío
+ * en las cinco sesiones medidas, y «Tornatore» salió de cuatro maneras (PLAN.md
+ * §17.4, fila 2 `[medido]`).
+ *
+ * Sin repetidos (ignorando mayúsculas: queda la primera grafía), cada término
+ * con 50 caracteres como mucho y 100 en total. Si sobran, se pierden los
+ * últimos, que son los automáticos.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.perfil]    `nombre` y `contexto`
+ * @param {object} [opts.contexto]  `nombre`, `tipo_proyecto`, `contexto` y `glosario`
+ * @returns {string[]}
+ */
+function construirKeyterms ({ perfil, contexto } = {}) {
+  const manual = String(contexto?.glosario || '').split(/[,\n·;]+/)
+  const automaticos = nombresPropios([
+    contexto?.nombre, contexto?.tipo_proyecto, contexto?.contexto, perfil?.nombre, perfil?.contexto,
+  ])
+
+  const vistos = new Set()
+  const terminos = []
+  for (const crudo of [...manual, ...automaticos]) {
+    const termino = recortar(crudo.replace(/\s+/g, ' '), MAX_CARACTERES_KEYTERM).texto
+    const clave = termino.toLowerCase()
+    if (!termino || vistos.has(clave)) continue
+    vistos.add(clave)
+    terminos.push(termino)
+    if (terminos.length === MAX_KEYTERMS) break
+  }
+  return terminos
+}
+
 // ── Export e import entre equipos ───────────────────────────────────────────
 
 /**
@@ -258,8 +413,8 @@ function importar (datos) {
 module.exports = {
   crearPerfil, actualizarPerfil, borrarPerfil, listarPerfiles, activarPerfil, perfilActivo,
   crearContexto, actualizarContexto, borrarContexto, listarContextos, activarContexto, contextoActivo,
-  buildContextBlock, promptParaWhisper,
+  buildContextBlock, promptParaWhisper, construirKeyterms, nombresPropios,
   exportar, importar,
-  MAX_GLOSARIO_CHARS, MAX_BLOQUE_CHARS,
+  MAX_GLOSARIO_CHARS, MAX_BLOQUE_CHARS, MAX_KEYTERMS, MAX_CARACTERES_KEYTERM,
 }
 module.exports._internos = { recortar, glosarioParaLlm }

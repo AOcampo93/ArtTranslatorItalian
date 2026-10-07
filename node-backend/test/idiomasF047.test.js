@@ -61,12 +61,13 @@ describe('F047 — la entrada «it» son las piezas de hoy', () => {
       'la muestra de la comprobación previa existe de verdad')
   })
 
-  test('la URL de AssemblyAI lleva language_code=it con el código del registro y sin idioma', () => {
+  test('la URL de AssemblyAI lleva language_codes=["it"] con el código del registro y sin idioma', () => {
     const { construirUrl } = _internos
     const conRegistro = construirUrl({
       idioma: obtenerIdioma('it').codigoStt, glosario: [], contexto: '',
     })
-    assert.strictEqual(new URL(conRegistro).searchParams.get('language_code'), 'it')
+    // F048: el nombre documentado (antes `language_code=it`, ver PLAN.md §17.8).
+    assert.strictEqual(new URL(conRegistro).searchParams.get('language_codes'), '["it"]')
 
     // «Sin idioma»: lo que usa el transcriptor cuando nadie le dice cuál.
     const sinIdioma = new AssemblyLiveTranscriber({ apiKey: 'no-se-usa' })

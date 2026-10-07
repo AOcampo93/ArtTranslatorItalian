@@ -462,7 +462,12 @@ async function traducirLinea (s, texto, turno, extra = {}) {
   // F040: `s.traductor` es el que `montarMotores` eligió al montar la
   // sesión —el LLM con Marian de respaldo, o Marian directo sin clave—, no
   // el módulo `traductor` (Marian) a secas: ver `montarMotores`.
-  const tr = await s.traductor.traducir(texto)
+  //
+  // F048: las dos frases anteriores van de contexto para el LLM (Marian las
+  // ignora). `s.anteriores` solo lleva líneas definitivas —se alimenta en
+  // `guardarYPintar`—, así que ni la cola que esté en pantalla ni lo que se
+  // está arrastrando entran: ese texto es justo el que se está traduciendo.
+  const tr = await s.traductor.traducir(texto, { anteriores: s.anteriores })
   // Reloj de pared y no `tr.ms`: si una frase larga tiene ocupado al
   // traductor, la siguiente espera su turno, y esa espera la sufre el
   // usuario aunque el modelo no la cuente como suya.
@@ -569,6 +574,14 @@ function guardarYPintar (s, frase, idProvisional = null) {
     aRenderer('app:estado', { clase: 'mal', texto: `no se pudo guardar la frase: ${sanear(err.message)}` })
   } finally {
     if (!estabaAbierto) s.autosave.cerrar()
+  }
+  // F048: la línea ya es definitiva, así que pasa a ser contexto de las
+  // traducciones que vienen. Se queda con las dos últimas, que son las que lleva
+  // el prompt (`ANTERIORES_MAX`, en `traduccionLlm.js`). Va fuera del `try`: lo
+  // que se dijo sigue siendo contexto aunque el disco haya fallado. Y tolera que
+  // `s.anteriores` no exista, porque las pruebas arman `s` a mano.
+  if (typeof frase.it === 'string' && frase.it.trim()) {
+    s.anteriores = [...(s.anteriores || []), frase.it.trim()].slice(-2)
   }
   if (idProvisional) aRenderer('app:frase:reemplazo', { idProvisional, ...frase })
   else aRenderer('app:frase', frase)
@@ -778,8 +791,14 @@ async function procesarTurno (s, turno, llegada) {
  * el modelo de Marian, las abreviaturas del troceo y —por `montarMotores`— el
  * detector y los prompts. Si falta, cada pieza cae en su propio valor por
  * defecto, que es el italiano de siempre: quien llame como antes no nota nada.
+ *
+ * `keyterms` (F048) es la lista que se manda a AssemblyAI: el glosario manual
+ * y los nombres propios del contexto y del perfil. La arma `iniciarReunion`, por
+ * la misma razón que el idioma: este tramo lo ejecutan pruebas sueltas, con once
+ * nombres fijos y sin acceso a `contexto.construirKeyterms`. Si falta, vale el
+ * glosario manual solo.
  */
-async function empezarSesion ({ perfil, contexto: ctx, idioma }) {
+async function empezarSesion ({ perfil, contexto: ctx, idioma, keyterms }) {
   if (sesion) return { ok: true, yaCorriendo: true }
 
   const claves = leerClaves()
@@ -817,7 +836,7 @@ async function empezarSesion ({ perfil, contexto: ctx, idioma }) {
     apiKey: claves.stt,
     // `undefined` cae en el 'it' del propio transcriptor.
     idioma: idioma?.codigoStt,
-    glosario,
+    glosario: keyterms || glosario,
     // El contexto va en el idioma de la reunión porque describe el audio que va
     // a oír.
     contexto: [ctx?.tipo_proyecto && `${etiquetaProyecto}${ctx.tipo_proyecto}.`,
@@ -900,6 +919,10 @@ async function empezarSesion ({ perfil, contexto: ctx, idioma }) {
     // que el arrastre signifique algo.
     cola: null,
     cadena: Promise.resolve(),
+    // F048. Las dos últimas líneas DEFINITIVAS en el idioma original, las que
+    // lleva de contexto la traducción siguiente. Las alimenta `guardarYPintar`:
+    // la cola provisional no entra.
+    anteriores: [],
     // Se pone a `true` cuando una cola se suelta sin que nadie la continúe
     // —el tope, un fallo de Marian o la parada de la reunión—: la primera línea
     // que salga después es la que llega a Marian sin su principio, y es ella la
@@ -1090,6 +1113,10 @@ async function pararSesion (motivo = 'el usuario paró', graciaMs = GRACIA_EN_VU
  * existe NO cae en italiano —la reunión se transcribiría en un idioma que
  * nadie pidió y sin avisar—: se devuelve como cualquier otro motivo de no
  * arrancar, que es lo que la interfaz ya sabe pintar.
+ *
+ * Y la lista de términos clave para AssemblyAI (F048): el glosario manual y los
+ * nombres propios del contexto y del perfil. Se arma aquí y no dentro de
+ * `empezarSesion` por lo mismo que el idioma: ver el comentario de esa función.
  */
 async function iniciarReunion (datos) {
   let idioma
@@ -1098,7 +1125,8 @@ async function iniciarReunion (datos) {
   } catch (err) {
     return { ok: false, motivo: err.message }
   }
-  return empezarSesion({ ...datos, idioma })
+  const keyterms = contexto.construirKeyterms({ perfil: datos?.perfil, contexto: datos?.contexto })
+  return empezarSesion({ ...datos, idioma, keyterms })
 }
 ipcMain.handle('app:empezar', (_e, datos) => iniciarReunion(datos))
 ipcMain.handle('app:parar', () => pararSesion())
@@ -1323,7 +1351,10 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
     const muestras = new Float32Array(pcm.length / 2)
     for (let i = 0; i < muestras.length; i++) muestras[i] = pcm.readInt16LE(i * 2) / 32768
 
-    const glosario = (ctx?.glosario || '').split(/[,\n·;]+/).map(x => x.trim()).filter(Boolean)
+    // F048: los mismos términos que la reunión de verdad. Esta llamada solo
+    // recibe el contexto, no el perfil, así que son el glosario y los nombres
+    // propios del contexto.
+    const glosario = contexto.construirKeyterms({ contexto: ctx })
     const t = new AssemblyLiveTranscriber({
       apiKey: claves.stt, idioma: idioma.codigoStt, glosario, registroConexiones: registroConexionesStt,
     })

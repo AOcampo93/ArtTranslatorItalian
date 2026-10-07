@@ -75,11 +75,34 @@ function contarPalabrasConLetras (t) {
  * en italiano para traducir. Por favor, proporciona la frase que necesitas
  * que traduzca» en vez de dejarlo tal cual. Con menos de 2 palabras con
  * letras no hay nada que traducir de verdad —una muletilla, un «sí», un
- * «mm»— así que ni se llama al LLM: se enseña el texto tal cual.
+ * «mm»— así que ni se llama al LLM. Qué se hace entonces depende de si es una
+ * palabra con contenido o una interjección (F048, ver `traducir`).
  */
 function sinContenido (t) {
   return contarPalabrasConLetras(t) < 2
 }
+
+/**
+ * F048. Las interjecciones: palabras sueltas que no tienen traducción y se
+ * enseñan tal cual. Cualquier OTRA palabra suelta va a Marian: «Perfetto.» salía
+ * «Perfetto.» y «Sì.» salía «Sì.» (informes v0.6–v0.9, PLAN.md §17.4, fila 3
+ * `[medido]`). Se comparan sin mayúsculas ni puntuación: «Mm.», «¿Eh?», «OK,».
+ */
+const INTERJECCIONES = new Set([
+  'mm', 'mmm', 'hmm', 'eh', 'ehm', 'uh', 'uhm', 'um', 'ah', 'oh', 'ok', 'okay',
+])
+
+function esInterjeccion (t) {
+  return INTERJECCIONES.has(String(t || '').toLowerCase().replace(/[^\p{L}]/gu, ''))
+}
+
+/**
+ * F048. Cuántas frases anteriores lleva el prompt: las dos últimas. Es lo que
+ * hacía falta en los casos medidos (PLAN.md §17.4, fila 1: «nella mata» se
+ * aclara con la frase de dos antes), y cada una más es contexto que se paga en
+ * cada traducción. `guardarYPintar` (`mainApp.js`) guarda las mismas dos.
+ */
+const ANTERIORES_MAX = 2
 
 /**
  * Frases del LLM «charlando» en vez de traducir — el mismo caso medido de
@@ -127,8 +150,13 @@ function limpiar (bruto) {
  *   del idioma de la reunión (F047). Por defecto, el italiano de siempre.
  * @param {{ traducir: (texto: string) => Promise<object> }} opts.respaldo
  *   Marian, ya cargado. Su resultado se devuelve TAL CUAL en el fallback —
- *   es él quien anota `traductor: 'marian'` en lo que devuelve.
- * @returns {{ traducir: (texto: string) => Promise<{ es: string, ms: number, traductor: 'llm'|'marian', modelo?: string|null }> }}
+ *   es él quien anota `traductor: 'marian'` en lo que devuelve. Marian no recibe
+ *   las frases anteriores: traduce la frase sola.
+ * @returns {{ traducir: (texto: string, opciones?: { anteriores?: string[] }) => Promise<{ es: string, ms: number, traductor: 'llm'|'marian'|'ninguno', modelo?: string|null }> }}
+ *   `anteriores` (F048): las últimas frases DEFINITIVAS de la reunión, en el
+ *   idioma original y en orden; entran las dos últimas, en el prompt de sistema
+ *   y como contexto que no se traduce. El mensaje del usuario sigue siendo solo
+ *   la frase.
  */
 function crearTraductorLlm ({
   llamar, bloqueContexto, plazoMs = 3000, respaldo, promptTraduccion = promptTraduccionItaliano,
@@ -152,13 +180,19 @@ function crearTraductorLlm ({
     return motivoJsonl ? { ...resultado, motivo: motivoJsonl } : resultado
   }
 
-  async function traducir (texto) {
+  async function traducir (texto, opciones) {
     const limpio = (texto || '').trim()
     if (!limpio) return { es: '', ms: 0, traductor: 'llm', modelo: null }
 
     // F043: «Mm.», «sí», «¿eh?» — sin contenido que traducir de verdad, y el
     // LLM charla en vez de callarse (medido: ver `sinContenido` arriba).
     if (sinContenido(limpio)) {
+      // F048: salvo que sea una palabra de verdad. Va a Marian y no al LLM por
+      // lo mismo que F043: una palabra sola es justo lo que el LLM contesta
+      // charlando. Marian la tiene a mano, sin red ni plazo.
+      if (contarPalabrasConLetras(limpio) === 1 && !esInterjeccion(limpio)) {
+        return respaldo.traducir(limpio)
+      }
       return { es: limpio, ms: 0, traductor: 'ninguno', modelo: null }
     }
 
@@ -171,7 +205,8 @@ function crearTraductorLlm ({
 
     let bruto
     try {
-      const sistema = promptTraduccion(bloque())
+      const previas = Array.isArray(opciones?.anteriores) ? opciones.anteriores.slice(-ANTERIORES_MAX) : []
+      const sistema = promptTraduccion(bloque(), previas)
       bruto = await Promise.race([llamar(sistema, limpio, { maxTokens: 300 }), tope])
     } catch (err) {
       clearTimeout(reloj)

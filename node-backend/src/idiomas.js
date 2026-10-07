@@ -35,6 +35,10 @@
  *  - `abreviaturas`: las que no cierran oración al partir un turno.
  *  - `detector`: el detector de preguntas (la forma de `questionDetector.js`).
  *  - `promptTraduccion`, `promptRespuesta` y `promptResumen`: los prompts del LLM.
+ *    `promptTraduccion(bloque, anteriores)` recibe además las frases anteriores
+ *    de la reunión como contexto (F048, ver `conAnteriores` en `shared/prompts.js`),
+ *    y los dos que producen español piden el de México con `ESPANOL_DE_MEXICO`,
+ *    que un idioma nuevo reutiliza.
  *  - `muestra`: el WAV de la comprobación previa, en `node-backend/test/fixtures`.
  */
 

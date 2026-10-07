@@ -26,6 +26,36 @@ function conContexto (bloque) {
     : ''
 }
 
+/**
+ * F048. Las frases que se dijeron justo antes de la que se traduce, como
+ * contexto y nada más. Va en el sistema y no en el mensaje del usuario: el
+ * mensaje tiene que seguir siendo SOLO la frase, o el modelo la traduce junto
+ * con lo que la precede. Sin frases devuelve vacío, y el prompt queda como si
+ * esto no existiera.
+ *
+ * Medido en los informes v0.6–v0.9 (PLAN.md §17.4, fila 1): «nella mata» salió
+ * «yerba mate» porque la palabra que lo aclara, «ho adorato la Mata Atlantica»,
+ * estaba dos frases antes y Marian no la veía.
+ */
+function conAnteriores (anteriores) {
+  const frases = (Array.isArray(anteriores) ? anteriores : [])
+    .map(f => String(f ?? '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+  return frases.length
+    ? `\nLo que se dijo justo antes (solo contexto: no lo traduzcas ni lo repitas): ${frases.map(f => `«${f}»`).join(' ')}\n`
+    : ''
+}
+
+/**
+ * F048. El español que sale de cualquier prompt de esta aplicación es el de
+ * México. Medido en los informes v0.6–v0.9 (PLAN.md §17.4, fila 4): las
+ * traducciones mezclaban «vosotros» y «ustedes». Una sola frase para todos los
+ * prompts que producen español, para que no se desincronicen; la configuración
+ * de cada idioma la reutiliza.
+ */
+const ESPANOL_DE_MEXICO = 'usa «ustedes» y nunca «vosotros» ni sus formas (sabéis, tenéis, vuestro…), '
+  + 'y el vocabulario de México (computadora, auto, estacionar)'
+
 // ── 0. Traducción italiano → español ────────────────────────────────────────
 /**
  * F040. Con clave de LLM, la traducción IT→ES entera la hace este prompt —
@@ -36,13 +66,19 @@ function conContexto (bloque) {
  * hecha: aquí se pide la traducción entera, y sale mejor que corregirla a
  * medias. `promptRefinado` se queda sin usar — no se borra por si hiciera
  * falta retomar ese enfoque, pero el que corre en producción es este.
+ *
+ * F048: `anteriores` son las últimas frases definitivas de la reunión, en el
+ * idioma original y en orden (ver `conAnteriores`). Sin ellas, el texto es el
+ * de siempre salvo por la línea del español de México.
  */
-function promptTraduccion (bloque) {
+function promptTraduccion (bloque, anteriores) {
   return `Eres un traductor profesional de italiano a español, para una
 reunión de trabajo en vivo.
-${conContexto(bloque)}
+${conContexto(bloque)}${conAnteriores(anteriores)}
 Traduce al español la frase en italiano que se te da. Conserva los nombres
 propios tal como se pronuncian, y el registro (tú/usted) del original.
+
+Escribe en español de México: ${ESPANOL_DE_MEXICO}.
 
 «lei»/«Lei» se traduce como «ella» (tercera persona), salvo que el contexto
 muestre un tratamiento formal evidente hacia el interlocutor —ahí es «usted».
@@ -189,7 +225,8 @@ Devuelve SOLO JSON, sin markdown:
 }
 
 Reglas:
-- El resumen va SIEMPRE en español, aunque la reunión sea en italiano.
+- El resumen va SIEMPRE en español de México, aunque la reunión sea en italiano:
+  ${ESPANOL_DE_MEXICO}.
 - Sé concreto: nombra los temas, las tecnologías y las personas reales.
 - Si el contexto de arriba declara de qué iba la reunión, resume CONTRA eso:
   di si se está cumpliendo, desviando o ampliando.
@@ -203,4 +240,6 @@ module.exports = {
   promptRespuesta,
   promptResumen,
   conContexto,
+  conAnteriores,
+  ESPANOL_DE_MEXICO,
 }

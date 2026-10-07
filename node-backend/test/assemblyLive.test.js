@@ -115,7 +115,8 @@ describe('la URL lleva lo que el modelo necesita', () => {
     assert.strictEqual(u.searchParams.get('speech_model'), 'universal-3-5-pro')
     assert.strictEqual(u.searchParams.get('encoding'), 'pcm_s16le')
     assert.strictEqual(u.searchParams.get('sample_rate'), '16000')
-    assert.strictEqual(u.searchParams.get('language_code'), 'it')
+    // F048: el nombre documentado, con la lista en JSON (antes `language_code=it`).
+    assert.strictEqual(u.searchParams.get('language_codes'), '["it"]')
   })
 
   test('y los dos parámetros de fin de turno, que antes no se mandaban', () => {
@@ -133,7 +134,7 @@ describe('la URL lleva lo que el modelo necesita', () => {
     // Útil si el cliente mete términos ingleses dentro de frases italianas,
     // que en una reunión sobre un ERP pasa constantemente.
     const u = new URL(construirUrl({ idioma: null }))
-    assert.strictEqual(u.searchParams.get('language_code'), null)
+    assert.strictEqual(u.searchParams.get('language_codes'), null)
   })
 
   test('el glosario del proyecto viaja como términos clave', () => {

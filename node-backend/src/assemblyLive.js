@@ -373,10 +373,18 @@ function construirUrl ({ idioma, glosario, contexto, modo }) {
     max_turn_silence: String(MAX_SILENCIO_TURNO_MS),
     end_of_turn_confidence_threshold: String(UMBRAL_CONFIANZA_FIN_TURNO),
   })
-  // Sin `language_code` el modelo alterna idiomas por su cuenta. Se fija el
-  // italiano porque la reunión es en italiano; si el cliente mezcla inglés
-  // técnico, quitarlo permite el cambio de idioma dentro de la frase.
-  if (idioma) p.set('language_code', idioma)
+  // Sin idioma el modelo alterna idiomas por su cuenta. Se fija el de la
+  // reunión; si el cliente mezcla inglés técnico, quitarlo permite el cambio de
+  // idioma dentro de la frase.
+  //
+  // `language_codes` y una lista en JSON, que es el nombre que documenta la API
+  // y como lo arman sus SDK oficiales `[verificado en su código]`. Hasta F048 se
+  // mandaba `language_code=it`, un alias sin documentar. F046 midió el mismo
+  // efecto con los dos: el mismo texto en 14 de 14 pares comparables, y el
+  // servidor valida ambos contra la misma lista `[medido]` (PLAN.md §17.8). Fijar
+  // el idioma es un sesgo, no una regla: no impide transcribir una frase en
+  // español dentro de una reunión en italiano (12 de 12 corridas `[medido]`).
+  if (idioma) p.set('language_codes', JSON.stringify([idioma]))
 
   const terminos = (glosario || []).map(t => String(t).trim()).filter(Boolean).slice(0, 100)
   if (terminos.length) p.set('keyterms_prompt', JSON.stringify(terminos))
