@@ -1710,7 +1710,7 @@ en italiano, porque la pregunta entonativa sin forma interrogativa es menos frec
 | 2 | **Glosario automático**: los nombres propios del contexto y del perfil entran en `keyterms_prompt` | Glosario vacío en las 5 sesiones; Tornatore salió de 4 maneras (Tornator, Tormatore, «è tornato re», «Tornador»), y el nombre del contexto ya decía «entrevista Monica Belluci» | Motor |
 | 3 | Una **palabra suelta con contenido** pasa por Marian en vez de copiarse; «Mm.» y «Ok.» siguen sin traducirse | «Perfetto.» → «Perfetto.» (`traduccionLlm.js:155`) | Motor |
 | 4 | **Español de México** en todos los prompts | Mezcla de vosotros y ustedes | Motor y cada prompt de idioma |
-| 5 | El **parámetro de idioma de AssemblyAI** que el spike mida como efectivo | Ver §17.8 | Motor |
+| 5 | Mandar el idioma con el nombre documentado, `language_codes=["it"]` / `["en"]`: el mismo efecto que el `language_code=it` de hoy | Ver §17.8 | Motor |
 | 6 | «Perché» sin «?» en el original no se convierte en pregunta | «Perché Giulia per tanti anni è stata in Brasile.» → «¿Por qué Giulia…?» | Italiano |
 | 7 | Detector: dos falsos positivos, un falso negativo y un triaje que descarta preguntas cortas con «?» | «Sai, a me piace molto l'arte brasiliana.» y «Perché nella mata c'è proprio l'energia.» salen como pregunta; «…per i lettini. E tu la usi?» sale como no pregunta; «E tu la usi?» sola sale como pregunta pero con `merecePena: false`. Los cuatro reproducidos con el detector de v0.9 | Italiano |
 | 8 | Respuestas: no afirmar nada del interlocutor que no esté en la transcripción o en el contexto; del perfil, usar solo lo que la pregunta pide | «Hai fatto delle ricerche sull'azienda?» → «ho visto che lavorate con sistemi ERP e BI», cuando la empresa buscaba un marketing manager; «Posso avere il tuo nome?» → nombre, empresa y proyectos | Italiano; la misma regla va escrita en el prompt inglés |
@@ -1821,29 +1821,53 @@ vacía: sin claves, sin perfiles y sin reuniones. Por eso la app fija `userData`
 carpeta de siempre (`%APPDATA%\Traductor Italiano`) antes de `ready`. El `appId` sí
 cambia: el de hoy termina en `.diagnostico`, que es un resto de la fase −1.
 
-### 17.8 Antes de construir: el spike F046
+### 17.8 Lo que midió el spike F046 (07-10-2026)
 
-1. **`language_codes` contra `language_code`.**
-   - La documentación actual de AssemblyAI pasa el idioma como `language_codes`, en plural
-     y como lista `[verificado en la doc]`. El código manda `language_code=it`
-     (`assemblyLive.js:379`).
-   - Si el servidor ignora ese parámetro, **hoy el italiano no está fijado**: va en
-     detección automática.
-   - Hay un indicio en los informes: el entrevistador del vídeo de Bellucci habla en
-     español, y la transcripción mezcla los dos idiomas («Se riesci a fare un resumen
-     rápido del argumento de la película»).
-   - Se mide con las dos variantes del parámetro y audio en los dos idiomas.
-2. **Marian en→es:** que cargue con `q8` y cuánto tarda frente a it→es `[por medir]`.
-3. **`ingles.wav`** para la comprobación previa.
+**El idioma sí está fijado hoy.** `language_code=it` es un alias que la referencia de la API
+no documenta, pero tiene el mismo efecto que el nombre documentado, `language_codes=["it"]`:
+el mismo texto en 14 de 14 pares comparables, y el servidor valida los dos contra la misma
+lista `[medido]`. La lista va en la URL como JSON, igual que la arman los SDK oficiales
+`[verificado en su código]`.
+
+Fijarlo es un **sesgo, no una regla**. Con audio limpio no cambia nada, ni siquiera
+fijando el idioma contrario. Con audio corto o ambiguo sí importa: sin idioma, «Sì.» sale
+«See.» y «Perfetto.» sale «Perfecto.»; con el idioma fijado, salen bien. Y no impide
+transcribir español como español: la prueba mezclada (italiano + una frase en español)
+dejó el español íntegro en 12 de 12 corridas `[medido]`. El «italiano roto» del vídeo de
+Bellucci no se reprodujo con voz sintética, ni con ruido a 5 y 0 dB.
+
+**Decisión para F048:** mantener el idioma fijado, mandado como `language_codes=["it"]` o
+`["en"]`, que es el nombre documentado y tiene el mismo efecto que hoy. No se añade `es` a
+la lista, porque no mostró ninguna ganancia.
+
+**Un aviso de modelo.** La documentación y la tarifa ya señalan `universal-3-6-pro` como
+el modelo de streaming `[verificado]`; `universal-3-5-pro` sigue aceptado `[medido]`. En
+3.6 el idioma fijado pesa mucho más (`["ja"]` sobre audio italiano dio cero turnos). No se
+cambia de modelo sin repetir el spike: el troceo de F031 está calibrado con 3.5.
+
+**Una palabra que se pierde (F056).** Cuando el servidor parte el turno en la pausa entre
+las dos oraciones de `italiano.wav`, la segunda llega sin su primera palabra («Il cliente
+ha chiesto…» → «cliente ha chiesto…»), en 25 de 25 particiones `[medido]`. Es voz
+sintética con una pausa corta, y en los informes reales hay turnos que sí empiezan por
+«Il» o por «E». Hay que reproducirlo por `assemblyLive.js` antes de tocar nada.
+
+**Marian en→es** `[medido]` (Apple M5, `q8`, p50 de 15 muestras): 73,5 ms frente a 70,3 ms
+de it→es, es decir +6 %. Ocupa 119,4 MB en caché frente a 112,7 MB, y deja los mismos seis
+archivos, con los dos `.onnx` cuantizados. Cuatro de cinco traducciones son buenas; falla
+«move the delivery up» → «trasladara», que en realidad es «adelantar». Es justo la clase
+de error que corrige la vía del LLM.
+
+**`ingles.wav`:** 5,69 s, PCM16 a 16 kHz mono, generado con `say -v Samantha`.
 
 ### 17.9 Tareas
 
 | # | Tarea | Quién | Revisión |
 |---|---|---|---|
-| F046 | Spike: parámetro de idioma de AssemblyAI, Marian en→es e `ingles.wav` | Sonnet | Líder |
+| F046 | Spike: parámetro de idioma de AssemblyAI, Marian en→es e `ingles.wav` — **hecha** (§17.8) | Sonnet | Líder |
 | F047 | Registro de idiomas: el italiano entra sin tocarse | Sonnet | Líder |
 | F048 | Mejoras del motor común (§17.4, 1–5) | Sonnet | Líder, con prueba directa sobre el texto real |
 | F049 | Mejoras del italiano (§17.4, 6–8) | Sonnet | Líder, con prueba directa sobre el texto real |
+| F056 | La primera palabra que se pierde al partir el turno: reproducir por `assemblyLive.js` y corregir si se confirma | Sonnet | Líder |
 | F050 | Configuración inglesa | Sonnet | Líder |
 | F051 | Pantalla de idioma, nombre ArtTranslatorV2 y etiqueta en Conversaciones | Sonnet | Líder, con captura en modo demo |
 | F052 | Informes: siempre números, la conversación solo con permiso | Sonnet | Opus (privacidad y red) |
@@ -1861,6 +1885,7 @@ F042–F045 `[medido]`, más tres revisiones Opus.
 - **Una reunión real de 20–30 minutos en cada idioma.** Todas las cifras de §17.2 salen de
   vídeos.
 - El tamaño del paquete con los dos Marian, unos 400 MB `[por medir]`.
+- Si la pérdida de la primera palabra al partir el turno (F056) pasa con habla real `[por medir]`.
 - Si las placas de los equipos del cliente traen un UUID SMBIOS válido `[por medir]`.
 - Que electron-builder 26 aplique los fusibles con el destino `--win dir` `[por medir]`.
 
