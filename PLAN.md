@@ -1,7 +1,11 @@
-# ArtTranslator Italian — Plan de proyecto
+# ArtTranslatorV2 — Plan de proyecto
 
-Traductor en vivo **Italiano → Español** para reuniones, con perfil de quien escucha,
-contexto de proyecto por llamada y respuestas sugeridas en italiano.
+Traductor en vivo **Italiano o Inglés → Español** para reuniones, con perfil de quien
+escucha, contexto de proyecto por llamada y respuestas sugeridas en el idioma de la reunión.
+
+Hasta v0.9 se llamó *Traductor Italiano* y solo traducía italiano. La V2 añade inglés con
+una configuración independiente de la italiana, más las mejoras, los informes y la
+licencia que planifica §17.
 
 Derivado de `ArtTranslator` (Electron/Node, EN→ES) y de los diseños de
 `ArtTranslatorNative` (Swift/macOS).
@@ -47,7 +51,11 @@ se discute y se cambia el documento; no se salta.
 | 15 | Marian en un **`utilityProcess`** aparte, con `intraOpNumThreads` acotado | Un fallo nativo de ONNX se lleva la app entera a mitad de reunión, y compite por hilos con Whisper |
 | 16 | **La app traduce sin ninguna API key**; la pantalla de la key es salteable | Un muro de configuración antes de que el usuario vea que funciona |
 | 17 | **Un solo veredicto** en la comprobación previa, con el detalle plegado | Cuatro semáforos en ámbar y un usuario no técnico que no sabe si seguir |
-| 18 | Las respuestas sugeridas van **solo en italiano** | No es lo que pidió el cliente |
+| 18 | Las respuestas sugeridas van **solo en el idioma de la reunión** —italiano o inglés—, sin glosa. Ampliado desde «solo en italiano» al añadir inglés (§17) | No es lo que pidió el cliente |
+| 19 | Cada idioma que se ofrece lleva **su Marian embebido**, y `verificar-paquete.sh` lo comprueba. Un idioma sin su modelo no se ofrece | Quien elige ese idioma en un equipo sin clave de LLM se queda sin traducción, y se rompe el 16 |
+| 20 | **Las configuraciones de idioma son independientes**: añadir o cambiar un idioma no toca los archivos del otro, y la suite del otro sigue verde **sin modificar ninguna prueba** | Una mejora del inglés degrada en silencio el italiano, que es el que ya funciona en casa del cliente |
+| 21 | La licencia se comprueba **al arrancar, nunca a mitad de reunión**, y un equipo ya activado sigue funcionando sin el servidor mientras su permiso firmado esté vigente | Una caída del VPS deja sin app a todos los equipos, o una renovación fallida corta una llamada en curso |
+| 22 | Con el envío de informes apagado **no sale ninguna palabra** de la reunión, del perfil ni del contexto: solo números | El usuario apaga el envío creyendo que protege su privacidad, y su nombre, su empresa y su descripción siguen saliendo. **Hoy pasa**: el modo solo métricas conserva la cabecera entera (`informes.js:91-94`) |
 
 ---
 
@@ -1093,7 +1101,10 @@ con el "ahorro por caché" que aparece en todas las guías.
 Aun con las tres capas quedarán falsos negativos en preguntas puramente entonativas. Es un
 límite del texto, no del modelo.
 
-### Respuestas: solo en italiano
+### Respuestas: solo en el idioma de la reunión
+
+> **Desde V2 (§17):** en italiano o en inglés, según el idioma elegido al entrar. Lo que
+> sigue se escribió para el italiano y vale igual para el inglés.
 
 Sin glosa. Son para decirlas en voz alta: 2-3 frases, máximo 500 caracteres, generadas
 **al abrir la pregunta** y nunca en segundo plano, para que el panel no pueda frenar la
@@ -1604,11 +1615,264 @@ fiable y un "no" ambiguo, y **no puede probar la ruta B en absoluto**.
 
 ---
 
+## 17. ArtTranslatorV2: inglés, mejoras del italiano, informes y licencia
+
+Planificado el 07-10-2026, después de leer los informes que subió v0.6–v0.9. Son cuatro
+bloques que viajan en la misma versión: un segundo idioma, los detalles que los informes
+señalaron en el italiano, un interruptor de informes que ya no deje dudas, y un tope de
+equipos por licencia.
+
+### 17.1 Las decisiones
+
+| Decisión | Por qué |
+|---|---|
+| Se añade **inglés → español**. Al abrir, una pantalla elige el idioma y después se entra a las secciones de siempre | El sistema es el mismo; solo cambia el motor de idioma |
+| **Las dos configuraciones son independientes.** Los archivos del italiano se quedan donde están y como están; el inglés trae los suyos; un registro elige cuál usar | Que una mejora del inglés no pueda degradar el italiano (§0.20) |
+| **El motor es común**: captura, AssemblyAI, troceo, autoguardado, perfiles, conversaciones, informes e interfaz | Prioridad nº 3. Las mejoras del motor (§17.4) llegan a los dos idiomas |
+| Mismo modelo de STT para inglés: `universal-3-5-pro`, 0,45 $/h | El troceo de F031 está calibrado con él. Existe un modelo solo-inglés a 0,15 $/h `[verificado, §10]`, pero cambiarlo obliga a recalibrar el troceo. Prioridad nº 2 sobre la nº 3 |
+| Nombre: **ArtTranslatorV2** | Ya no es solo italiano |
+| Español de **México**: ustedes y nunca vosotros, auto, estacionar, computadora | Una misma sesión mezcló «vosotros lo sabéis» y «son afortunados» `[medido]`. Elegido el 07-10-2026 |
+| Perfiles compartidos entre idiomas; Conversaciones juntas, con etiqueta IT/EN | El perfil es quién eres, no en qué idioma te hablan |
+| Informes: **siempre los números; la conversación, solo con el interruptor encendido** | §17.5 |
+| **Un solo zip**, con la licencia dentro y un tope de equipos (6 por defecto) | §17.6 |
+
+### 17.2 Lo que dijeron los informes de v0.6 a v0.9 `[medido]`
+
+Ocho informes en el VPS: uno de desarrollo, dos vacíos (se abrió y se cerró sin audio) y
+**cinco con contenido: 25,8 minutos, 162 frases, dos equipos**. Todos son pruebas con
+vídeos de YouTube; **no hay ninguna reunión real**, y no llega nada desde el 22-09. Con el
+interruptor de F045, un informe que no llega no distingue «no se usó» de «se apagó el
+envío»: §17.5 lo resuelve.
+
+| | v0.6 Marian | v0.7–0.9 LLM, monólogo | v0.9 LLM, diálogo |
+|---|---|---|---|
+| Fin de turno → burbuja, p50 | 1,6 s | 1,9–2,1 s | 1,3 s |
+| Duración del turno, p50 | 8,2 s | 7,1–7,8 s | 2,2 s |
+| Hueco entre burbujas p50 / p90 / máx | 9,4 / 14 / 19 s | 8,2–8,8 / 17–19 / 28 s | 6,5 s |
+| Cortes por tope duro | 45 % | 29–42 % | 5 % |
+| Acaban en puntuación | 95 % | 96–97 % | 100 % |
+
+- **La traducción por LLM es claramente mejor que Marian.** El mismo vídeo pasó por v0.6 y
+  por v0.7, y el LLM resolvió los nombres propios, «erotismo», «pazzo» y «perché».
+- **El cuello de botella es la duración del turno en los monólogos, no la traducción.** En
+  diálogo va sobrado. Los topes de F031 no se tocan sin una reunión real.
+- **Lo que hay que corregir son detalles** (§17.4).
+- **Un sesgo de los datos:** los vídeos traen a las dos partes hablando. En una reunión
+  real el loopback no capta el micrófono del usuario, así que parte de las preguntas
+  detectadas de más y de las respuestas «al lado equivocado» vienen de cómo se probó.
+
+### 17.3 Cómo entra el inglés sin tocar el italiano
+
+Un registro, `node-backend/src/idiomas.js`, con una entrada por idioma. Cada entrada dice
+qué piezas usa ese idioma:
+
+| Pieza | Italiano: **no se toca** | Inglés: **archivos nuevos** |
+|---|---|---|
+| Código para AssemblyAI | `it` | `en` |
+| Contexto que recibe el STT | `Progetto: …` | `Project: …` |
+| Marian | `Xenova/opus-mt-it-es` | `Xenova/opus-mt-en-es`, 52,9 + 60,2 MB cuantizado `[verificado]` |
+| Abreviaturas del troceo | Las de `frases.js` (sig., dott., ecc.) | Mr., Mrs., Dr., e.g., i.e., vs., etc. |
+| Detector de preguntas | `questionDetector.js` | `detectorPreguntasIngles.js` |
+| Prompts de traducción, respuesta y resumen | `shared/prompts.js` | `shared/promptsIngles.js` |
+| Muestra de la comprobación previa | `italiano.wav` | `ingles.wav` (`say -v Samantha`) |
+| Textos de la interfaz que nombran el idioma | «IT → ES», «Cuando alguien hable en italiano…» | «EN → ES», «Cuando alguien hable en inglés…». La interfaz sigue en español |
+
+**El motor cambia para aceptar el idioma, y si no se le dice nada usa `'it'`.** Esto
+afecta a `empezarSesion`, `AssemblyLiveTranscriber`, `translator.js` (pasa de un
+singleton a un mapa por idioma, y solo carga el modelo del idioma elegido), `partirTurno`
+(recibe las abreviaturas), `crearTraductorLlm`, `MotorRespuestas` y `MotorResumen`
+(reciben el prompt y el detector), la cabecera del `.jsonl` (gana `idioma`) y la tabla
+`sessions` (gana `language`). **La prueba de que el italiano no se movió: la suite actual
+pasa sin modificar ninguna prueba existente.**
+
+El campo `it` del `.jsonl` se queda como «texto original» aunque guarde inglés.
+Renombrarlo rompería 37 pruebas, el lector del VPS y el filtro de privacidad de
+`informes.js`. Un `.jsonl` sin `idioma` en la cabecera se lee como italiano.
+
+**El detector inglés** mira cuatro cosas:
+
+- Palabras interrogativas: what, why, how, when, where, who, which, whose.
+- Auxiliar invertido al inicio con «you» o «we»: do, does, did, can, could, would, will,
+  should, have, has, are, is.
+- Coletillas: right?, isn't it?, don't you think?
+- Peticiones: can you, could you, would you mind.
+
+Las fórmulas de cortesía van en gris y no gastan llamada: «can you hear me», «how are
+you», «can you see my screen». Para no caer en falsos positivos, ignora las muletillas al
+inicio («you know», «so», «well», «I mean»). En inglés el «?» de AssemblyAI pesa más que
+en italiano, porque la pregunta entonativa sin forma interrogativa es menos frecuente.
+
+### 17.4 Mejoras sacadas de los informes
+
+| # | Qué | Evidencia `[medido]` | Dónde |
+|---|---|---|---|
+| 1 | Traducir con las **dos frases anteriores** como contexto, marcadas «no traducir» | «nella mata» → «yerba mate» (dos frases antes: «ho adorato la Mata Atlantica»); «il primo clac» → «la primera claqueta»; «due mandate» → «dos mandatos»; «Hai fatto…?» → «¿Ha hecho…?» | Motor |
+| 2 | **Glosario automático**: los nombres propios del contexto y del perfil entran en `keyterms_prompt` | Glosario vacío en las 5 sesiones; Tornatore salió de 4 maneras (Tornator, Tormatore, «è tornato re», «Tornador»), y el nombre del contexto ya decía «entrevista Monica Belluci» | Motor |
+| 3 | Una **palabra suelta con contenido** pasa por Marian en vez de copiarse; «Mm.» y «Ok.» siguen sin traducirse | «Perfetto.» → «Perfetto.» (`traduccionLlm.js:155`) | Motor |
+| 4 | **Español de México** en todos los prompts | Mezcla de vosotros y ustedes | Motor y cada prompt de idioma |
+| 5 | El **parámetro de idioma de AssemblyAI** que el spike mida como efectivo | Ver §17.8 | Motor |
+| 6 | «Perché» sin «?» en el original no se convierte en pregunta | «Perché Giulia per tanti anni è stata in Brasile.» → «¿Por qué Giulia…?» | Italiano |
+| 7 | Detector: dos falsos positivos, un falso negativo y un triaje que descarta preguntas cortas con «?» | «Sai, a me piace molto l'arte brasiliana.» y «Perché nella mata c'è proprio l'energia.» salen como pregunta; «…per i lettini. E tu la usi?» sale como no pregunta; «E tu la usi?» sola sale como pregunta pero con `merecePena: false`. Los cuatro reproducidos con el detector de v0.9 | Italiano |
+| 8 | Respuestas: no afirmar nada del interlocutor que no esté en la transcripción o en el contexto; del perfil, usar solo lo que la pregunta pide | «Hai fatto delle ricerche sull'azienda?» → «ho visto che lavorate con sistemi ERP e BI», cuando la empresa buscaba un marketing manager; «Posso avere il tuo nome?» → nombre, empresa y proyectos | Italiano; la misma regla va escrita en el prompt inglés |
+
+Las pruebas de 6–8 usan las frases reales del informe, pero **con un perfil ficticio**:
+el perfil de un informe nunca entra en el repositorio.
+
+### 17.5 Informes: siempre los números, la conversación solo con permiso
+
+Hoy (F045), el interruptor encendido manda el informe completo y apagado no manda nada. Si
+no llega un informe, no se sabe si no se usó la app o si alguien apagó el envío.
+
+| «Permitir el envío» | Qué sale |
+|---|---|
+| Encendido (por defecto) | El informe completo: frases, preguntas, respuestas, perfil y contexto |
+| Apagado | **Solo números**: duraciones, latencias, cuántas frases, preguntas y respuestas, longitudes, banderas del troceo, versión, idioma y nombre del equipo. **Ni una palabra de la reunión, del perfil ni del contexto** |
+
+- **Se registra el interruptor.** Cada cabecera lleva `modoInforme` y los cambios desde el
+  informe anterior, con su hora. Así se sabe si alguien lo apagó y cuándo.
+- **Fuga que hay que cerrar en el mismo cambio (§0.22).** Hoy el modo solo métricas
+  conserva la cabecera tal cual, con el perfil (nombre, edad, ocupación, descripción) y el
+  contexto (`informes.js:91-94`). Pasan a sustituirse por longitudes y banderas.
+- **Usuarios de v0.9.** Un `no` guardado se lee como `metricas`: quien apagó el envío en
+  v0.9 pasa a mandar números, y el aviso lo dice.
+- **El aviso en Ajustes, con el texto exacto:** «Siempre se envían al equipo datos técnicos
+  de cada reunión —tiempos, número de frases y versión—, nunca lo que se dijo. Con
+  "Permitir el envío" encendido se envía también la conversación completa y tu perfil,
+  para mejorar la traducción.»
+- **El LEEME.** Hoy no menciona los informes. Su apartado «SOBRE LA PRIVACIDAD» lo explicará
+  igual.
+- **Métrica nueva:** cuántas veces se pidió «Otra respuesta». Es el único indicio numérico
+  de que una respuesta no sirvió.
+- **Uso sin reuniones.** Con la licencia (§17.6), cada arranque queda registrado en el
+  servidor, así que «¿se usa?» se contesta aunque no haya reuniones.
+
+### 17.6 Licencia: un zip, un tope de equipos
+
+Si el zip se copia o se revende, **el equipo número 7 no arranca**. El tope es por licencia
+y se puede cambiar (6 por defecto). Se entrega un solo zip con la licencia del cliente
+dentro, y se activa sola, sin clave ni clic (prioridad nº 1).
+
+**Qué cuenta como un equipo: la huella de la computadora.** Son dos identificadores de
+Windows convertidos en hash, con la licencia como sal; el servidor nunca ve el valor
+original:
+
+| Identificador | Cambia si… | Para qué sirve |
+|---|---|---|
+| `MachineGuid` (`HKLM\SOFTWARE\Microsoft\Cryptography`) | Se reinstala Windows. Los clones de una misma imagen lo comparten | La comprobación local en cada arranque, que es rápida (`reg query`) |
+| UUID de la placa (SMBIOS, `Win32_ComputerSystemProduct`) | Se cambia la placa. Algunas placas baratas lo traen vacío o repetido | Que reinstalar Windows en la misma computadora no gaste otra plaza |
+
+El servidor da por conocido un equipo si coincide cualquiera de los dos identificadores.
+Reinstalar la app, moverla de carpeta o reinstalar Windows **no gasta plaza**. Cada
+activación queda registrada igualmente, así que se sabe cuántas veces se instaló y cuándo.
+
+**El flujo:**
+
+1. Al arrancar, la app calcula la huella y busca su permiso guardado.
+2. Si no hay permiso, pide uno con `POST https://arturoocampo.com/licencias/activar`,
+   mandando licencia, huellas, nombre del equipo y versión.
+   - Si quedan plazas o el equipo ya estaba registrado, el servidor devuelve un permiso firmado.
+   - Si no, la app muestra una pantalla de bloqueo: «Esta copia ya está activada en 6
+     equipos, el máximo de la licencia», con el contacto.
+3. El permiso es un JSON firmado con Ed25519: `{licencia, huellas, emitido, caduca}`. La
+   clave privada vive **solo en el `.env` del VPS** y la pública va en la app, que verifica
+   el permiso sin red.
+4. Con el permiso vigente, la app lo renueva en segundo plano. La caducidad la fija el
+   servidor (14 días por defecto), así que cambiarla no exige una versión nueva.
+5. Sin red: con el permiso vigente, la app funciona. Sin permiso o con el permiso caducado,
+   muestra «Conéctate a internet una vez para activar».
+6. **Nunca a mitad de reunión (§0.21).** La comprobación es al arrancar; una revocación que
+   llega durante una reunión se aplica en el siguiente arranque.
+7. En desarrollo (`!app.isPackaged`) no hay licencia ni se gasta plaza.
+
+**Servidor.** La ruta nueva va en `vps/servidor.js`, sin dependencias, igual que el receptor
+de informes:
+
+- Los datos van en un volumen aparte, `/datos/licencias`.
+- Tiene freno por IP.
+- Responde lo mismo a una licencia inexistente y a una revocada, para no revelar cuáles
+  existen.
+- Se administra por ssh, igual que `descargar.sh`, con
+  `vps/licencias.sh crear | listar | liberar | revocar | tope`.
+- Toda llamada desde la app va por el módulo `net` de Electron (§0.13).
+
+**Dónde vive la comprobación en la app.** Va dentro de `app.asar` (`electron-app/src/`) y
+es autocontenida: solo usa módulos de Node y de Electron. El backend y `shared/` viajan
+**fuera** del asar como `extraResources`, en texto plano; si la comprobación dependiera de
+ellos, bastaría editar un archivo para saltarla. Se activan dos fusibles de Electron,
+`enableEmbeddedAsarIntegrityValidation` y `onlyLoadAppFromAsar` (Windows los admite desde
+Electron 30 `[verificado]`), y se apagan `runAsNode` y `enableNodeCliInspectArguments`.
+
+**Lo que no promete, dicho claro.** Frena la copia, que es el caso real: llevar el zip a
+otra computadora. No frena a un programador que desarme el paquete. Sin firma Authenticode
+(§10 decidió no comprarla), la verificación de integridad se puede saltar parcheando el
+`.exe`. Contra eso está el contrato con el cliente, no el código. Si la app se va a
+distribuir a terceros, se vuelve a abrir la decisión de §10, «Instalador y firma».
+
+**Privacidad.** El servidor de licencias guarda la licencia, las huellas (en hash), el
+nombre del equipo, la versión y las fechas. Nada de la reunión. Va escrito en el LEEME.
+
+### 17.7 Nombre y carpeta de datos
+
+`productName` pasa a `ArtTranslatorV2`: el `.exe`, la ventana y el zip
+`ArtTranslatorV2-Windows.zip`.
+
+Electron saca la carpeta de datos del nombre de la app. Sin hacer nada, la V2 arrancaría
+vacía: sin claves, sin perfiles y sin reuniones. Por eso la app fija `userData` a la
+carpeta de siempre (`%APPDATA%\Traductor Italiano`) antes de `ready`. El `appId` sí
+cambia: el de hoy termina en `.diagnostico`, que es un resto de la fase −1.
+
+### 17.8 Antes de construir: el spike F046
+
+1. **`language_codes` contra `language_code`.**
+   - La documentación actual de AssemblyAI pasa el idioma como `language_codes`, en plural
+     y como lista `[verificado en la doc]`. El código manda `language_code=it`
+     (`assemblyLive.js:379`).
+   - Si el servidor ignora ese parámetro, **hoy el italiano no está fijado**: va en
+     detección automática.
+   - Hay un indicio en los informes: el entrevistador del vídeo de Bellucci habla en
+     español, y la transcripción mezcla los dos idiomas («Se riesci a fare un resumen
+     rápido del argumento de la película»).
+   - Se mide con las dos variantes del parámetro y audio en los dos idiomas.
+2. **Marian en→es:** que cargue con `q8` y cuánto tarda frente a it→es `[por medir]`.
+3. **`ingles.wav`** para la comprobación previa.
+
+### 17.9 Tareas
+
+| # | Tarea | Quién | Revisión |
+|---|---|---|---|
+| F046 | Spike: parámetro de idioma de AssemblyAI, Marian en→es e `ingles.wav` | Sonnet | Líder |
+| F047 | Registro de idiomas: el italiano entra sin tocarse | Sonnet | Líder |
+| F048 | Mejoras del motor común (§17.4, 1–5) | Sonnet | Líder, con prueba directa sobre el texto real |
+| F049 | Mejoras del italiano (§17.4, 6–8) | Sonnet | Líder, con prueba directa sobre el texto real |
+| F050 | Configuración inglesa | Sonnet | Líder |
+| F051 | Pantalla de idioma, nombre ArtTranslatorV2 y etiqueta en Conversaciones | Sonnet | Líder, con captura en modo demo |
+| F052 | Informes: siempre números, la conversación solo con permiso | Sonnet | Opus (privacidad y red) |
+| F053 | Licencia, lado del servidor | Sonnet | Opus (claves, red y dinero) |
+| F054 | Licencia, lado de la app | Sonnet | Opus (claves, red y dinero) |
+| F055 | Paquete v1.0.0: los dos Marian, los dos WAV, licencia incrustada, fusibles, verificador y LEEME. El líder despliega el servidor de F053 antes de publicar | Sonnet | Verificador del paquete |
+
+Van una detrás de otra (`init.sh` no admite dos tareas en curso). Coste: unos **2 M tokens**
+de subagentes `[estimado]`, a razón de ~0,15 M por tarea Sonnet, que es lo que costaron
+F042–F045 `[medido]`, más tres revisiones Opus.
+
+### 17.10 Lo que queda por medir
+
+- El troceo con habla inglesa `[por medir]`: los topes de F031 se calibraron con italiano.
+- **Una reunión real de 20–30 minutos en cada idioma.** Todas las cifras de §17.2 salen de
+  vídeos.
+- El tamaño del paquete con los dos Marian, unos 400 MB `[por medir]`.
+- Si las placas de los equipos del cliente traen un UUID SMBIOS válido `[por medir]`.
+- Que electron-builder 26 aplique los fusibles con el destino `--win dir` `[por medir]`.
+
+---
+
 ## Referencias
 
 - [Electron — `setDisplayMediaRequestHandler`](https://www.electronjs.org/docs/latest/api/session) · [`safeStorage`](https://www.electronjs.org/docs/latest/api/safe-storage) · [issue #12365, cambio de dispositivo de salida](https://github.com/electron/electron/issues/12365)
 - [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases) — anclar `b5130`
-- [Helsinki-NLP/opus-mt-it-es](https://huggingface.co/Helsinki-NLP/opus-mt-it-es) · [Xenova/opus-mt-it-es](https://huggingface.co/Xenova/opus-mt-it-es) (ONNX)
+- [Helsinki-NLP/opus-mt-it-es](https://huggingface.co/Helsinki-NLP/opus-mt-it-es) · [Xenova/opus-mt-it-es](https://huggingface.co/Xenova/opus-mt-it-es) (ONNX) · [Xenova/opus-mt-en-es](https://huggingface.co/Xenova/opus-mt-en-es/tree/main/onnx) (ONNX, §17)
+- [AssemblyAI — transcripción multilingüe en streaming](https://www.assemblyai.com/docs/streaming/multilingual-transcription) — `language_codes` (§17.8)
+- [Electron — ASAR Integrity](https://electronjs.org/docs/latest/tutorial/asar-integrity) · [electron-builder — `electronFuses`](https://www.electron.build/docs/api/app-builder-lib.interface.fuseoptionsv1/) (§17.6)
 - [openai/whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) — *"the exact same model, except that the number of decoding layers have reduced from 32 to 4"*
 - [AssemblyAI pricing](https://www.assemblyai.com/pricing) · [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
 - `ArtTranslator/CLAUDE.md` · `ArtTranslatorNative/README.md`
