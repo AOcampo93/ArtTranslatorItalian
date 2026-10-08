@@ -1,7 +1,7 @@
 {
   "name": "art-translator-italian-diagnostico",
-  "version": "0.9.0",
-  "description": "Herramienta de diagnóstico: mide el equipo antes de instalar el traductor",
+  "version": "1.0.0",
+  "description": "ArtTranslatorV2: traductor en vivo de italiano o inglés a español, con respuestas sugeridas en el idioma de la reunión",
   "main": "src/mainApp.js",
   "scripts": {
     "start": "electron .",
@@ -73,6 +73,13 @@
     "asarUnpack": [
       "**/*.node"
     ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
     "compression": "store"
   }
 }

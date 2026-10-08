@@ -1,5 +1,6 @@
-TRADUCTOR ITALIANO → ESPAÑOL
-Versión de prueba
+ARTTRANSLATORV2
+Traductor en vivo: italiano o inglés → español
+Versión 1.0.0
 ==============================================
 
 
@@ -7,10 +8,31 @@ QUÉ HACE
 --------
 
 Escucha el audio de tu computadora durante una videollamada, transcribe lo que
-se dice en italiano, y lo traduce al español en pantalla mientras hablan.
+se dice —en italiano o en inglés, el que tú elijas— y lo traduce al español en
+pantalla mientras hablan.
 
 Además detecta las preguntas que te hacen a ti y te sugiere una respuesta
-**en italiano**, para que puedas decirla en voz alta.
+**en el mismo idioma de la reunión** (italiano o inglés), para que puedas
+decirla en voz alta.
+
+
+LOS DOS IDIOMAS
+---------------
+
+Lo primero que ves al abrir la aplicación, cada vez, es la pregunta «¿En qué
+idioma te van a hablar en esta reunión?», con dos botones:
+
+  · Italiano → Español
+  · Inglés → Español
+
+Elige el de la reunión que vas a tener. La aplicación te marca cuál fue el
+último que elegiste. Si te equivocas, o la siguiente reunión es en el otro
+idioma, pulsa "Cambiar idioma" en el panel de inicio. No se puede cambiar
+mientras la aplicación está escuchando.
+
+Cada idioma trae dentro su propio traductor al español: no se descarga nada al
+abrirla, y la traducción se hace en tu computadora. Las respuestas que te
+sugiere salen en el idioma que elegiste.
 
 
 CÓMO INSTALARLA
@@ -19,13 +41,83 @@ CÓMO INSTALARLA
 1. Extrae esta carpeta en el disco local. No la ejecutes desde dentro del ZIP
    y no la dejes en una unidad de red: en los dos casos va lenta.
 
-2. Abre "Traductor Italiano.exe".
+2. Abre "ArtTranslatorV2.exe" (está dentro de la carpeta win-unpacked).
 
 3. Windows puede avisar de que no reconoce el programa. Es normal: la
    aplicación no está firmada todavía. Elige "Más información" y luego
    "Ejecutar de todas formas".
 
+4. La primera vez necesita internet unos segundos para activarse (ver LA
+   LICENCIA, más abajo). No tienes que escribir ninguna clave.
+
 No hace falta instalar nada más.
+
+
+SI YA TENÍAS LA VERSIÓN ANTERIOR ("Traductor Italiano", v0.9)
+-------------------------------------------------------------
+
+Para que tus perfiles y tus contextos de proyecto pasen a esta versión, extrae
+este ZIP ENCIMA de la carpeta donde tienes la anterior:
+
+1. Cierra la aplicación vieja, si está abierta.
+
+2. Extrae el ZIP en la MISMA carpeta en la que extrajiste la versión anterior:
+   la que contiene la carpeta win-unpacked. Si Windows pregunta qué hacer con
+   los archivos que ya existen, elige "Reemplazar los archivos en el destino".
+
+3. Abre "ArtTranslatorV2.exe". La primera vez, la aplicación copia sus perfiles
+   y sus contextos desde la carpeta de la versión anterior. Nada se mueve ni se
+   borra allí.
+
+Tus claves y tus reuniones guardadas se conservan siempre, estés donde estés:
+la aplicación las guarda en tu usuario de Windows y no dentro de su carpeta.
+
+"Traductor Italiano.exe" se queda en esa carpeta. Ya no hace falta y puedes
+borrarlo.
+
+PARA LAS VERSIONES QUE VENGAN DESPUÉS de esta: extrae cada una en una carpeta
+NUEVA y ábrela desde ahí. Tus perfiles ya estarán guardados en tu usuario. Si la
+extraes encima de la anterior y la nueva versión quita o renombra algún archivo,
+el viejo se queda sobrando y la aplicación avisa de "copia modificada".
+
+
+LA LICENCIA
+-----------
+
+Esta copia lleva su licencia dentro, y cada licencia sirve para 6 equipos
+(computadoras). No hay clave que escribir ni nada que pulsar: la primera vez
+que abres la aplicación en una computadora, con internet, se activa sola.
+
+  · Después, la aplicación recuerda la activación y funciona aunque no haya
+    internet. Cada vez que la abres con internet, la renueva sola. Sin
+    renovarla, la activación dura por ahora unos 14 días.
+
+  · Se comprueba al abrir la aplicación, nunca a mitad de una reunión: una
+    reunión en marcha no se corta por esto.
+
+  · Reinstalar la aplicación, moverla de carpeta o reinstalar Windows en la
+    misma computadora no gasta otra plaza. Cambiar la placa base de la
+    computadora sí: cuenta como un equipo nuevo.
+
+**Qué pasa en el equipo número 7.** Si este ZIP se copia a una séptima
+computadora, ahí la aplicación no arranca. Muestra la pantalla "Esta copia ya
+está activada en 6 equipos, el máximo de la licencia", con el contacto para
+pedir que se libere una plaza. Las seis computadoras anteriores siguen
+funcionando igual que siempre. El tope se puede cambiar: pídelo a quien te
+entregó la copia.
+
+Otras pantallas que puedes ver al abrirla:
+
+  · "Conéctate a internet una vez para activar": esa computadora todavía no se
+    ha activado, o la activación caducó y no hay conexión. Conéctate y pulsa
+    "Reintentar". Si ya estás conectado, revisa la fecha y la hora de Windows.
+
+  · "Esta copia está modificada; descárgala de nuevo": algún archivo de la
+    aplicación no es el original. Descarga el ZIP otra vez, extráelo en una
+    carpeta nueva y ábrelo desde ahí.
+
+  · "Esta copia no tiene licencia" o "no tiene una licencia válida": avisa a
+    quien te entregó la copia.
 
 
 ANTES DE LA PRIMERA REUNIÓN
@@ -50,7 +142,7 @@ ANTES DE LA PRIMERA REUNIÓN
 
 4. Pulsa "Comprobar". Mide tres cosas: si oye el audio de tu computadora, qué
    tan rápido responde el servicio desde tu conexión, y cuánto tarda la cadena
-   completa con una frase de prueba.
+   completa con una frase de prueba en el idioma que elegiste.
 
 
 DURANTE LA REUNIÓN
@@ -110,6 +202,23 @@ el envío", en Ajustes:
 
 Si lo apagas, desde ese momento sólo salen los datos técnicos.
 
+La licencia es otra cosa y no depende de ese interruptor. Cada vez que abres la
+aplicación con internet —la primera para activarla, las siguientes para
+renovarla— el servidor de licencias guarda:
+
+- La licencia de esta copia.
+- El nombre de la computadora, normalizado (sin acentos ni espacios: "Sala de
+  juntas" queda como "Sala-de-juntas").
+- Dos huellas de la computadora, ya convertidas en un código que no se puede
+  deshacer. El servidor nunca ve el identificador de Windows ni el de la placa,
+  sólo el código, que le sirve para reconocer esa misma computadora la próxima
+  vez.
+- La versión de la aplicación y las fechas: la de la primera activación y la de
+  cada vez que la abres con internet.
+
+Nada de la reunión: ni audio, ni texto, ni tu perfil, ni el contexto del
+proyecto.
+
 
 SI ALGO NO VA
 -------------
@@ -125,14 +234,18 @@ minuto y vuelve a intentarlo.
 de la computadora. La pantalla muestra arriba a la derecha el retardo real en
 milisegundos.
 
-**No abre.** Ejecútala desde la terminal para ver el error. En PowerShell hace
-falta el símbolo & delante, o sólo imprimirá el nombre sin ejecutar nada:
+**Sale una pantalla de licencia en vez de la aplicación.** Mira el apartado LA
+LICENCIA, más arriba: dice qué significa cada una y qué hacer.
 
-    & ".\Traductor Italiano.exe"
+**No abre.** Ejecútala desde la terminal, abierta en la carpeta donde está
+ArtTranslatorV2.exe, para ver el error. En PowerShell hace falta el símbolo &
+delante, o sólo imprimirá el nombre sin ejecutar nada:
+
+    & ".\ArtTranslatorV2.exe"
 
 En Símbolo del sistema (cmd):
 
-    "Traductor Italiano.exe"
+    "ArtTranslatorV2.exe"
 
 Manda lo que salga y con eso se puede saber qué pasó.
 
@@ -140,6 +253,6 @@ Manda lo que salga y con eso se puede saber qué pasó.
 QUÉ FALTA EN ESTA VERSIÓN
 -------------------------
 
-  · El modo local, que transcribiría sin internet y sin coste por hora, está
-    en gris. Se evaluará después de probar esta versión.
+  · El modo local, que transcribiría sin internet y sin coste por hora, no está
+    en esta versión. Se evaluará después de probarla.
   · La aplicación no está firmada, de ahí el aviso de Windows al abrirla.

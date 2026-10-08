@@ -1890,6 +1890,10 @@ cargarlos, arriba). Se activan dos fusibles de Electron, `enableEmbeddedAsarInte
 `enableNodeCliInspectArguments` y `enableNodeOptionsEnvironmentVariable` (este último, F055: con el binario
 renombrado, `NODE_OPTIONS=--require x.js` ejecuta código propio en el proceso principal, antes de
 `mainApp.js`; con el nombre del producto se ignora, `[verificado]` en macOS por la revisión de F054).
+F055 los puso en `build.electronFuses` de `package.json` y `[verificado]` que electron-builder 26.15.3 los aplica
+también con `--win dir` desde macOS: los cinco, leídos del `.exe` construido con `@electron/fuses`. Lo vuelve
+a comprobar `verificar-paquete.sh` en cada paquete, junto con el recurso `ELECTRONASAR` del `.exe` (el hash de
+`app.asar` que Electron compara al arrancar) y el hash propio de cada archivo del asar.
 
 **Lo que no promete, dicho claro.** Frena la copia, que es el caso real: llevar el zip a otra
 computadora. Y frena las trampas que no exigen saber programar: renombrar el `.exe`, atrasar el reloj,
@@ -1904,8 +1908,8 @@ frena:**
   cada arranque apunta el 403 y el arranque siguiente bloquea (el servidor decide); sin red —o con el
   servidor bloqueado a propósito—, no.
 - **A quien desarme el paquete y parchee el `.exe`.** Sin firma Authenticode (§10 decidió no comprarla), la
-  verificación de integridad del asar se puede saltar parcheando el binario. Y hasta que F055 apague
-  `enableNodeOptionsEnvironmentVariable`, el `.exe` renombrado deja ejecutar código propio con `NODE_OPTIONS`.
+  verificación de integridad del asar se puede saltar parcheando el binario. (El `.exe` renombrado ya no deja
+  ejecutar código propio con `NODE_OPTIONS`: F055 apagó `enableNodeOptionsEnvironmentVariable`.)
 
 Contra eso está el contrato con el cliente, no el código. Si la app se va a distribuir a terceros, se
 vuelve a abrir la decisión de §10, «Instalador y firma».
@@ -1953,6 +1957,14 @@ antes de fijar `userData`. En el primer arranque, si `userData` no tiene `artran
 un corte no deje una base truncada); el original no se mueve ni se borra. Si copiar falla se registra y
 arranca con una base vacía. En desarrollo no cambia nada. El LEEME de F055 sigue pidiendo extraer la V2
 sobre la carpeta anterior: la copia solo encuentra la base de la v0.9 si la V2 se extrae donde estaba ella.
+
+**Hecho en F055 (08-10-2026).** `herramientas/construir-v2.sh` crea `ArtTranslatorV2-Windows.zip` con la carpeta
+`win-unpacked/` dentro, **con el mismo nombre que la del zip de la v0.9**: así «extraer encima de la carpeta
+anterior» cae donde estaba la v0.9 (con otro nombre, el zip crearía una carpeta hermana y la V2 arrancaría sin
+perfiles). `[verificado]` que ningún archivo de `node-backend/src` ni de `shared` de la v0.9 falta en la V2
+(la V2 trae 6 nuevos: `abreviaturasIngles`, `ajustes`, `detectorPreguntasIngles`, `idiomas`, `wav` y `promptsIngles`),
+así que extraer encima no deja sobrantes que el manifiesto tome por «copia modificada». Esto solo vale para el paso
+de la v0.9 a la V2: el LEEME pide que las versiones siguientes se extraigan en una carpeta nueva.
 
 ### 17.8 Lo que midió el spike F046 (07-10-2026)
 
@@ -2035,7 +2047,9 @@ F042–F045 `[medido]`, más tres revisiones Opus.
 - El troceo con habla inglesa `[por medir]`: los topes de F031 se calibraron con italiano.
 - **Una reunión real de 20–30 minutos en cada idioma.** Todas las cifras de §17.2 salen de
   vídeos.
-- El tamaño del paquete con los dos Marian, unos 400 MB `[por medir]`.
+- **Hecho en F055:** el tamaño del paquete con los dos Marian `[medido]` en una construcción de prueba: el zip pesa
+  **365.484.282 bytes (365 MB)** y 788 MB descomprimido; el de la v0.9, con un solo Marian, 290 MB. La línea final de
+  `construir-v2.sh` lo imprime en cada construcción.
 - Si la pérdida de la primera palabra al partir el turno (F056) pasa con habla real `[por medir]`.
 - Si las placas de los equipos del cliente traen un UUID SMBIOS válido `[por medir]`.
 - Cuánto añade al arranque la huella (`reg query` y PowerShell, a la vez, en cada arranque) en los dos
@@ -2043,7 +2057,8 @@ F042–F045 `[medido]`, más tres revisiones Opus.
 - La llamada de PowerShell que lee MachineGuid y placa juntos, y el rechazo del `.exe` renombrado a
   `electron.exe`, en Windows de verdad `[por medir]`: la revisión de F054 lo comprobó con el binario de macOS
   y las pruebas usan un `electron` de mentira.
-- Que electron-builder 26 aplique los fusibles con el destino `--win dir` `[por medir]`.
+- **Hecho en F055:** electron-builder 26 aplica los fusibles con el destino `--win dir` `[verificado]` (§17.6). Lo que
+  sigue sin poder probarse aquí es que el `.exe` arranque en Windows con esos fusibles puestos `[por medir]`.
 
 ---
 
