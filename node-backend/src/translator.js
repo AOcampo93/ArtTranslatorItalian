@@ -22,7 +22,8 @@
  *    idiomas (`idiomas.js`) dice qué modelo usa cada idioma y aquí sólo se carga
  *    ese, porque cada modelo de más es memoria y tiempo de arranque para un
  *    idioma que nadie va a oír. Sin argumento todo vale `MODELO` (it→es), de modo
- *    que quien llama como antes —incluido el código legado— no nota nada.
+ *    que quien llama como antes —incluido el código legado— no nota nada. Y desde
+ *    F051 se puede soltar uno (`descargar`) cuando el usuario cambia de idioma.
  */
 
 'use strict'
@@ -62,7 +63,12 @@ async function cargar (modelo = MODELO, calentamiento = CALENTAMIENTO) {
     const pipe = await pipeline('translation', modelo, { dtype: 'q8' })
     // Se apunta antes de calentar, igual que cuando esto era un singleton:
     // quien llame mientras se calienta recibe el pipeline sin esperar.
-    _pipes.set(modelo, pipe)
+    //
+    // F051: salvo que `descargar` lo haya soltado mientras cargaba (quien se
+    // equivoca de idioma y lo cambia al segundo). Entonces esta carga ya no es la
+    // vigente y apuntarlo dejaría en el mapa un modelo que `descargar` va a
+    // liberar: el siguiente `cargar` recibiría un pipeline muerto.
+    if (_cargando.get(modelo) === carga) _pipes.set(modelo, pipe)
     console.log(`[traductor] modelo ${modelo} listo en ${Date.now() - t0} ms`)
     // Primera inferencia en frío: la pagamos aquí y no en la primera frase real.
     await pipe(calentamiento)
@@ -76,6 +82,35 @@ async function cargar (modelo = MODELO, calentamiento = CALENTAMIENTO) {
 /** ¿Está el modelo cargado y listo para traducir sin esperar? */
 function estaListo (modelo = MODELO) {
   return _pipes.has(modelo)
+}
+
+/**
+ * Suelta de memoria el modelo de un idioma (F051).
+ *
+ * Al cambiar de idioma el otro Marian deja de hacer falta, y cada uno ocupa unos
+ * 100 MB en memoria (la cifra de la cabecera, `[medido]`). Quita primero el modelo
+ * del mapa y a continuación espera a que acabe una carga en curso para liberar ESE
+ * pipeline: así un `cargar` posterior arranca limpio y nunca recibe uno que se
+ * esté liberando.
+ *
+ * Solo se llama con la escucha parada (`ajustes.elegirIdioma` lo comprueba): soltar
+ * un modelo en mitad de una traducción la rompería.
+ *
+ * @param {string} [modelo] por defecto, it→es
+ * @returns {Promise<boolean>} `true` si había algo que soltar
+ */
+async function descargar (modelo = MODELO) {
+  const enCurso = _cargando.get(modelo)
+  const apuntado = _pipes.get(modelo)
+  _pipes.delete(modelo)
+  _cargando.delete(modelo)
+
+  // Si hay carga registrada (la haya terminado o no), su resultado es el pipeline;
+  // una que falló no dejó nada que soltar.
+  const pipe = enCurso ? await enCurso.catch(() => null) : apuntado
+  if (!pipe) return false
+  await pipe.dispose?.()
+  return true
 }
 
 /**
@@ -165,7 +200,7 @@ async function traducir (italiano, modelo = MODELO) {
   }
 }
 
-module.exports = { cargar, estaListo, traducir, MODELO, CALENTAMIENTO }
+module.exports = { cargar, estaListo, descargar, traducir, MODELO, CALENTAMIENTO }
 
 // Exportado solo para las pruebas: no forma parte de la API del módulo.
 module.exports._internos = { trocear, pareceRepetido }

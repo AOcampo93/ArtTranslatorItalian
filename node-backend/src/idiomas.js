@@ -121,4 +121,16 @@ function obtenerIdioma (codigo) {
   return idioma
 }
 
-module.exports = { obtenerIdioma, IDIOMA_POR_DEFECTO }
+/**
+ * Todas las entradas del registro, en el orden en que se declararon. La usa quien
+ * tiene que tocar «los demás idiomas» sin nombrarlos (F051: al cambiar de idioma,
+ * soltar el Marian de los otros), de modo que añadir un tercero no obliga a
+ * editarla.
+ *
+ * @returns {object[]}
+ */
+function listarIdiomas () {
+  return [...IDIOMAS.values()]
+}
+
+module.exports = { obtenerIdioma, listarIdiomas, IDIOMA_POR_DEFECTO }

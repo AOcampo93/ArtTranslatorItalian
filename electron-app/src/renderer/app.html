@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'">
-<title>Traductor Italiano</title>
+<title>ArtTranslatorV2</title>
 <style>
   /*
    * Tres zonas, como pidió el cliente: traducción, preguntas y contexto
@@ -223,8 +223,8 @@
   .pregunta .q { font-size: 12px; color: var(--tx3); }
   .pregunta .qes { font-size: 13px; margin-bottom: 8px; }
   .pregunta .q:last-of-type { margin-bottom: 8px; }
-  /* La respuesta va SOLO en italiano, sin glosa al español: confirmado con el
-     cliente. Es para decirla en voz alta, no para entenderla. */
+  /* La respuesta va SOLO en el idioma de la reunión, sin glosa al español:
+     confirmado con el cliente. Es para decirla en voz alta, no para entenderla. */
   .respuesta {
     background: var(--mia); border-radius: 10px 10px 4px 10px;
     padding: 9px 12px; font-size: 13.5px; line-height: 1.45;
@@ -397,6 +397,30 @@
   }
   .volver:hover { color: var(--tx); }
 
+  /* ── Idioma de la reunión (F051) ────────────────────────────────────
+     La pantalla sale en cada arranque, antes del panel de inicio: dos botones
+     grandes, uno por idioma, y el último que se eligió va marcado — con el
+     color Y con la etiqueta «Último elegido», para que no dependa solo del verde. */
+  #idioma { flex: 1; overflow-y: auto; padding: 22px; }
+  .idiomas { display: grid; gap: 14px; margin-top: 22px; }
+  .eleccion-idioma {
+    text-align: left; background: var(--sup); border: 1px solid var(--linea);
+    border-radius: 12px; padding: 26px 20px; color: var(--tx);
+    font-weight: 600; font-size: 18px;
+  }
+  .eleccion-idioma:hover { border-color: var(--tx3); }
+  .eleccion-idioma.sel { border-color: var(--ok); background: rgba(0,212,170,.08); }
+  .eleccion-idioma .ultimo { display: block; font-weight: 500; color: var(--ok); font-size: 11.5px; margin-top: 5px; }
+  .aviso-idioma { margin-top: 14px; font-size: 12.5px; color: var(--mal); }
+
+  /* En el panel de inicio: el par de idiomas de la reunión y el botón para cambiarlo. */
+  .idioma-fila { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+  .chip-idioma {
+    font-family: var(--mono); font-size: 12px; font-weight: 600; padding: 3px 10px;
+    border-radius: 999px; border: 1px solid #0E4D3F; background: rgba(0,212,170,.08); color: var(--ok);
+  }
+  .idioma-fila button { padding: 4px 11px; font-size: 12px; }
+
   /* ── Perfiles y Conversaciones (F032) ──────────────────────────── */
   .tarjeta-lista {
     background: var(--sup); border: 1px solid var(--linea); border-radius: 10px;
@@ -423,6 +447,13 @@
     font-size: 10px; font-weight: 600; color: #05231D; background: var(--ok);
     border-radius: 999px; padding: 1px 7px;
   }
+  /* F051: IT o EN en cada reunión guardada. Neutro, que no compita con «Activo». */
+  .badge-idioma {
+    font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--tx2);
+    background: var(--sup2); border: 1px solid var(--linea);
+    border-radius: 999px; padding: 0 7px; flex: none;
+  }
+  #detalleConversacion h2 .badge-idioma { margin-left: 8px; vertical-align: middle; }
   .tarjeta-lista .acciones-fila { display: flex; gap: 6px; flex: none; }
   .tarjeta-lista .acciones-fila button { font-size: 11px; padding: 5px 9px; }
   .vacio-lista { color: var(--tx3); font-size: 12.5px; margin-top: 10px; }
@@ -461,11 +492,33 @@
   <button class="icono" id="btnAjustes" title="Ajustes">⚙</button>
 </header>
 
-<!-- ══ Panel de inicio (F032) ═══════════════════════════════════════════ -->
-<div id="inicio">
+<!-- ══ Idioma de la reunión (F051) ══════════════════════════════════════
+     Lo primero que se ve, en cada arranque. Al elegir se entra al panel de
+     inicio de siempre, con el idioma ya puesto. -->
+<div id="idioma">
   <div class="env">
-    <h1>Traductor Italiano</h1>
-    <p class="sub">Traduce del italiano al español mientras alguien te habla, y te sugiere qué contestar.</p>
+    <h1>ArtTranslatorV2</h1>
+    <p class="sub">¿En qué idioma te van a hablar en esta reunión?</p>
+    <div class="idiomas">
+      <button class="eleccion-idioma" id="elegir-it">Italiano → Español
+        <span class="ultimo oculto" id="ultimo-it">Último elegido</span></button>
+      <button class="eleccion-idioma" id="elegir-en">Inglés → Español
+        <span class="ultimo oculto" id="ultimo-en">Último elegido</span></button>
+    </div>
+    <p class="aviso-idioma oculto" id="avisoIdioma"></p>
+  </div>
+</div>
+
+<!-- ══ Panel de inicio (F032) ═══════════════════════════════════════════
+     F051: nace oculto; lo primero que se ve es la pantalla de idioma. -->
+<div id="inicio" class="oculto">
+  <div class="env">
+    <h1>ArtTranslatorV2</h1>
+    <p class="sub" id="subInicio">Traduce del italiano al español mientras alguien te habla, y te sugiere qué contestar.</p>
+    <div class="idioma-fila">
+      <span class="chip-idioma" id="chipIdioma">IT → ES</span>
+      <button class="sec" id="cambiarIdioma">Cambiar idioma</button>
+    </div>
     <div class="accesos">
       <button class="acceso principal" id="irNueva">Preparar una nueva reunión
         <span>Perfil, contexto y comprobación, paso a paso.</span></button>
@@ -622,7 +675,7 @@
     </details>
     <div class="vacio" id="vacio">
       <b>Escuchando el audio de tu computadora</b>
-      Cuando alguien hable en italiano, la traducción aparecerá aquí.
+      <span id="textoVacio">Cuando alguien hable en italiano, la traducción aparecerá aquí.</span>
     </div>
   </div>
 
@@ -1060,7 +1113,7 @@ function pintarRespuesta ({ id, texto, mensaje, detalle }) {
     return
   }
   r.className = 'respuesta'
-  r.textContent = texto          // SOLO italiano, sin glosa: así lo pidió el cliente
+  r.textContent = texto          // SOLO en el idioma de la reunión, sin glosa: así lo pidió el cliente
   verDetalle.classList.add('oculto')
   cajaDetalle.classList.add('oculto')
 }
@@ -1152,9 +1205,10 @@ $('#btnProbar').onclick = async () => {
   for (const p of PASOS) marcarPaso(p.id, 'vivo', '…')
 
   // El audio lo comprueba el renderer, que es donde vive esa API; la red y la
-  // cadena completa las mide el proceso principal.
+  // cadena completa las mide el proceso principal. F051: con el audio de prueba
+  // del idioma elegido, que viaja en el mismo objeto que el glosario.
   const [rMain, rAudio] = await Promise.all([
-    api ? api.comprobar(contextoProyecto()) : comprobarDemo(),
+    api ? api.comprobar({ ...contextoProyecto(), idioma: idiomaElegido }) : comprobarDemo(),
     api ? comprobarAudio() : Promise.resolve(null),
   ])
   const r = { ...rMain, ...(rAudio ? { audio: rAudio } : {}) }
@@ -1341,10 +1395,27 @@ async function cargarPerfilesPaso () {
 // ── Arrancar y parar ──────────────────────────────────────────────────
 let captura = null
 
+/**
+ * El idioma de la reunión (F051): el que viaja a `empezar` y a `comprobar`. Lo
+ * fija la pantalla de idioma (`elegirIdioma`, más abajo); mientras nadie elija,
+ * el italiano de siempre. Vive aquí, junto a quien lo lee, porque las pruebas de
+ * este tramo lo ejecutan suelto y no pueden depender de un nombre de otro sitio.
+ */
+let idiomaElegido = 'it'
+
+/**
+ * `true` desde que se pulsa «Escuchar» hasta que la reunión acaba o no llega a
+ * arrancar (F051). Con ella puesta el idioma no se cambia: ni el botón, ni la
+ * pantalla. Se activa al pulsar y no al abrirse la sesión porque arrancar tarda
+ * (Marian, la conexión) y esos segundos también cuentan como escuchar.
+ */
+let reunionEnMarcha = false
+
 $('#btnEscuchar').onclick = async () => {
   // Reunión nueva, medidas nuevas: ver `reiniciarMedidas()`.
   reiniciarMedidas()
   if (!api) {
+    reunionEnMarcha = true
     $('#inicio')?.classList.add('oculto')
     $('#preparar').classList.add('oculto')
     $('#envivo').classList.remove('oculto')
@@ -1356,12 +1427,20 @@ $('#btnEscuchar').onclick = async () => {
 
   $('#btnEscuchar').disabled = true
   estado('aviso', 'Preparando')
+  reunionEnMarcha = true
 
   // La sesión de transcripción se abre ANTES de pedir el audio, porque si la
   // clave falta o no hay red conviene saberlo sin haber molestado al usuario
   // con el diálogo de compartir pantalla.
-  const r = await api.empezar({ perfil: perfil(), contexto: contextoProyecto() })
+  let r
+  try {
+    r = await api.empezar({ perfil: perfil(), contexto: contextoProyecto(), idioma: idiomaElegido })
+  } catch (err) {
+    reunionEnMarcha = false
+    throw err
+  }
   if (!r?.ok) {
+    reunionEnMarcha = false
     estado('mal', r?.motivo || 'no se pudo iniciar')
     $('#pistaEscuchar').textContent = r?.motivo || 'no se pudo iniciar'
     $('#btnEscuchar').disabled = false
@@ -1379,6 +1458,7 @@ $('#btnEscuchar').onclick = async () => {
     // Si el audio falla, hay que cerrar la sesión de transcripción: está
     // abierta y con este proveedor eso ya está facturando.
     await api.parar()
+    reunionEnMarcha = false
     estado('mal', err.message)
     $('#pistaEscuchar').textContent = err.message
     $('#btnEscuchar').disabled = false
@@ -1408,6 +1488,7 @@ $('#btnParar').onclick = async () => {
   captura?.detener()
   captura = null
   const r = api ? await api.parar() : {}
+  reunionEnMarcha = false
   estado('', resumenAlDetener(r))
   $('#btnParar').classList.add('oculto')
   $('#btnParar').disabled = false
@@ -1544,12 +1625,14 @@ if (api) {
 // ── Navegación entre pantallas (F032) ───────────────────────────────────
 /**
  * Un panel de inicio, no el formulario, al abrir la app (criterio 1 de
- * F032). `envivo` NO está en esta lista a propósito: la toca «Arrancar y
- * parar» con sus propias clases, para que ese bloque se pueda seguir
- * probando solo, sin depender de esta función.
+ * F032). F051: antes del panel de inicio va la pantalla de idioma, que es lo
+ * primero que se ve; el panel de inicio aparece al elegirlo. `envivo` NO está en
+ * esta lista a propósito: la toca «Arrancar y parar» con sus propias clases,
+ * para que ese bloque se pueda seguir probando solo, sin depender de esta
+ * función.
  */
 function mostrarPantalla (id) {
-  for (const s of ['inicio', 'preparar', 'perfiles', 'conversaciones']) {
+  for (const s of ['idioma', 'inicio', 'preparar', 'perfiles', 'conversaciones']) {
     $('#' + s)?.classList.toggle('oculto', s !== id)
   }
 }
@@ -1589,6 +1672,120 @@ $('#irConversaciones')?.addEventListener('click', async () => {
   mostrarPantalla('conversaciones')
   await cargarConversaciones()
 })
+
+// ── Idioma de la reunión (F051) ─────────────────────────────────────────
+/**
+ * Lo que cambia en pantalla según el idioma de quien habla. La interfaz sigue en
+ * español: solo se nombra el idioma de la reunión —en el rótulo del panel de
+ * inicio, en el texto de la pantalla vacía y en los ejemplos de los formularios—.
+ * Las piezas de cada idioma (STT, Marian, detector, prompts) viven en el proceso
+ * principal (`idiomas.js`); aquí solo hay lo que se ve.
+ */
+const IDIOMAS_UI = {
+  it: { par: 'IT → ES', nombre: 'italiano' },
+  en: { par: 'EN → ES', nombre: 'inglés' },
+}
+
+/** El último idioma elegido en este equipo, el que sale marcado. `null` mientras no haya ninguno. */
+let idiomaGuardado = null
+
+function ponerTexto (selector, texto) {
+  const e = $(selector)
+  if (e) e.textContent = texto
+}
+
+/** Pone en pantalla los textos que nombran el idioma elegido. */
+function pintarIdioma () {
+  const ui = IDIOMAS_UI[idiomaElegido]
+  ponerTexto('#chipIdioma', ui.par)
+  ponerTexto('#subInicio', `Traduce del ${ui.nombre} al español mientras alguien te habla, y te sugiere qué contestar.`)
+  ponerTexto('#textoVacio', `Cuando alguien hable en ${ui.nombre}, la traducción aparecerá aquí.`)
+  // Los ejemplos de los formularios: quien escucha inglés no dice «no hablo italiano».
+  const ejemploPaso = $('#pContexto')
+  if (ejemploPaso) ejemploPaso.placeholder = `No hablo ${ui.nombre}; entiendo algo escrito. Decido sobre plazos y alcance.`
+  const ejemploPerfil = $('#pfContexto')
+  if (ejemploPerfil) ejemploPerfil.placeholder = `Ej.: No hablo ${ui.nombre}; entiendo algo escrito.`
+}
+
+/** Marca en la pantalla de idioma el botón del último idioma elegido. */
+function marcarIdiomaGuardado () {
+  for (const codigo of Object.keys(IDIOMAS_UI)) {
+    const marcado = codigo === idiomaGuardado
+    $(`#elegir-${codigo}`)?.classList.toggle('sel', marcado)
+    $(`#ultimo-${codigo}`)?.classList.toggle('oculto', !marcado)
+  }
+}
+
+function pintarAvisoIdioma (texto) {
+  const aviso = $('#avisoIdioma')
+  if (!aviso) return
+  aviso.textContent = texto
+  aviso.classList.toggle('oculto', !texto)
+}
+
+/**
+ * Elige el idioma de la reunión y entra al panel de inicio.
+ *
+ * El proceso principal lo recuerda, precarga el Marian de ese idioma y suelta el
+ * de los demás; si dice que no (hay una reunión en marcha), el idioma no cambia y
+ * se dice por qué. Sin proceso principal (modo de ejemplo) no hay nada que
+ * avisar: el cambio vale solo en la página.
+ *
+ * Con la escucha activa no se hace nada: esta puerta es independiente de la del
+ * proceso principal, y la pantalla de idioma ni siquiera se alcanza escuchando.
+ *
+ * @returns {Promise<boolean>} si el idioma quedó elegido
+ */
+async function elegirIdioma (codigo) {
+  if (!IDIOMAS_UI[codigo] || reunionEnMarcha) return false
+  if (api) {
+    let r
+    try {
+      r = await api.elegirIdioma(codigo)
+    } catch {
+      r = null
+    }
+    if (!r?.ok) {
+      pintarAvisoIdioma(r?.motivo || 'No se pudo elegir el idioma. Vuelve a intentarlo.')
+      return false
+    }
+  }
+  idiomaElegido = codigo
+  idiomaGuardado = codigo
+  pintarAvisoIdioma('')
+  pintarIdioma()
+  marcarIdiomaGuardado()
+  mostrarPantalla('inicio')
+  return true
+}
+
+/** «Cambiar idioma», del panel de inicio: vuelve a la pantalla de idioma. */
+function cambiarIdioma () {
+  if (reunionEnMarcha) return false
+  pintarAvisoIdioma('')
+  mostrarPantalla('idioma')
+  return true
+}
+
+async function iniciarIdioma () {
+  pintarIdioma()
+  // Sin proceso principal no hay nada guardado.
+  if (!api) return
+  try {
+    const r = await api.leerIdioma()
+    // Si el usuario ya eligió mientras esto volvía, vale su elección y no el recuerdo.
+    if (idiomaGuardado === null && IDIOMAS_UI[r?.idioma]) {
+      idiomaGuardado = r.idioma
+      marcarIdiomaGuardado()
+    }
+  } catch { /* sin recuerdo, ninguno sale marcado */ }
+}
+
+for (const codigo of Object.keys(IDIOMAS_UI)) {
+  $(`#elegir-${codigo}`)?.addEventListener('click', () => elegirIdioma(codigo))
+}
+$('#cambiarIdioma')?.addEventListener('click', cambiarIdioma)
+iniciarIdioma()
 
 // ── Perfiles (F032): lista, crear, editar, borrar, activar ──────────────
 // Las funciones de `contexto.js` ya existían (crearPerfil/actualizarPerfil/
@@ -1699,6 +1896,18 @@ function formatoDuracion (ms) {
   return `${m} min ${String(s).padStart(2, '0')} s`
 }
 
+/**
+ * IT o EN (F051). Una reunión de antes de la V2 no trae el campo y era italiano:
+ * `listarConversaciones` ya la devuelve como `it`, y aquí se repite el criterio
+ * por si llega una fila sin él. Va en este tramo y no en el de «Idioma de la
+ * reunión» porque las pruebas de Conversaciones lo ejecutan suelto.
+ */
+function crearEtiquetaIdioma (codigo) {
+  const etiqueta = crear('span', 'badge-idioma')
+  etiqueta.textContent = String(codigo || 'it').toUpperCase()
+  return etiqueta
+}
+
 function pintarListaConversaciones (conversaciones) {
   const cont = $('#listaConversaciones')
   if (!cont) return
@@ -1714,6 +1923,7 @@ function pintarListaConversaciones (conversaciones) {
     const info = crear('div', 'info')
     const titulo = crear('div', 'titulo-fila')
     titulo.textContent = [c.contexto, c.perfil].filter(Boolean).join(' · ') || c.archivo
+    titulo.append(crearEtiquetaIdioma(c.idioma))
     const detalle = crear('div', 'detalle-fila')
     const fecha = c.inicio ? new Date(c.inicio).toLocaleString() : c.archivo
     detalle.textContent = `${fecha} · ${c.frases} frase(s) · ${c.preguntas} pregunta(s)`
@@ -1775,6 +1985,7 @@ function pintarDetalleConversacion (datos) {
 
   const titulo = crear('h2')
   titulo.textContent = [datos.contexto, datos.perfil].filter(Boolean).join(' · ') || 'Reunión'
+  titulo.append(crearEtiquetaIdioma(datos.idioma))
   cont.appendChild(titulo)
 
   const transcripcion = crear('div', 'transcripcion-detalle')
@@ -1800,7 +2011,11 @@ function pintarDetalleConversacion (datos) {
 async function verConversacion (c) {
   if (!api) return
   const datos = await api.leerConversacion(c.ruta)
-  pintarDetalleConversacion({ ...datos, contexto: datos?.contexto || c.contexto, perfil: datos?.perfil || c.perfil })
+  pintarDetalleConversacion({
+    ...datos,
+    contexto: datos?.contexto || c.contexto, perfil: datos?.perfil || c.perfil,
+    idioma: datos?.idioma || c.idioma,
+  })
 }
 
 /**
@@ -1815,30 +2030,63 @@ async function borrarConversacionDesdeUI (c) {
 }
 
 // ── Datos de ejemplo, para poder ver la interfaz sin audio ni claves ──
+/**
+ * Un guion de ejemplo por idioma (F051). Las frases son inventadas: `it` es el
+ * texto original —italiano o inglés, el campo se llama así en toda la app— y
+ * `es` su traducción; las preguntas traen la respuesta sugerida en el idioma de
+ * la reunión, y `contexto` es el resumen que se pinta al final.
+ */
+const GUIONES_DEMO = {
+  it: {
+    guion: [
+      { it: 'Buongiorno a tutti, iniziamo la riunione.', es: 'Buenos días a todos, empecemos la reunión.', ms: 372 },
+      { it: 'Il cliente ha chiesto di anticipare la consegna alla prossima settimana.',
+        es: 'El cliente ha pedido adelantar la entrega a la próxima semana.', ms: 418 },
+      // Una troceada, para poder ver de qué tamaño queda el aviso «cortada» sin
+      // tener que provocar un monólogo de ocho segundos con audio real.
+      { it: "Dobbiamo rivedere i tempi con l'integrazione con il gestionale.",
+        es: 'Tenemos que revisar los plazos con la integración con el ERP.', ms: 455,
+        forzado: true },
+      { pregunta: 'Quanto tempo ci vuole per completare il lavoro?',
+        es: '¿Cuánto tiempo hace falta para terminar el trabajo?',
+        respuesta: 'Direi due settimane per la parte tecnica, più qualche giorno per i test. '
+                 + 'Ti confermo la data esatta domani mattina.' },
+      { it: 'Il budget copre anche la manutenzione.', es: 'El presupuesto cubre también el mantenimiento.', ms: 401 },
+      { pregunta: 'Hai già parlato con il team di sviluppo?',
+        es: '¿Ya has hablado con el equipo de desarrollo?',
+        respuesta: 'Sì, ne ho parlato ieri. Sono allineati sui tempi e non vedono blocchi tecnici.' },
+    ],
+    contexto: 'Se negocia adelantar una entrega a la próxima semana. Hay dudas sobre '
+      + 'los plazos de integración con el ERP y sobre si el presupuesto cubre el mantenimiento.',
+  },
+  en: {
+    guion: [
+      { it: "Good morning everyone, let's get started.", es: 'Buenos días a todos, empecemos.', ms: 365 },
+      { it: 'The client asked us to bring the delivery forward to next week.',
+        es: 'El cliente nos pidió adelantar la entrega a la próxima semana.', ms: 412 },
+      { it: 'We need to review the timeline for the integration with the ERP.',
+        es: 'Tenemos que revisar el calendario de la integración con el ERP.', ms: 449,
+        forzado: true },
+      { pregunta: 'How long will it take to finish the work?',
+        es: '¿Cuánto tiempo te llevará terminar el trabajo?',
+        respuesta: 'I would say two weeks for the technical part, plus a few days for testing. '
+                 + "I'll confirm the exact date tomorrow morning." },
+      { it: 'The budget also covers maintenance.', es: 'El presupuesto también cubre el mantenimiento.', ms: 396 },
+      { pregunta: 'Have you already spoken with the development team?',
+        es: '¿Ya hablaste con el equipo de desarrollo?',
+        respuesta: "Yes, I spoke with them yesterday. They're aligned on the timeline and don't see any technical blockers." },
+    ],
+    contexto: 'Se negocia adelantar una entrega a la próxima semana. Hay dudas sobre '
+      + 'el calendario de la integración con el ERP y sobre si el presupuesto cubre el mantenimiento.',
+  },
+}
+
 function demo () {
-  const guion = [
-    { it: 'Buongiorno a tutti, iniziamo la riunione.', es: 'Buenos días a todos, empecemos la reunión.', ms: 372 },
-    { it: 'Il cliente ha chiesto di anticipare la consegna alla prossima settimana.',
-      es: 'El cliente ha pedido adelantar la entrega a la próxima semana.', ms: 418 },
-    // Una troceada, para poder ver de qué tamaño queda el aviso «cortada» sin
-    // tener que provocar un monólogo de ocho segundos con audio real.
-    { it: "Dobbiamo rivedere i tempi con l'integrazione con il gestionale.",
-      es: 'Tenemos que revisar los plazos con la integración con el ERP.', ms: 455,
-      forzado: true },
-    { pregunta: 'Quanto tempo ci vuole per completare il lavoro?',
-      es: '¿Cuánto tiempo hace falta para terminar el trabajo?',
-      respuesta: 'Direi due settimane per la parte tecnica, più qualche giorno per i test. '
-               + 'Ti confermo la data esatta domani mattina.' },
-    { it: 'Il budget copre anche la manutenzione.', es: 'El presupuesto cubre también el mantenimiento.', ms: 401 },
-    { pregunta: 'Hai già parlato con il team di sviluppo?',
-      es: '¿Ya has hablado con el equipo de desarrollo?',
-      respuesta: 'Sì, ne ho parlato ieri. Sono allineati sui tempi e non vedono blocchi tecnici.' },
-  ]
+  const { guion, contexto: resumen } = GUIONES_DEMO[idiomaElegido] || GUIONES_DEMO.it
   let i = 0, idQ = 0
   const siguiente = () => {
     if (i >= guion.length) {
-      pintarContexto('Se negocia adelantar una entrega a la próxima semana. Hay dudas sobre '
-        + 'los plazos de integración con el ERP y sobre si el presupuesto cubre el mantenimiento.')
+      pintarContexto(resumen)
       return
     }
     const p = guion[i++]
@@ -1870,13 +2118,19 @@ if (DEMO) estado('aviso', 'Vista de ejemplo')
  * `app.html#demo` arranca directamente en la vista en vivo con una
  * conversación de ejemplo. Sirve para enseñar la app sin configurar nada ni
  * gastar una sola llamada, que es como se va a presentar al cliente.
+ * F051: `#demo-en` es la misma vista con una reunión de ejemplo en inglés.
  */
-if (location.hash === '#demo') {
+const IDIOMA_DE_LA_DEMO = { '#demo': 'it', '#demo-en': 'en' }
+if (IDIOMA_DE_LA_DEMO[location.hash]) {
+  idiomaElegido = IDIOMA_DE_LA_DEMO[location.hash]
+  reunionEnMarcha = true
+  pintarIdioma()
   $('#pNombre').value = 'Omar Avila'
   $('#pOcupacion').value = 'Responsable técnico'
   $('#cNombre').value = 'Rossi Logistica — fase 2'
   $('#cGlosario').value = 'SAP, ERP, WMS, Rossi Logistica'
   revisarListo()
+  $('#idioma')?.classList.add('oculto')
   $('#inicio')?.classList.add('oculto')
   $('#preparar').classList.add('oculto')
   $('#envivo').classList.remove('oculto')

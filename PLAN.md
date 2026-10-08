@@ -1816,10 +1816,31 @@ nombre del equipo, la versión y las fechas. Nada de la reunión. Va escrito en 
 `productName` pasa a `ArtTranslatorV2`: el `.exe`, la ventana y el zip
 `ArtTranslatorV2-Windows.zip`.
 
-Electron saca la carpeta de datos del nombre de la app. Sin hacer nada, la V2 arrancaría
-vacía: sin claves, sin perfiles y sin reuniones. Por eso la app fija `userData` a la
-carpeta de siempre (`%APPDATA%\Traductor Italiano`) antes de `ready`. El `appId` sí
-cambia: el de hoy termina en `.diagnostico`, que es un resto de la fase −1.
+Electron saca la carpeta de datos del nombre de la app. Por eso la app fija `userData` a la
+carpeta de siempre antes de `ready`, solo empaquetada (en desarrollo no se toca): así la V2
+sigue leyendo las claves, las reuniones y la posición de la ventana de la v0.9. El `appId`
+sí cambia: el de hoy termina en `.diagnostico`, que es un resto de la fase −1.
+
+**Corrección de F051 (08-10-2026): la carpeta de siempre es
+`%APPDATA%\art-translator-italian-diagnostico`, no `%APPDATA%\Traductor Italiano`.** El plan
+suponía que Electron usaba el `productName`, pero `[verificado]`: el `package.json` que va
+DENTRO del `app.asar` de la v0.9 construida (`electron-app/dist/win-unpacked/resources/app.asar`,
+leído con `@electron/asar`) trae `name: "art-translator-italian-diagnostico"` y no trae
+`productName`; el `build.productName` es de electron-builder y no se copia a ese archivo.
+Con el binario de Electron 43.7.0 y ese `package.json`, `app.name` y `userData` salen del
+`name` (con un `productName` añadido saldría `Traductor Italiano`, que es lo que suponía el
+plan). Es la misma carpeta en todas las versiones, de la 0.1.0 a la 0.9.0: en el historial de
+git `name` nunca cambió y nunca hubo un `productName` arriba. La regla es la misma en
+Windows (`%APPDATA%` + `app.name`); la v0.9 no se ha ejecutado en Windows para comprobarlo.
+Fijarla a mano sigue valiendo: protege a la V2 de que alguien cambie el `name` o ponga un
+`productName`.
+
+**Los perfiles y los contextos no viajan en `userData`.** `db.js` guarda la base en
+`DB_DATA_DIR` y, sin él (`mainApp.js` no lo pone), en `node-backend/data/`, junto a la app:
+`resources\node-backend\data\artranslator.db` dentro de la carpeta extraída del zip. Fijar
+`userData` no evita que la V2 «arranque sin perfiles» si se extrae en otra carpeta. Para
+F055: o el LEEME pide extraer sobre la carpeta anterior (o copiar esa `data`), o el paquete
+lleva la base a `userData`. **Decidido:** F057 lleva la base a `userData` y copia la de la carpeta de la app si la encuentra, y el LEEME de F055 pide extraer la V2 sobre la carpeta anterior para que esa copia la encuentre.
 
 ### 17.8 Lo que midió el spike F046 (07-10-2026)
 
@@ -1887,6 +1908,7 @@ de error que corrige la vía del LLM.
 | F056 | La primera palabra que se pierde al partir el turno: reproducir por `assemblyLive.js` y corregir si se confirma | Sonnet | Líder |
 | F050 | Configuración inglesa | Sonnet | Líder |
 | F051 | Pantalla de idioma, nombre ArtTranslatorV2 y etiqueta en Conversaciones | Sonnet | Líder, con captura en modo demo |
+| F057 | Antes del paquete: la base de perfiles pasa a la carpeta de datos (con copia de la anterior), vista en vivo limpia entre reuniones y botón «Borrar» legible | Sonnet | Líder, con capturas |
 | F052 | Informes: siempre números, la conversación solo con permiso | Sonnet | Opus (privacidad y red) |
 | F053 | Licencia, lado del servidor | Sonnet | Opus (claves, red y dinero) |
 | F054 | Licencia, lado de la app | Sonnet | Opus (claves, red y dinero) |

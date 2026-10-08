@@ -14,8 +14,22 @@
  * se usa para enseñar la app sin gastar una sola llamada) y no hace falta
  * ninguna clave, base de datos ni permiso de audio.
  *
+ * F051: la app abre ahora en la pantalla de idioma. Este guion la captura, elige
+ * italiano y recorre las pantallas de siempre; después vuelve a «Cambiar
+ * idioma», elige inglés y captura el panel de inicio y el en vivo en inglés.
+ * Conversaciones se pinta con una reunión de antes de la V2 (sin idioma en la
+ * cabecera: sale como IT) y otra en inglés.
+ *
+ * La numeración cambia cada vez que se inserta una pantalla, y las capturas de
+ * la pasada anterior se quedaban al lado con el mismo nombre: por eso al empezar
+ * se borran los `NN-*.png` de `capturas/`.
+ *
  * Uso:
  *   electron-app/node_modules/.bin/electron herramientas/captura-demo.js
+ *
+ * Si el entorno trae `ELECTRON_RUN_AS_NODE` (lo ponen algunos editores y
+ * terminales), Electron arranca como Node y `require('electron')` falla: se
+ * ejecuta con `env -u ELECTRON_RUN_AS_NODE`.
  */
 
 'use strict'
@@ -42,6 +56,9 @@ const esperar = ms => new Promise(r => setTimeout(r, ms))
 
 async function main () {
   fs.mkdirSync(CAPTURAS_DIR, { recursive: true })
+  for (const f of fs.readdirSync(CAPTURAS_DIR)) {
+    if (/^\d\d-.*\.png$/.test(f)) fs.unlinkSync(path.join(CAPTURAS_DIR, f))
+  }
 
   // `offscreen: true` para que esto corra igual en una máquina sin sesión
   // gráfica (el caso normal de quien construye esto: macOS, en un
@@ -74,7 +91,12 @@ async function main () {
 
   const ejecutar = codigo => ventana.webContents.executeJavaScript(codigo, true)
 
-  // 1) Panel de inicio: es lo primero que se ve al abrir la app (F032, criterio 1).
+  // 0) F051: lo primero que se ve al abrir la app es la pantalla de idioma, y solo ella.
+  await capturar('idioma')
+
+  // 1) Panel de inicio, con italiano elegido: «IT → ES» y «Cambiar idioma».
+  await ejecutar(`document.getElementById('elegir-it').click()`)
+  await esperar(150)
   await capturar('inicio')
 
   // 2) Perfiles: lista vacía (sin `api`, `listarPerfiles` no se llama).
@@ -159,6 +181,8 @@ async function main () {
   // datos de ejemplo llamando a la función directamente — es lo único que
   // enseña la fila de coste/latencia y los botones «Ver»/«Borrar» sin tener
   // que grabar una reunión de verdad.
+  // F051: dos reuniones —una de antes de la V2, SIN el campo `idioma` en la
+  // cabecera (sale como IT), y una en inglés—, para ver las dos etiquetas.
   await ejecutar(`
     pintarListaConversaciones([{
       archivo: 'sesion-20260919-101500-3.jsonl', ruta: '/reuniones/sesion-3.jsonl',
@@ -166,22 +190,29 @@ async function main () {
       frases: 21, preguntas: 3, duracionMs: 1980000, latenciaP50: 640, latenciaP95: 1350,
       costeSttUsd: 0.02475, costeSttProcedencia: 'tarifa verificada, duración medida',
       costeLlmUsd: 0.00061, costeLlmProcedencia: 'tokens medidos; tarifa de lista sin contrastar contra factura',
+    }, {
+      archivo: 'sesion-20261008-091500-4.jsonl', ruta: '/reuniones/sesion-4.jsonl',
+      inicio: '2026-10-08T09:15:00.000Z', perfil: 'Omar Avila', contexto: 'Acme — kickoff', idioma: 'en',
+      frases: 34, preguntas: 5, duracionMs: 2640000, latenciaP50: 590, latenciaP95: 1210,
+      costeSttUsd: 0.033, costeSttProcedencia: 'tarifa verificada, duración medida',
+      costeLlmUsd: 0.00094, costeLlmProcedencia: 'tokens medidos; tarifa de lista sin contrastar contra factura',
     }])
   `)
   await esperar(150)
   await capturar('conversaciones-coste')
 
-  // 8c) F038: «Ver» — transcripción y preguntas con su respuesta.
+  // 8c) F038: «Ver» — transcripción y preguntas con su respuesta. F051: la de
+  // inglés, que lleva su etiqueta EN al lado del título.
   await ejecutar(`
     pintarDetalleConversacion({
-      contexto: 'Rossi Logistica', perfil: 'Omar Avila',
+      contexto: 'Acme — kickoff', perfil: 'Omar Avila', idioma: 'en',
       frases: [
-        { it: 'Buongiorno a tutti, iniziamo la riunione.', es: 'Buenos días a todos, empecemos la reunión.' },
-        { it: 'Il cliente ha chiesto di anticipare la consegna.', es: 'El cliente pidió adelantar la entrega.' },
+        { it: "Good morning everyone, let's get started.", es: 'Buenos días a todos, empecemos.' },
+        { it: 'The client asked us to bring the delivery forward.', es: 'El cliente nos pidió adelantar la entrega.' },
       ],
       preguntas: [
-        { it: 'Quanto tempo ci vuole per completare il lavoro?', es: '¿Cuánto tiempo lleva terminar el trabajo?', respuesta: 'Circa due settimane, salvo imprevisti.', manual: false },
-        { it: 'Il budget copre anche la manutenzione?', es: '¿El presupuesto cubre también el mantenimiento?', respuesta: null, mensaje: 'Sin clave de IA: no habrá respuesta. Configúrala en Ajustes.' },
+        { it: 'How long will it take to finish the work?', es: '¿Cuánto tiempo te llevará terminar el trabajo?', respuesta: 'About two weeks, barring surprises.', manual: false },
+        { it: 'Does the budget also cover maintenance?', es: '¿El presupuesto también cubre el mantenimiento?', respuesta: null, mensaje: 'Sin clave de IA: no habrá respuesta. Configúrala en Ajustes.' },
       ],
     })
   `)
@@ -194,6 +225,31 @@ async function main () {
   await ejecutar(`document.getElementById('irAjustes').click()`)
   await esperar(150)
   await capturar('ajustes')
+  await ejecutar(`document.getElementById('btnCerrarAjustes').click()`)
+
+  // 10) F051: «Cambiar idioma» vuelve a la pantalla de idioma, con el último
+  // elegido (italiano) marcado y «Último elegido» bajo su botón.
+  await ejecutar(`document.getElementById('cambiarIdioma').click()`)
+  await esperar(150)
+  await capturar('idioma-marcado')
+
+  // 11) Se elige inglés: el panel de inicio dice «EN → ES» y el subtítulo, «del inglés».
+  await ejecutar(`document.getElementById('elegir-en').click()`)
+  await esperar(150)
+  await capturar('inicio-en')
+
+  // 12) El en vivo en inglés, con `app.html#demo-en`: la página nueva y directa a
+  // la vista en vivo, con la reunión de ejemplo en inglés. Se recarga en vez de
+  // seguir desde aquí porque la pantalla en vivo no se limpia entre reuniones de
+  // una misma ejecución, y la demo en italiano de arriba dejaría sus burbujas
+  // mezcladas con las inglesas. La demo tarda unos 13 s en llegar a la primera
+  // pregunta con su respuesta sugerida, en inglés.
+  // Pasar por `about:blank` es lo que obliga a recargar: cambiar solo el `#hash`
+  // de la misma página es una navegación interna y el script no volvería a correr.
+  await ventana.loadURL('about:blank')
+  await ventana.loadFile(APP_HTML, { hash: 'demo-en' })
+  await esperar(13500)
+  await capturar('envivo-en')
 
   console.log(`[captura-demo] ${n} pantallas guardadas en ${CAPTURAS_DIR}`)
   app.quit()

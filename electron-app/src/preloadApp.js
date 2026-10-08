@@ -66,6 +66,16 @@ contextBridge.exposeInMainWorld('app', {
   /** Borra el `.jsonl` de esa reunión y su fila de `sessions`, si la hay. */
   borrarConversacion: ruta => ipcRenderer.invoke('app:borrarConversacion', ruta),
 
+  // ── Idioma de la reunión (F051) ───────────────────────────────────
+  /** El último idioma elegido (`{ idioma }`, o `null` la primera vez), para marcarlo. */
+  leerIdioma: () => ipcRenderer.invoke('app:leerIdioma'),
+  /**
+   * Elige idioma: el proceso principal lo recuerda, precarga su Marian y suelta el
+   * de los demás. Devuelve `{ ok, idioma }` o `{ ok: false, motivo }` (p. ej. con
+   * una reunión en marcha).
+   */
+  elegirIdioma: codigo => ipcRenderer.invoke('app:elegirIdioma', codigo),
+
   // ── Claves: entran, no salen ──────────────────────────────────────
   guardarClaves: claves => ipcRenderer.invoke('app:guardarClaves', claves),
   /** Sólo dice CUÁLES hay, nunca su valor. */

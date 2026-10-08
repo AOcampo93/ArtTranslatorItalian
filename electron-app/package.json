@@ -13,8 +13,8 @@
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "appId": "com.arturoocampo.arttranslator.diagnostico",
-    "productName": "Traductor Italiano",
+    "appId": "com.arturoocampo.arttranslatorv2",
+    "productName": "ArtTranslatorV2",
     "directories": {
       "output": "dist"
     },

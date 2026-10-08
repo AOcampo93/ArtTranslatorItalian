@@ -61,6 +61,12 @@ const { crearLlamador, clasificarError, sanear, proveedorDeClave, MODELOS, NOMBR
 const { ColaDeInformes } = require(path.join(BACK, 'informes'))
 const { percentil, duracionMs, costeStt, costeLlm } = require(path.join(BACK, 'coste'))
 const { calcularBounds, leerEstado, guardarEstado } = require(path.join(BACK, 'ventanaEstado'))
+const { fijarCarpetaDeDatos, leerAjustes, elegirIdioma } = require(path.join(BACK, 'ajustes'))
+
+// F051 (PLAN.md §17.7): la V2 sigue leyendo las claves y las reuniones de la v0.9, que
+// están en la carpeta de datos de siempre. Va aquí, al cargar el módulo, porque
+// `userData` solo se puede cambiar antes de `ready`. En desarrollo no hace nada.
+fijarCarpetaDeDatos(app)
 
 let ventana = null
 let sesion = null          // { transcriptor, traductor, autosave, inicio, ... }
@@ -142,6 +148,10 @@ function obtenerColaInformes () {
 // reuniones: sobrevive a una actualización de la app.
 const RUTA_VENTANA = () => path.join(app.getPath('userData'), 'ventana.json')
 
+// F051: lo que se recuerda entre arranques —hoy, el último idioma elegido—. Junto a
+// `ventana.json`, por lo mismo: sobrevive a una actualización de la app.
+const RUTA_AJUSTES = () => path.join(app.getPath('userData'), 'ajustes.json')
+
 /**
  * Cuánto se espera tras un `resize`/`move` antes de guardar (F035).
  *
@@ -167,7 +177,7 @@ function crearVentana () {
     minWidth: 380,
     minHeight: 480,
     backgroundColor: '#0B0F14',
-    title: 'Traductor Italiano',
+    title: 'ArtTranslatorV2',
     webPreferences: {
       preload: path.join(__dirname, 'preloadApp.js'),
       contextIsolation: true,
@@ -1595,6 +1605,23 @@ ipcMain.handle('app:exportarSesion', async () => {
 })
 
 ipcMain.handle('app:abrirCarpeta', (_e, ruta) => shell.showItemInFolder(ruta))
+
+// ── Idioma de la reunión (F051) ───────────────────────────────────────
+/**
+ * El último idioma elegido, para marcarlo en la pantalla de idioma. `null` la
+ * primera vez: no hay nada que marcar. La pantalla sale en cada arranque; esto
+ * solo dice cuál tocó la vez anterior.
+ */
+ipcMain.handle('app:leerIdioma', () => ({ idioma: leerAjustes(RUTA_AJUSTES()).idioma || null }))
+
+/**
+ * El usuario eligió idioma: se recuerda, se precarga el Marian de ese idioma y se
+ * suelta el de los demás (`ajustes.elegirIdioma`). `sesion` es la puerta del
+ * «con la escucha activa no se cambia»; el idioma de una reunión en marcha no se
+ * toca.
+ */
+ipcMain.handle('app:elegirIdioma', (_e, codigo) =>
+  elegirIdioma({ codigo, hayReunion: Boolean(sesion), ruta: RUTA_AJUSTES(), traductor }))
 
 // ── Arranque y cierre ─────────────────────────────────────────────────
 app.whenReady().then(async () => {
