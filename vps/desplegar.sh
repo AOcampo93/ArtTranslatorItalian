@@ -12,9 +12,17 @@ HOST="${INFORMES_HOST:-root@vmi}"
 DESTINO="${INFORMES_DESTINO:-/opt/arttranslator}"
 DOMINIO="${INFORMES_DOMINIO:-arttranslator.81.17.100.181.sslip.io}"
 
-echo "== Sincronizando $DIR/ -> $HOST:$DESTINO/ (sin informes/ ni .env local) =="
+# `--delete` borra en el VPS todo lo que no esté aquí. `informes/` y
+# `licencias/` son datos que viven solo allí: sin su `--exclude`, cada
+# despliegue vaciaría los informes subidos y el registro de licencias (F053),
+# con todos los equipos activados dentro. El `.env` real también vive solo allí.
+# Y ningún `*.pem`: `rsync` no mira el `.gitignore`, así que una clave privada de
+# licencias que alguien deje en `vps/` por descuido subiría al servidor.
+echo "== Sincronizando $DIR/ -> $HOST:$DESTINO/ (sin informes/, licencias/, *.pem ni .env local) =="
 rsync -avz --delete \
   --exclude 'informes/' \
+  --exclude 'licencias/' \
+  --exclude '*.pem' \
   --exclude '.env' \
   "$DIR/" "$HOST:$DESTINO/"
 
@@ -25,8 +33,10 @@ rsync -avz --delete \
 # revienta con EACCES (motivo de rechazo de la ronda 1: reproducido con un
 # punto de montaje root:root en un contenedor real). `chown` sin `mkdir -p`
 # fallaría en el primer despliegue, cuando el directorio todavía no existe.
-echo "== Preparando el directorio de datos ($DESTINO/informes, dueño 100:101) =="
-ssh "$HOST" "mkdir -p $DESTINO/informes && chown 100:101 $DESTINO/informes"
+# `licencias/` lleva identificadores de licencia (la credencial de activación),
+# así que además de ser del contenedor se cierra al resto de usuarios del VPS.
+echo "== Preparando los directorios de datos ($DESTINO/informes y $DESTINO/licencias, dueño 100:101) =="
+ssh "$HOST" "mkdir -p $DESTINO/informes $DESTINO/licencias && chown 100:101 $DESTINO/informes $DESTINO/licencias && chmod 700 $DESTINO/licencias"
 
 echo "== docker compose up -d --build =="
 ssh "$HOST" "cd $DESTINO && docker compose up -d --build"

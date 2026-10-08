@@ -18,16 +18,32 @@
  * ruta que antes, pero la misma lógica simple (auth, saneado de ruta, límite
  * de tasa) que ya tenía la subida. Todo lo que necesita ya está en `http`,
  * `fs`, `path` y `crypto`.
+ *
+ * F053 añade `POST /licencias/activar` (por fuera, `/informes/licencias/activar`:
+ * cuelga del router de Traefik que ya existe). Es la activación con tope de
+ * equipos y permiso firmado; el almacén y la firma viven en `licencias.js`, que
+ * comparte con la herramienta de administración. Sin `LICENCIAS_CLAVE_PRIVADA`
+ * la ruta responde 503 y todo lo demás funciona igual, como la vista privada.
  */
 
 const http = require('http')
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
+const { PATRON_LICENCIA, PATRON_HUELLA, configurarLicencias, activarEquipo, firmarPermiso } = require('./licencias')
 
 const TOPE_BYTES = 20 * 1024 * 1024 // 20 MiB — tope del contrato de subida
 const MAX_SUBIDAS_MIN = 30 // subidas por IP y minuto
 const MAX_FALLOS_AUTH_MIN = 10 // fallos de HTTP Basic por IP y minuto, antes de 429 (vista privada)
+// Una app legítima activa una vez al arrancar y renueva de vez en cuando; 10 por
+// minuto deja margen para reintentos y para varios equipos detrás de una misma
+// IP, y frena de sobra cualquier ráfaga. Decisión de diseño, no una medición.
+const MAX_ACTIVACIONES_MIN = 10
+// El cuerpo legítimo mide ~310 B con un nombre de equipo de 64 caracteres [medido].
+const TOPE_ACTIVACION_BYTES = 4 * 1024
+const CONTENT_TYPE_ACTIVACION = 'application/json'
+// Forma de versión: 1.0, 1.0.0, 1.0.0.2, con sufijo opcional (1.0.0-beta.1).
+const PATRON_VERSION = /^\d{1,4}(?:\.\d{1,4}){1,3}(?:-[A-Za-z0-9.]{1,24})?$/
 const VENTANA_MS = 60 * 1000
 const PREFIJO = '/informes'
 // X-Maquina, X-Version y X-Reunion se usan tal cual para construir un nombre
@@ -156,15 +172,22 @@ function ipCliente (req) {
 /**
  * Puro: decide si `ip` puede subir ahora, mutando `mapa` (ip -> {n, inicio}).
  * Ventana fija de un minuto: se reinicia sola, sin temporizador aparte.
+ * `limite` es opcional para que la activación de licencias reutilice la misma
+ * ventana con su propio tope y su propio mapa.
  */
-function permiteSubida (mapa, ip, ahora = Date.now()) {
+function permiteSubida (mapa, ip, ahora = Date.now(), limite = MAX_SUBIDAS_MIN) {
   const entrada = mapa.get(ip)
   if (!entrada || ahora - entrada.inicio >= VENTANA_MS) {
     mapa.set(ip, { n: 1, inicio: ahora })
     return true
   }
   entrada.n += 1
-  return entrada.n <= MAX_SUBIDAS_MIN
+  return entrada.n <= limite
+}
+
+/** Puro: lo mismo que `permiteSubida`, con el tope de las activaciones. Mapa aparte: agotar uno no toca el cupo del otro. */
+function permiteActivacion (mapa, ip, ahora = Date.now()) {
+  return permiteSubida(mapa, ip, ahora, MAX_ACTIVACIONES_MIN)
 }
 
 /**
@@ -444,12 +467,136 @@ function manejarDescarga (req, res, ctx) {
 }
 
 /**
+ * Puro: valida el cuerpo de una activación con alfabetos cerrados. Devuelve
+ * `{ ok: true, datos }` o `{ ok: false, campo }` con el primer campo que falla,
+ * para que quien integra la app sepa qué corregir. `placa` puede ser `null` (o
+ * faltar): hay placas baratas que no traen un identificador útil. `equipo` usa
+ * el alfabeto de `X-Maquina`, así que la app tiene que normalizar el nombre
+ * de la computadora antes de mandarlo.
+ */
+function validarActivacion (cuerpo) {
+  const falla = (campo) => ({ ok: false, campo })
+  if (!cuerpo || typeof cuerpo !== 'object' || Array.isArray(cuerpo)) return falla('cuerpo')
+  const { licencia, huellas, equipo, version } = cuerpo
+  if (typeof licencia !== 'string' || !PATRON_LICENCIA.test(licencia)) return falla('licencia')
+  if (!huellas || typeof huellas !== 'object' || Array.isArray(huellas)) return falla('huellas')
+  const { maquina } = huellas
+  const placa = huellas.placa === undefined ? null : huellas.placa
+  if (typeof maquina !== 'string' || !PATRON_HUELLA.test(maquina)) return falla('huellas.maquina')
+  if (placa !== null && (typeof placa !== 'string' || !PATRON_HUELLA.test(placa))) return falla('huellas.placa')
+  if (saneaCabecera(equipo) === null) return falla('equipo')
+  if (typeof version !== 'string' || !PATRON_VERSION.test(version)) return falla('version')
+  return { ok: true, datos: { licencia, maquina, placa, equipo, version } }
+}
+
+/**
+ * Lee el cuerpo guardando como mucho `tope` bytes y llama a `listo(buffer)` al
+ * terminar, o a `listo(null)` si se pasó. Igual que la subida: un cuerpo
+ * excesivo se sigue drenando sin guardarlo y se contesta al final, porque
+ * cerrar el socket mientras el cliente escribe es un ECONNRESET indistinguible
+ * de un fallo real.
+ */
+function leerCuerpoAcotado (req, tope, listo) {
+  const longitudDeclarada = Number(req.headers['content-length'])
+  let excedido = Number.isFinite(longitudDeclarada) && longitudDeclarada > tope
+  const trozos = []
+  let total = 0
+  req.on('data', (trozo) => {
+    total += trozo.length
+    if (excedido || total > tope) {
+      excedido = true
+      return
+    }
+    trozos.push(trozo)
+  })
+  req.on('error', () => {
+    // El cliente cortó a medias: no queda a quién responder.
+  })
+  req.on('end', () => listo(excedido ? null : Buffer.concat(trozos)))
+}
+
+/**
+ * Decide, apunta y responde una activación ya validada. Se llama desde el
+ * `end` del cuerpo, fuera del manejador síncrono: una excepción aquí no la
+ * recoge nadie y tiraría el proceso entero —con `restart: unless-stopped`, un
+ * bucle de caídas que se lleva también la subida de informes—, así que todo
+ * lo que toca disco o firma va dentro del `try`.
+ */
+function resolverActivacion (res, ctxLicencias, datos) {
+  const ahora = new Date()
+  let decision, firmado
+  try {
+    decision = activarEquipo(ctxLicencias.directorio, datos, { ahora, contacto: ctxLicencias.contacto })
+    if (decision.estado === 'permiso') {
+      firmado = firmarPermiso(ctxLicencias.clave, datos, { ahora: ahora.getTime(), dias: ctxLicencias.dias })
+    }
+  } catch (error) {
+    // Solo el código: nada de rutas ni del mensaje de Node en el log ni en la respuesta.
+    console.error(`${ahora.toISOString()} fallo_licencias codigo=${error.code || 'desconocido'}`)
+    return responde(res, 500, { error: 'fallo_al_guardar' })
+  }
+
+  // Ni licencia entera ni huellas ni clave: 8 hex bastan para reconocerla y no sirven para activar.
+  console.log(`${ahora.toISOString()} licencia=${datos.licencia.slice(0, 8)} resultado=${decision.resultado} version=${datos.version}`)
+
+  if (firmado) return responde(res, 200, firmado)
+  if (decision.estado === 'tope') {
+    return responde(res, 403, { motivo: 'tope', usados: decision.usados, maximo: decision.maximo, contacto: decision.contacto })
+  }
+  // Inexistente y revocada: el MISMO cuerpo, y con el contacto del servidor y
+  // no el de la licencia, que delataría cuáles existen.
+  return responde(res, 403, { motivo: 'denegada', contacto: ctxLicencias.contacto })
+}
+
+/**
+ * `POST /licencias/activar` (F053). Orden deliberado: método, clave del
+ * servidor, freno por IP, tipo y tamaño del cuerpo, forma de los campos y, solo
+ * entonces, el almacén. No hay autenticación previa que proteja el cupo (el
+ * identificador de licencia ES la credencial), así que el freno cuenta todo
+ * lo que llega a la ruta.
+ */
+function manejarActivacion (req, res, { ctxLicencias, contadoresActivacion }) {
+  res.setHeader('Cache-Control', 'no-store')
+  if (req.method !== 'POST') return responde(res, 405, { error: 'metodo_no_permitido' })
+  if (!ctxLicencias.clave) return responde(res, 503, { error: 'licencias_no_disponibles' })
+
+  if (!permiteActivacion(contadoresActivacion, ipCliente(req))) {
+    return responde(res, 429, { error: 'demasiadas_activaciones' })
+  }
+
+  const tipo = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (tipo !== CONTENT_TYPE_ACTIVACION) {
+    return responde(res, 415, { error: 'content_type_invalido' })
+  }
+
+  leerCuerpoAcotado(req, TOPE_ACTIVACION_BYTES, (cuerpo) => {
+    if (cuerpo === null) return responde(res, 413, { error: 'cuerpo_demasiado_grande' })
+
+    let json
+    try {
+      json = JSON.parse(cuerpo.toString('utf8'))
+    } catch {
+      return responde(res, 400, { error: 'cuerpo_invalido', campo: 'cuerpo' })
+    }
+    const validado = validarActivacion(json)
+    if (!validado.ok) return responde(res, 400, { error: 'cuerpo_invalido', campo: validado.campo })
+
+    resolverActivacion(res, ctxLicencias, validado.datos)
+  })
+}
+
+/**
  * Fábrica: no arranca a escuchar por sí sola (lo hace quien la llama, con el
  * puerto que le toque — efímero en tests, `PUERTO` en producción). Cada
  * servidor tiene su propio mapa de límite de subidas: dos servidores de test
  * en el mismo proceso no se contaminan entre sí.
+ *
+ * `licencias` son las opciones de F053 (`clavePrivada`, `directorio`, `dias`,
+ * `contacto`); sin clave la ruta de licencias existe pero responde 503. El
+ * estado ya resuelto queda en `servidor.licencias` para que el arranque lo
+ * cuente sin volver a interpretar el entorno.
  */
-function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO, usuarioVista = '', claveVista = '' } = {}) {
+function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO, usuarioVista = '', claveVista = '', licencias = {} } = {}) {
   if (!token) {
     throw new Error('INFORMES_TOKEN vacío: el receptor se niega a arrancar sin él')
   }
@@ -467,11 +614,14 @@ function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO, usuari
   // y "no encontrada" sean indistinguibles desde fuera (criterio F039c).
   const vistaActiva = Boolean(usuarioVista) && Boolean(claveVista)
 
+  const ctxLicencias = configurarLicencias(licencias)
+
   const contadores = new Map()
   const contadoresFallosAuth = new Map()
+  const contadoresActivacion = new Map()
   const limpieza = setInterval(() => {
     const ahora = Date.now()
-    for (const mapa of [contadores, contadoresFallosAuth]) {
+    for (const mapa of [contadores, contadoresFallosAuth, contadoresActivacion]) {
       for (const [ip, entrada] of mapa) {
         if (ahora - entrada.inicio >= VENTANA_MS) mapa.delete(ip)
       }
@@ -494,6 +644,10 @@ function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO, usuari
 
     if (ruta === '/salud') return manejarSalud(req, res)
 
+    // Antes del reparto por número de tramos de más abajo: `/licencias/activar`
+    // también tiene dos, y se confundiría con `/<fecha>/<archivo>` de la vista.
+    if (ruta === '/licencias/activar') return manejarActivacion(req, res, { ctxLicencias, contadoresActivacion })
+
     if (ruta === '/') {
       if (req.method === 'POST') return manejarInforme(req, res, { token, directorioBase, contadores })
       if (req.method === 'GET') {
@@ -514,6 +668,7 @@ function crearServidor ({ token, directorioBase = DIRECTORIO_POR_DEFECTO, usuari
   })
 
   servidor.on('close', () => clearInterval(limpieza))
+  servidor.licencias = ctxLicencias
   return servidor
 }
 
@@ -527,10 +682,20 @@ if (require.main === module) {
   const servidor = crearServidor({
     token,
     usuarioVista: process.env.INFORMES_USUARIO || '',
-    claveVista: process.env.INFORMES_CLAVE || ''
+    claveVista: process.env.INFORMES_CLAVE || '',
+    licencias: {
+      clavePrivada: process.env.LICENCIAS_CLAVE_PRIVADA || '',
+      dias: process.env.LICENCIAS_DIAS,
+      contacto: process.env.LICENCIAS_CONTACTO
+    }
   })
   servidor.listen(puerto, '0.0.0.0', () => {
     console.log(`Receptor de informes escuchando en 0.0.0.0:${puerto}`)
+    const estado = servidor.licencias
+    // La huella es de la clave PÚBLICA: sirve para comprobar que el VPS firma con la que la app lleva incrustada.
+    console.log(estado.clave
+      ? `Licencias activas: almacén ${estado.directorio}, permisos de ${estado.dias} días, huella de la clave pública ${estado.huella}`
+      : 'Licencias desactivadas: sin una LICENCIAS_CLAVE_PRIVADA válida la ruta de licencias responde 503')
   })
 }
 
@@ -541,10 +706,14 @@ module.exports = {
     comparaConstante,
     partesFecha,
     permiteSubida,
+    permiteActivacion,
+    validarActivacion,
     esIpConfiable,
     ipCliente,
     TOPE_BYTES,
     MAX_SUBIDAS_MIN,
+    MAX_ACTIVACIONES_MIN,
+    TOPE_ACTIVACION_BYTES,
     VENTANA_MS,
     PATRON_CABECERA,
     CONTENT_TYPE_ESPERADO

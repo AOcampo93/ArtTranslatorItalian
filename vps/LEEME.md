@@ -213,13 +213,99 @@ se acota por diseño:
 - En los dos casos, el freno por IP (30/min subida, 10/min fallos de auth)
   sigue funcionando con las credenciales nuevas sin cambios de código.
 
+## Licencias (F053)
+
+La activación de ArtTranslatorV2 con tope de equipos (`PLAN.md` §17.6): un solo zip con la
+licencia dentro, y el equipo que pase del tope no obtiene permiso. La ruta cuelga del router
+de Traefik que ya existe (`PathPrefix(/informes)`), así que no hay nada que tocar en
+Traefik; el servidor la acepta también sin el prefijo. El código es `licencias.js` (almacén,
+activación y firma, compartido con la herramienta de administración) y la ruta, `servidor.js`.
+
+```
+POST https://arturoocampo.com/informes/licencias/activar
+Content-Type: application/json
+
+{ "licencia": "<32 hex>", "huellas": { "maquina": "<64 hex>", "placa": "<64 hex> o null" },
+  "equipo": "<[A-Za-z0-9._-], máx 64>", "version": "1.0.0" }
+```
+
+| Respuesta | Motivo |
+|---|---|
+| `200 {"permiso","firma"}` | `permiso` es base64url del JSON `{licencia, huellas, emitido, caduca}` (milisegundos desde 1970; `caduca` = ahora + `LICENCIAS_DIAS`, 14 por defecto). `firma` es la de Ed25519 sobre esos mismos bytes, en base64url |
+| `403 {"motivo":"tope","usados","maximo","contacto"}` | equipo nuevo y la licencia ya no tiene plazas |
+| `403 {"motivo":"denegada","contacto"}` | licencia inexistente **o** revocada: la misma respuesta, byte a byte y con el contacto del servidor, para no revelar cuáles existen |
+| `400` `413` `415` `405` | campo fuera de su alfabeto (`campo` dice cuál) / cuerpo de más de 4 KiB / no es `application/json` / no es `POST` |
+| `429` | más de 10 activaciones por minuto desde la misma IP real (cupo propio, aparte del de las subidas) |
+| `500` `503` | fallo de disco / sin `LICENCIAS_CLAVE_PRIVADA` válida. Transitorios: la app sigue con el permiso que tenga (PLAN §0.21) |
+
+Todas las respuestas llevan `Cache-Control: no-store`.
+
+**Qué es un equipo.** Es conocido si coincide la `placa`, o si coincide la `maquina` y la
+placa no la contradice (es la misma, o alguna de las dos falta: `null` en la petición, o un
+equipo que nunca tuvo placa). Reinstalar Windows en la misma computadora cambia la máquina y
+no la placa, así que sigue siendo el mismo equipo y su huella nueva se guarda; un MachineGuid
+copiado a otra computadora, o un Windows clonado en otra placa, cuenta como otro equipo (regla
+corregida en la revisión de F053; PLAN §17.6). Solo se guardan las huellas de una petición
+que coincidió. Un equipo conocido actualiza su última vez, su versión y su nombre. Cada
+activación queda en el registro de su licencia (fecha, huellas, equipo, versión y resultado
+`nuevo`, `conocido`, `tope` o `revocada`; las últimas 500, más un contador total), gaste
+plaza o no. Una licencia que no existe no deja rastro.
+
+**Administración**, por ssh y sobre el mismo almacén:
+
+```bash
+./licencias.sh crear "Cliente" [maximo] [contacto]   # imprime el id (128 bits); maximo 6 por defecto
+./licencias.sh listar                                 # equipos por licencia: nombre, primera y última vez, versión, cuántas huellas de máquina y de placa; y activaciones
+./licencias.sh liberar <licencia> <prefijo-huella>    # prefijo (6 hex o más) de la máquina o placa que muestra «listar»
+./licencias.sh revocar <licencia>
+./licencias.sh tope <licencia> <n>
+```
+
+**La clave.** Se genera **en local**, no en el VPS (`licencias.sh claves` se niega):
+`node licencias-cli.js claves ~/fuera-del-repo/licencias.pem` (el archivo es obligatorio, y
+fuera del repo) escribe la privada con permisos 600 (no pisa una existente) e imprime solo la
+pública, que se incrusta en la app. Guarda ese `.pem` bien: es la copia de seguridad de la
+clave que firma los permisos, y sin ella habría que generar otra y reempaquetar la app con la
+pública nueva. En el `.env` del VPS la privada va en **una** línea, con los saltos escritos
+como `\n`, y **sin pasar por la terminal**: la receta la manda directa al `.env` por ssh.
+
+```bash
+printf '\nLICENCIAS_CLAVE_PRIVADA=%s\n' "$(awk 'NF { sub(/\r/, ""); printf "%s\\n", $0 }' ~/fuera-del-repo/licencias.pem)" \
+  | ssh "${INFORMES_HOST:-root@vmi}" "cat >> ${INFORMES_DESTINO:-/opt/arttranslator}/.env"
+```
+
+Se hace una sola vez (para cambiarla, se edita esa línea en el VPS); el `\n` del principio
+cubre un `.env` que no acabe en salto de línea. Con `printf` y no con `echo`: el `echo` de
+zsh, el shell de macOS, convierte esos `\n` en saltos reales y deja la variable partida.
+
+Sin ella, o con una que no sea Ed25519 PKCS8, la ruta responde 503 y el resto del receptor
+funciona igual. Al arrancar, el log dice `Licencias activas: … huella de la clave pública …`:
+tiene que coincidir con la que imprime `claves`, porque es la que verifica la app. Para ver
+que la ruta está viva sin gastar plaza, un `POST` con cuerpo `{}` da `400` (con clave) o `503`
+(sin ella).
+
+**Datos y despliegue.** El almacén es `/datos/licencias/licencias.json`, en el volumen
+`./licencias`, aparte de los informes. Se escribe de forma atómica, se relee en cada petición
+y la herramienta y el servidor comparten un candado, así que `liberar` o `revocar` valen desde
+la siguiente activación sin reiniciar nada. **`desplegar.sh` no lo toca**
+(`--exclude 'licencias/'`: sin eso, `--delete` borraría el registro entero en cada
+despliegue), tampoco sube ningún `*.pem` (`rsync` no mira el `.gitignore`) y crea la carpeta
+con dueño `100:101` y permisos 700. Se respalda como `informes/`.
+`desplegar-coolify.sh` no monta ese volumen: las licencias solo están soportadas con `desplegar.sh`.
+
+**Privacidad.** El almacén guarda la licencia, las huellas (hashes que calcula la app con la
+licencia como sal: el servidor nunca ve el identificador original), el nombre del equipo, la
+versión y las fechas. Nada de la reunión ni la IP. El log lleva 8 hex de la licencia, el
+resultado y la versión.
+
 ## Pruebas
 
 ```bash
 npm test
 ```
 
-`node --test` sobre `test/servidor.test.js` (30 pruebas). Arranca el
+`node --test` sobre `test/servidor.test.js` (30 pruebas) y
+`test/licencias.test.js` (13, F053: tope, placa, MachineGuid copiado, revocada, firma, `liberar`, 503, etc.). Arranca el
 servidor real en un puerto efímero con un directorio temporal (nunca toca
 `/datos/informes`) y cubre cada respuesta del contrato, más las funciones
 puras (saneado de cabeceras, ventana de subidas, partición de fecha) por
@@ -236,6 +322,12 @@ criterio — prefijo, vista 401/200, traversal en la descarga, vista ausente
 sin las credenciales — sin mutación aparte: el freno de la vista
 (`fallosAuthRecientes`/`registraFalloAuth`) reutiliza el mismo mecanismo de
 ventana que `permiteSubida`, ya probado con sus dos orillas más arriba.
+
+**Mutación documentada (F053):** cambiar `lic.equipos.length < lic.maximo` por `<=` en
+`activarEquipo` (el tope, el mecanismo central) hace caer cinco pruebas: el tope de 6, las
+ocho activaciones simultáneas, la placa repetida, el MachineGuid copiado y `liberar`: el
+equipo 7 recibe permiso. La regla de equipo conocido de la revisión no se mutó: su prueba
+se escribió primero y cayó contra el código anterior, con «cualquiera de las dos».
 
 ## Por qué no es un framework
 

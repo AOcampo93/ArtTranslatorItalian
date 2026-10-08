@@ -1776,14 +1776,14 @@ original:
 | `MachineGuid` (`HKLM\SOFTWARE\Microsoft\Cryptography`) | Se reinstala Windows. Los clones de una misma imagen lo comparten | La comprobación local en cada arranque, que es rápida (`reg query`) |
 | UUID de la placa (SMBIOS, `Win32_ComputerSystemProduct`) | Se cambia la placa. Algunas placas baratas lo traen vacío o repetido | Que reinstalar Windows en la misma computadora no gaste otra plaza |
 
-El servidor da por conocido un equipo si coincide cualquiera de los dos identificadores.
+El servidor da por conocido un equipo si coincide la placa, o si coincide la máquina **y la placa no lo contradice** (es la misma, o alguna de las dos falta). Corregido en la revisión de F053 (08-10-2026). La regla anterior, «cualquiera de las dos», dejaba entrar sin plaza a una computadora nueva que presentara una sola vez el MachineGuid de otra ya activada (copiado con regedit, o en una petición retocada), y además el servidor se quedaba con su huella para siempre. Con la regla nueva, un MachineGuid copiado o un Windows clonado en otra placa cuentan como otro equipo.
 Reinstalar la app, moverla de carpeta o reinstalar Windows **no gasta plaza**. Cada
 activación queda registrada igualmente, así que se sabe cuántas veces se instaló y cuándo.
 
 **El flujo:**
 
 1. Al arrancar, la app calcula la huella y busca su permiso guardado.
-2. Si no hay permiso, pide uno con `POST https://arturoocampo.com/licencias/activar`,
+2. Si no hay permiso, pide uno con `POST https://arturoocampo.com/informes/licencias/activar`,
    mandando licencia, huellas, nombre del equipo y versión.
    - Si quedan plazas o el equipo ya estaba registrado, el servidor devuelve un permiso firmado.
    - Si no, la app muestra una pantalla de bloqueo: «Esta copia ya está activada en 6
@@ -1802,12 +1802,28 @@ activación queda registrada igualmente, así que se sabe cuántas veces se inst
 **Servidor.** La ruta nueva va en `vps/servidor.js`, sin dependencias, igual que el receptor
 de informes:
 
+- **La ruta cuelga de `/informes`**, el prefijo que Traefik ya enruta a este contenedor
+  (`PathPrefix(/informes)`). Se escribió primero como `/licencias/activar` a secas, pero eso
+  exigía un router nuevo y tocar Traefik; con el prefijo no hay que tocar nada, y el servidor
+  la acepta igual con y sin él (`quitaPrefijo`, como los informes). Va en `licencias.js`
+  (almacén, activación, firma) y `servidor.js` (la ruta).
+- **Contrato (F053).** Cuerpo `application/json`
+  `{licencia, huellas:{maquina, placa}, equipo, version}`: la licencia son 32 hex; cada huella,
+  64 hex (el SHA-256 que calcula la app), con `placa` posiblemente `null`; `equipo` con el
+  alfabeto `[A-Za-z0-9._-]` y hasta 64 caracteres, **así que la app normaliza el nombre de la
+  computadora antes de mandarlo**; `version` con forma de versión. Respuesta `200 {permiso,
+  firma}`: `permiso` es el JSON `{licencia, huellas, emitido, caduca}` en base64url (fechas en
+  milisegundos desde 1970) y `firma` la de Ed25519 sobre esos mismos bytes. `403 {motivo:'tope',
+  usados, maximo, contacto}` o `403 {motivo:'denegada', contacto}` son definitivas; un `429`, un
+  `5xx` o la falta de red son transitorios y la app sigue con el permiso que tenga (§0.21).
 - Los datos van en un volumen aparte, `/datos/licencias`.
 - Tiene freno por IP.
 - Responde lo mismo a una licencia inexistente y a una revocada, para no revelar cuáles
   existen.
 - Se administra por ssh, igual que `descargar.sh`, con
-  `vps/licencias.sh crear | listar | liberar | revocar | tope`.
+  `vps/licencias.sh crear | listar | liberar | revocar | tope`. El par de claves se genera
+  **en local** (`node vps/licencias-cli.js claves <archivo>`: la privada a un archivo 600, y
+  por pantalla solo la pública, que se incrusta en la app).
 - Toda llamada desde la app va por el módulo `net` de Electron (§0.13).
 
 **Dónde vive la comprobación en la app.** Va dentro de `app.asar` (`electron-app/src/`) y

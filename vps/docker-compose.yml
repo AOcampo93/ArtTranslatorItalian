@@ -10,6 +10,11 @@ services:
     env_file: .env
     volumes:
       - ./informes:/datos/informes
+      # F053: el registro de licencias, en un volumen APARTE de los informes.
+      # Si se pierde, todas las licencias y los equipos activados se pierden
+      # con él: desplegar.sh no lo toca (--exclude 'licencias/'), y hay que
+      # copiarlo con el resto de datos del VPS.
+      - ./licencias:/datos/licencias
     networks:
       - coolify
     labels:
