@@ -2037,6 +2037,7 @@ de error que corrige la vía del LLM.
 | F053 | Licencia, lado del servidor | Sonnet | Opus (claves, red y dinero) |
 | F054 | Licencia, lado de la app | Sonnet | Opus (claves, red y dinero) |
 | F055 | Paquete v1.0.0: los dos Marian, los dos WAV, licencia incrustada, manifiesto del backend (`herramientas/manifiesto-backend.js` antes de `electron-builder`, y `verificarBackend` contra el paquete ya construido), fusibles (con `enableNodeOptionsEnvironmentVariable` apagado), verificador y LEEME. El líder despliega el servidor de F053 antes de publicar | Sonnet | Verificador del paquete |
+| F058 | Publicar la v1.0.0: desplegar el servidor de licencias, crear la licencia real, construir el zip definitivo y probar una activación real. **Solo con el visto bueno del humano** | Líder | Verificador del paquete y activación real |
 
 Van una detrás de otra (`init.sh` no admite dos tareas en curso). Coste: unos **2 M tokens**
 de subagentes `[estimado]`, a razón de ~0,15 M por tarea Sonnet, que es lo que costaron
