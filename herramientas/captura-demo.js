@@ -23,6 +23,12 @@
  * F057: al final empieza otra reunión desde la propia interfaz y captura la vista en
  * vivo, que tiene que salir limpia (sin las burbujas ni las preguntas de la anterior).
  *
+ * F054: al final se pinta la pantalla de licencia con tres de sus estados (el tope de equipos,
+ * la falta de red y el backend modificado) para ver que ella sola ocupa la ventana y que no
+ * queda ninguna sección a la vista. Se llama a `aplicarLicencia` con los textos de verdad,
+ * los que arma `licencia.js` en el proceso principal: sin proceso principal (la página se
+ * abre sin `preload`) no hay quien los mande.
+ *
  * La numeración cambia cada vez que se inserta una pantalla, y las capturas de
  * la pasada anterior se quedaban al lado con el mismo nombre: por eso al empezar
  * se borran los `NN-*.png` de `capturas/`.
@@ -267,6 +273,27 @@ async function main () {
   await ejecutar(`document.getElementById('btnEscuchar').click(); ${pararTemporizadores}`)
   await esperar(150)
   await capturar('envivo-segunda-reunion')
+
+  // 14) F054: la pantalla de licencia. Con el tope de equipos: título con el máximo, el
+  // contacto que manda el servidor y sin botón de reintentar (volver a pedir no cambia nada).
+  // Es la captura de «ninguna sección accesible»: el panel de la reunión que había debajo, la
+  // cabecera con ⚙ y los paneles ya no se ven.
+  const { vistaDe } = require(path.join(__dirname, '..', 'electron-app', 'src', 'licencia.js'))
+  await ejecutar(`aplicarLicencia(${JSON.stringify(vistaDe({
+    estado: 'tope', maximo: 6, contacto: 'soporte@ejemplo.test · +34 600 000 000',
+  }))})`)
+  await esperar(150)
+  await capturar('licencia-tope')
+
+  // 15) Sin red y sin permiso: «Conéctate a internet una vez para activar», con «Reintentar».
+  await ejecutar(`aplicarLicencia(${JSON.stringify(vistaDe({ estado: 'sin_red' }))})`)
+  await esperar(150)
+  await capturar('licencia-sin-red')
+
+  // 16) F054, ronda 2: el backend no es el del paquete. Sin «Reintentar»: hay que descargar de nuevo.
+  await ejecutar(`aplicarLicencia(${JSON.stringify(vistaDe({ estado: 'modificada' }))})`)
+  await esperar(150)
+  await capturar('licencia-modificada')
 
   console.log(`[captura-demo] ${n} pantallas guardadas en ${CAPTURAS_DIR}`)
   app.quit()

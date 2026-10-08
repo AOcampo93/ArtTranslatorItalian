@@ -76,6 +76,17 @@ contextBridge.exposeInMainWorld('app', {
    */
   elegirIdioma: codigo => ipcRenderer.invoke('app:elegirIdioma', codigo),
 
+  // ── Licencia (F054) ───────────────────────────────────────────────
+  /**
+   * Lo primero que pregunta la interfaz: espera a la comprobación del arranque y devuelve
+   * `{ estado, titulo, texto, contacto, reintentar }`. Con `estado: 'ok'` no hay pantalla.
+   * Quien manda es el proceso principal, que además se niega a empezar o comprobar sin
+   * licencia: esto solo dice qué pintar.
+   */
+  licencia: () => ipcRenderer.invoke('app:licencia'),
+  /** El botón «Reintentar» de la pantalla de licencia. Con la licencia en orden no hace nada. */
+  reintentarLicencia: () => ipcRenderer.invoke('app:licenciaReintentar'),
+
   // ── Claves: entran, no salen ──────────────────────────────────────
   guardarClaves: claves => ipcRenderer.invoke('app:guardarClaves', claves),
   /** Sólo dice CUÁLES hay, nunca su valor. */

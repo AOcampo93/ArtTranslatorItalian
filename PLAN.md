@@ -1791,13 +1791,14 @@ activación queda registrada igualmente, así que se sabe cuántas veces se inst
 3. El permiso es un JSON firmado con Ed25519: `{licencia, huellas, emitido, caduca}`. La
    clave privada vive **solo en el `.env` del VPS** y la pública va en la app, que verifica
    el permiso sin red.
-4. Con el permiso vigente, la app lo renueva en segundo plano. La caducidad la fija el
-   servidor (14 días por defecto), así que cambiarla no exige una versión nueva.
+4. Con el permiso vigente, la app lo renueva en segundo plano **en cada arranque con red**. La
+   caducidad la fija el servidor (14 días por defecto), así que cambiarla no exige una versión nueva.
 5. Sin red: con el permiso vigente, la app funciona. Sin permiso o con el permiso caducado,
    muestra «Conéctate a internet una vez para activar».
 6. **Nunca a mitad de reunión (§0.21).** La comprobación es al arrancar; una revocación que
    llega durante una reunión se aplica en el siguiente arranque.
-7. En desarrollo (`!app.isPackaged`) no hay licencia ni se gasta plaza.
+7. En desarrollo no hay licencia ni se gasta plaza. «Desarrollo» quiere decir que el código no vive
+   dentro de un `app.asar` ni `app.isPackaged` es cierto (ver abajo: renombrar el `.exe` no apaga nada).
 
 **Servidor.** La ruta nueva va en `vps/servidor.js`, sin dependencias, igual que el receptor
 de informes:
@@ -1826,21 +1827,92 @@ de informes:
   por pantalla solo la pública, que se incrusta en la app).
 - Toda llamada desde la app va por el módulo `net` de Electron (§0.13).
 
+**Lo que la app comprueba del permiso (F054).** `electron-app/src/licencia.js`. Un permiso guardado
+(en `userData`, `licencia.permiso.json`) sirve si, **a la vez**: la firma verifica con la clave pública
+incrustada; es de la licencia incrustada; **las dos huellas del permiso son las de este equipo** (con una
+sola, un MachineGuid copiado o un Windows clonado en otra placa pasaba por otro equipo: lo señaló la revisión
+de F053); `caduca` está en el futuro; y el reloj no ha retrocedido más de un día respecto a la última hora
+vista (si no, atrasar el reloj alargaría un permiso para siempre). La placa que no distingue nada
+—vacía, sin forma de UUID, un solo dígito repetido (toda 0, toda F…) o la de serie
+`03000200-0400-0500-0006-000700080009`— se manda como `null`, porque dos computadoras con esa basura se
+tomarían por una sola. La configuración (`licencia`, `clavePublica`, `url`) va en
+`electron-app/src/licencia.json`, que viaja en el paquete como `informes.token.json` (el real, ignorado por
+git; `licencia.ejemplo.json` sí entra).
+
+- **La huella.** El MachineGuid sale de `reg query`; la placa, de PowerShell, y **en esa misma llamada
+  también se lee el MachineGuid**, de respaldo: en equipos gestionados, la directiva `DisableRegistryTools`
+  bloquea `reg.exe` y, sin respaldo, esa copia daría «No se pudo identificar este equipo» para siempre. Las
+  dos herramientas se ejecutan con ruta absoluta bajo `C:\Windows\System32`; el entorno (`SystemRoot`) solo se
+  mira si esa carpeta no existe, porque con el entorno por delante bastaría apuntarlo a un `reg.exe` de
+  mentira para presentar los valores de otra computadora.
+- **Una renovación nunca cambia el estado del proceso en marcha.** Con el permiso vigente, la app lo
+  renueva en segundo plano **en cada arranque con red**, y no cuando «ya toca» (con el reloj atrasado a mano
+  «ya toca» no llegaba nunca y una licencia revocada seguía viva). Si el servidor responde 200, guarda el
+  permiso nuevo; si responde 403, solo **retira el permiso guardado**, y es el siguiente arranque el que pide
+  otro y recibe el no. Así se cumple §0.21 sin ninguna rama «hay una reunión»: ninguna ruta de la licencia
+  puede pararla. Tampoco corta nada un permiso que caduca con la app abierta.
+- **La hora vista** se apunta al arrancar, cada hora mientras la app corre y al cerrarla, y cada permiso
+  nuevo la fija en la hora del servidor (que es la que manda: un reloj adelantado una vez no obliga a
+  pedir permiso en cada arranque). Permiso y hora se guardan **cifrados con `safeStorage`** cuando está
+  disponible, y con cifrado disponible un archivo en claro —el que dejaría alguien que lo edita a mano
+  para poner la hora en 0— no vale. Es DPAPI, del usuario: quita el Bloc de notas, no a quien escriba código.
+- **Qué bloquea.** Solo un 403 con un cuerpo reconocido (`tope`, `denegada`). Sin red, 429, 5xx, cualquier
+  otro estado (también el 403 de una página de bloqueo corporativa) o un 200 cuyo permiso no verifique son
+  fallos transitorios: con permiso vigente se sigue; sin él, «Conéctate a internet una vez para activar»,
+  con un botón «Reintentar».
+- **Falla cerrada** si el paquete no trae `licencia.json` («Esta copia no tiene licencia») o no se puede
+  leer el MachineGuid ni con `reg.exe` ni con PowerShell.
+- **«Empaquetada» se decide por dónde vive el código, no por `app.isPackaged`.** En Electron 43 esa
+  propiedad solo compara el nombre del ejecutable con `electron.exe` `[verificado]` por la revisión de F054:
+  renombrar `ArtTranslatorV2.exe` a `electron.exe` la ponía en `false`, y con ella la app entraba en modo
+  desarrollo —sin licencia, con la carpeta de datos y la base de desarrollo—. `licencia.js` (dentro del
+  asar) decide `app.isPackaged || el código está en un app.asar`, y `mainApp.js` pasa ese mismo valor a la
+  licencia y a `ajustes.js` (la carpeta de datos y la base). En desarrollo no hay licencia: ni archivo, ni
+  red, ni procesos hijo.
+- **Integridad del backend.** `node-backend/src` y `shared` viajan fuera del asar y se cargan en el mismo
+  proceso: una línea editada en cualquiera de ellos apagaría la licencia. Al construir, `herramientas/manifiesto-backend.js`
+  escribe `electron-app/src/manifiesto-backend.json` (el SHA-256 de cada archivo de esas dos carpetas; el
+  generado no se versiona, el guion sí), que va dentro del asar. Con el código en un asar, `mainApp.js` lo
+  compara **antes** del primer `require` de esas carpetas: si falta un archivo, sobra uno o alguno no casa
+  —o falta el manifiesto—, no carga el backend y muestra la pantalla «Esta copia está modificada;
+  descárgala de nuevo» (`modificada.js`: ningún otro canal, ninguna base, ninguna reunión). Los archivos que
+  el sistema deja solos (`.DS_Store`, `Thumbs.db`, `desktop.ini`) no cuentan.
+- **Se aplica en el proceso principal:** `app:empezar` y `app:comprobar` se niegan sin licencia válida; la
+  pantalla de bloqueo de la interfaz (`#licencia`, que esconde todo lo demás) es cortesía. Los plazos de
+  las lecturas de huella y de la activación son `[por medir]` en los equipos del cliente.
+
 **Dónde vive la comprobación en la app.** Va dentro de `app.asar` (`electron-app/src/`) y
 es autocontenida: solo usa módulos de Node y de Electron. El backend y `shared/` viajan
 **fuera** del asar como `extraResources`, en texto plano; si la comprobación dependiera de
-ellos, bastaría editar un archivo para saltarla. Se activan dos fusibles de Electron,
-`enableEmbeddedAsarIntegrityValidation` y `onlyLoadAppFromAsar` (Windows los admite desde
-Electron 30 `[verificado]`), y se apagan `runAsNode` y `enableNodeCliInspectArguments`.
+ellos, bastaría editar un archivo para saltarla (y por eso `mainApp.js` comprueba sus hashes antes de
+cargarlos, arriba). Se activan dos fusibles de Electron, `enableEmbeddedAsarIntegrityValidation` y
+`onlyLoadAppFromAsar` (Windows los admite desde Electron 30 `[verificado]`), y se apagan `runAsNode`,
+`enableNodeCliInspectArguments` y `enableNodeOptionsEnvironmentVariable` (este último, F055: con el binario
+renombrado, `NODE_OPTIONS=--require x.js` ejecuta código propio en el proceso principal, antes de
+`mainApp.js`; con el nombre del producto se ignora, `[verificado]` en macOS por la revisión de F054).
 
-**Lo que no promete, dicho claro.** Frena la copia, que es el caso real: llevar el zip a
-otra computadora. No frena a un programador que desarme el paquete. Sin firma Authenticode
-(§10 decidió no comprarla), la verificación de integridad se puede saltar parcheando el
-`.exe`. Contra eso está el contrato con el cliente, no el código. Si la app se va a
-distribuir a terceros, se vuelve a abrir la decisión de §10, «Instalador y firma».
+**Lo que no promete, dicho claro.** Frena la copia, que es el caso real: llevar el zip a otra
+computadora. Y frena las trampas que no exigen saber programar: renombrar el `.exe`, atrasar el reloj,
+editar el permiso guardado o tocar un archivo del backend (lo que cierran los puntos de arriba). **No
+frena:**
+
+- **A un programador que cambie una dependencia** de `node-backend/node_modules`: el manifiesto cubre
+  `node-backend/src` y `shared`, no los miles de archivos de terceros.
+- **A una máquina sin red con el reloj manipulado.** La hora vista es local, y el reloj lo controla quien
+  tiene la máquina: con el reloj quieto o atrasado de poco en poco, un permiso (revocado o no) vale hasta
+  que su `caduca` pase por ese reloj, o sea para siempre si el reloj no avanza. Con red, la renovación de
+  cada arranque apunta el 403 y el arranque siguiente bloquea (el servidor decide); sin red —o con el
+  servidor bloqueado a propósito—, no.
+- **A quien desarme el paquete y parchee el `.exe`.** Sin firma Authenticode (§10 decidió no comprarla), la
+  verificación de integridad del asar se puede saltar parcheando el binario. Y hasta que F055 apague
+  `enableNodeOptionsEnvironmentVariable`, el `.exe` renombrado deja ejecutar código propio con `NODE_OPTIONS`.
+
+Contra eso está el contrato con el cliente, no el código. Si la app se va a distribuir a terceros, se
+vuelve a abrir la decisión de §10, «Instalador y firma».
 
 **Privacidad.** El servidor de licencias guarda la licencia, las huellas (en hash), el
-nombre del equipo, la versión y las fechas. Nada de la reunión. Va escrito en el LEEME.
+nombre del equipo, la versión y las fechas —las de cada vez que se abre la app, porque renueva en cada
+arranque con red—. Nada de la reunión. Va escrito en el LEEME.
 
 ### 17.7 Nombre y carpeta de datos
 
@@ -1952,7 +2024,7 @@ de error que corrige la vía del LLM.
 | F052 | Informes: siempre números, la conversación solo con permiso | Sonnet | Opus (privacidad y red) |
 | F053 | Licencia, lado del servidor | Sonnet | Opus (claves, red y dinero) |
 | F054 | Licencia, lado de la app | Sonnet | Opus (claves, red y dinero) |
-| F055 | Paquete v1.0.0: los dos Marian, los dos WAV, licencia incrustada, fusibles, verificador y LEEME. El líder despliega el servidor de F053 antes de publicar | Sonnet | Verificador del paquete |
+| F055 | Paquete v1.0.0: los dos Marian, los dos WAV, licencia incrustada, manifiesto del backend (`herramientas/manifiesto-backend.js` antes de `electron-builder`, y `verificarBackend` contra el paquete ya construido), fusibles (con `enableNodeOptionsEnvironmentVariable` apagado), verificador y LEEME. El líder despliega el servidor de F053 antes de publicar | Sonnet | Verificador del paquete |
 
 Van una detrás de otra (`init.sh` no admite dos tareas en curso). Coste: unos **2 M tokens**
 de subagentes `[estimado]`, a razón de ~0,15 M por tarea Sonnet, que es lo que costaron
@@ -1966,6 +2038,11 @@ F042–F045 `[medido]`, más tres revisiones Opus.
 - El tamaño del paquete con los dos Marian, unos 400 MB `[por medir]`.
 - Si la pérdida de la primera palabra al partir el turno (F056) pasa con habla real `[por medir]`.
 - Si las placas de los equipos del cliente traen un UUID SMBIOS válido `[por medir]`.
+- Cuánto añade al arranque la huella (`reg query` y PowerShell, a la vez, en cada arranque) en los dos
+  equipos del cliente, y si la lectura de la placa falla alguna vez `[por medir]` (F054).
+- La llamada de PowerShell que lee MachineGuid y placa juntos, y el rechazo del `.exe` renombrado a
+  `electron.exe`, en Windows de verdad `[por medir]`: la revisión de F054 lo comprobó con el binario de macOS
+  y las pruebas usan un `electron` de mentira.
 - Que electron-builder 26 aplique los fusibles con el destino `--win dir` `[por medir]`.
 
 ---

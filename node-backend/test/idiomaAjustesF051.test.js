@@ -128,7 +128,8 @@ describe('F051 — nombre y carpeta de datos (PLAN.md §17.7)', () => {
 
   test('criterio 3: mainApp la fija al cargar el módulo —`userData` no se puede cambiar tras `ready`— y la ventana, el .exe y el appId dicen ArtTranslatorV2', () => {
     const fuente = fs.readFileSync(MAIN_APP, 'utf8')
-    const iFijar = fuente.search(/^fijarCarpetaDeDatos\(app\)$/m)
+    // F054 (ronda 2): la llamada lleva el «empaquetada» de `licencia.js` como segundo argumento.
+    const iFijar = fuente.search(/^fijarCarpetaDeDatos\(app(?:, EMPAQUETADA)?\)$/m)
     assert.ok(iFijar > 0, 'mainApp.js tiene que llamar a fijarCarpetaDeDatos(app) al cargar')
     assert.ok(iFijar < fuente.indexOf('app.whenReady()'), 'y antes de `ready`')
 

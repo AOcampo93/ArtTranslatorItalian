@@ -488,6 +488,25 @@
   @media (max-width: 820px) {
     .accesos { grid-template-columns: 1fr; }
   }
+
+  /* ── Licencia (F054) ────────────────────────────────────────────────
+     Mientras se ve la pantalla de licencia no hay acceso a NINGUNA sección: `sin-licencia`
+     esconde todo lo demás del <body> (la cabecera con ⚙, los paneles, Ajustes), no solo
+     lo tapa, para que tampoco se llegue con el teclado. `licencia-pendiente` es el
+     instante entre abrir la app y saber si hay licencia: la pantalla de idioma no se
+     enseña antes de tiempo, pero tampoco aparece una pantalla de licencia que no toca. */
+  #licencia { flex: 1; overflow-y: auto; padding: var(--gutter); }
+  body.sin-licencia > :not(#licencia) { display: none !important; }
+  body.licencia-pendiente #idioma { visibility: hidden; }
+  #licencia .tarjeta { margin-top: 22px; }
+  #licencia h2 { font-size: 15px; line-height: 1.35; }
+  .texto-licencia { color: var(--tx2); font-size: 13px; margin-top: 8px; }
+  .contacto-licencia {
+    margin-top: 12px; padding: 9px 11px; border-radius: 8px; font-size: 12.5px;
+    background: var(--sup2); border: 1px solid var(--linea); color: var(--tx);
+    overflow-wrap: anywhere;
+  }
+  .aviso-licencia { font-size: 12px; color: var(--tx3); }
 </style>
 </head>
 <body>
@@ -500,6 +519,26 @@
   <button class="parar oculto" id="btnParar">Detener</button>
   <button class="icono" id="btnAjustes" title="Ajustes">⚙</button>
 </header>
+
+<!-- ══ Licencia (F054) ══════════════════════════════════════════════════
+     Nace oculta. Si el proceso principal dice que esta copia no tiene licencia válida, se
+     enseña ella sola (`sin-licencia` en <body> esconde el resto) y se pinta con lo que
+     manda el servidor: el texto y el contacto. En modo de ejemplo (sin `window.app`) no
+     aparece nunca. -->
+<div id="licencia" class="oculto" role="alert">
+  <div class="env">
+    <h1>ArtTranslatorV2</h1>
+    <section class="tarjeta">
+      <h2 id="licenciaTitulo">Comprobando la licencia…</h2>
+      <p class="texto-licencia" id="licenciaTexto"></p>
+      <p class="contacto-licencia oculto" id="licenciaContacto"></p>
+      <div class="fila oculto" id="filaLicencia">
+        <button id="btnLicenciaReintentar">Reintentar</button>
+        <span class="aviso-licencia" id="licenciaAviso"></span>
+      </div>
+    </section>
+  </div>
+</div>
 
 <!-- ══ Idioma de la reunión (F051) ══════════════════════════════════════
      Lo primero que se ve, en cada arranque. Al elegir se entra al panel de
@@ -1845,6 +1884,66 @@ for (const codigo of Object.keys(IDIOMAS_UI)) {
 }
 $('#cambiarIdioma')?.addEventListener('click', cambiarIdioma)
 iniciarIdioma()
+
+// ── Licencia (F054) ─────────────────────────────────────────────────────
+/**
+ * La licencia la decide el proceso principal (`licencia.js`), que además se niega a
+ * empezar o comprobar sin ella. Aquí solo se pinta: si la respuesta no es `ok`, la
+ * pantalla de licencia queda ella sola a la vista y el resto del <body> se esconde.
+ *
+ * Sin proceso principal (modo de ejemplo) o con un puente sin `licencia`, no se hace
+ * nada y la pantalla no aparece.
+ */
+const LICENCIA_NO_SE_PUDO = {
+  estado: 'error', titulo: 'No se pudo comprobar la licencia', contacto: null, reintentar: true,
+  texto: 'Algo falló al comprobar la licencia de esta copia. Vuelve a intentarlo; si sigue igual, avisa a quien te entregó la copia.',
+}
+
+function aplicarLicencia (e) {
+  const cuerpo = $('body')
+  cuerpo?.classList.remove('licencia-pendiente')
+  const bloquea = Boolean(e) && e.estado !== 'ok'
+  cuerpo?.classList.toggle('sin-licencia', bloquea)
+  $('#licencia')?.classList.toggle('oculto', !bloquea)
+  if (!bloquea) return
+  ponerTexto('#licenciaTitulo', e.titulo || LICENCIA_NO_SE_PUDO.titulo)
+  ponerTexto('#licenciaTexto', e.texto || '')
+  ponerTexto('#licenciaContacto', e.contacto ? `Contacto: ${e.contacto}` : '')
+  $('#licenciaContacto')?.classList.toggle('oculto', !e.contacto)
+  $('#filaLicencia')?.classList.toggle('oculto', !e.reintentar)
+}
+
+async function iniciarLicencia () {
+  if (!api || typeof api.licencia !== 'function') return
+  // La pantalla de idioma espera a saber si hay licencia (casi siempre, un instante).
+  $('body')?.classList.add('licencia-pendiente')
+  estado('', 'Comprobando licencia…')
+  let respuesta
+  try {
+    respuesta = await api.licencia()
+  } catch {
+    respuesta = null
+  }
+  aplicarLicencia(respuesta || LICENCIA_NO_SE_PUDO)
+  if (respuesta?.estado === 'ok') estado('', 'Sin iniciar')
+}
+
+$('#btnLicenciaReintentar')?.addEventListener('click', async () => {
+  const boton = $('#btnLicenciaReintentar')
+  boton.disabled = true
+  ponerTexto('#licenciaAviso', 'Comprobando…')
+  let respuesta
+  try {
+    respuesta = await api.reintentarLicencia()
+  } catch {
+    respuesta = null
+  }
+  boton.disabled = false
+  ponerTexto('#licenciaAviso', '')
+  aplicarLicencia(respuesta || LICENCIA_NO_SE_PUDO)
+  if (respuesta?.estado === 'ok') estado('', 'Sin iniciar')
+})
+iniciarLicencia()
 
 // ── Perfiles (F032): lista, crear, editar, borrar, activar ──────────────
 // Las funciones de `contexto.js` ya existían (crearPerfil/actualizarPerfil/

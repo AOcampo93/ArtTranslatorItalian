@@ -57,6 +57,15 @@ vps/licencias/
 # viaja incrustado en el paquete de Windows). El ejemplo sí entra a git.
 electron-app/src/informes.token.json
 
+# F054: la licencia del cliente (su identificador y la clave pública que verifica los
+# permisos) viaja incrustada en el paquete de Windows, igual que el token. Sin este
+# archivo la app falla cerrada: «Esta copia no tiene licencia». El ejemplo sí entra a git.
+electron-app/src/licencia.json
+
+# F054 (ronda 2): el manifiesto con el SHA-256 de node-backend/src y shared lo genera el guion
+# `herramientas/manifiesto-backend.js` en cada construcción (F055); el guion sí se versiona.
+electron-app/src/manifiesto-backend.json
+
 # F032: capturas de pantalla de herramientas/captura-demo.js, para revisar
 # la interfaz sin abrir Electron. Son artefactos locales, no producto.
 capturas/

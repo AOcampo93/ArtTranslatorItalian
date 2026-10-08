@@ -1,0 +1,5 @@
+{
+  "licencia": "cámbiame: los 32 caracteres hexadecimales que imprime `licencias.sh crear`",
+  "clavePublica": "-----BEGIN PUBLIC KEY-----\ncámbiame: la pública que imprime `node vps/licencias-cli.js claves <archivo>`\n-----END PUBLIC KEY-----\n",
+  "url": "https://arturoocampo.com/informes/licencias/activar"
+}

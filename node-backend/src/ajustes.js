@@ -42,14 +42,19 @@ const CARPETA_DE_DATOS = 'art-translator-italian-diagnostico'
  * Pone `userData` en la carpeta de siempre. Se llama una vez, nada más cargar el
  * proceso principal: `userData` solo se puede cambiar antes de `ready`.
  *
- * En desarrollo (`!app.isPackaged`) no hace nada: ahí la carpeta es la que Electron
- * decide hoy y no se toca.
+ * En desarrollo no hace nada: ahí la carpeta es la que Electron decide hoy y no se toca.
+ *
+ * «Empaquetada» la decide quien llama (F054, ronda 2): `mainApp.js` pasa el valor de
+ * `licencia.js`, que mira dónde vive el código. `app.isPackaged` solo compara el nombre del
+ * ejecutable con `electron.exe`, así que con el `.exe` renombrado valía `false` y la app
+ * trabajaba en la carpeta de desarrollo. Sin el parámetro, `app.isPackaged`, como siempre.
  *
  * @param {{ isPackaged: boolean, getPath: Function, setPath: Function }} app
+ * @param {boolean} [empaquetada]  por defecto, `app.isPackaged`
  * @returns {string|null} la ruta que quedó fijada, o `null` si no se tocó nada
  */
-function fijarCarpetaDeDatos (app) {
-  if (!app.isPackaged) return null
+function fijarCarpetaDeDatos (app, empaquetada = app.isPackaged) {
+  if (!empaquetada) return null
   const ruta = path.join(app.getPath('appData'), CARPETA_DE_DATOS)
   app.setPath('userData', ruta)
   return ruta
@@ -77,13 +82,14 @@ function fijarCarpetaDeDatos (app) {
  *
  * @param {object} p
  * @param {{ isPackaged: boolean, getPath: Function }} p.app
+ * @param {boolean} [p.empaquetada]  por defecto, `app.isPackaged`; ver `fijarCarpetaDeDatos`
  * @param {string} [p.recursos]  `process.resourcesPath`: la carpeta `resources` de la
  *   app empaquetada, donde `extraResources` deja `node-backend`
  * @returns {{ carpeta: string|null, copiada: boolean, error?: string }}
  *   `carpeta` es lo que se pasa a `db.init`; `null`, la de desarrollo de siempre
  */
-function prepararBaseDeDatos ({ app, recursos }) {
-  if (!app.isPackaged) return { carpeta: null, copiada: false }
+function prepararBaseDeDatos ({ app, recursos, empaquetada = app.isPackaged }) {
+  if (!empaquetada) return { carpeta: null, copiada: false }
 
   const carpeta = app.getPath('userData')
   const destino = path.join(carpeta, NOMBRE_DE_LA_BASE)

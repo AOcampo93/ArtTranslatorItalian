@@ -34,6 +34,30 @@ const path = require('path')
 const fs = require('fs')
 const os = require('os')
 
+// F054 (ronda 2) — LO PRIMERO, antes del primer `require` de `node-backend` o de `shared`. Esas dos
+// carpetas viajan FUERA de `app.asar`, en texto plano, y se cargan en este mismo proceso: una línea
+// editada en cualquiera de ellas apagaría la licencia (por ejemplo, redefinir `app.isPackaged`).
+// `licencia.js` e `integridad.js` están dentro del asar y son autocontenidas.
+//
+//  - «Empaquetada» se decide por DÓNDE VIVE EL CÓDIGO (`estaEmpaquetada`), no por `app.isPackaged`,
+//    que en Electron solo compara el nombre del ejecutable con `electron.exe`: renombrar el `.exe`
+//    lo ponía en `false` y apagaba la licencia, la carpeta de datos del paquete y la base. Este
+//    mismo valor es el que se le pasa a `ajustes.js` y a `crearLicencia`.
+//  - Con el código dentro de un asar, el SHA-256 de cada archivo de `node-backend/src` y `shared`
+//    tiene que ser el del manifiesto que se escribió al construir (`herramientas/manifiesto-backend.js`).
+//    Si no, el backend NO se carga: `modificada.js` abre la pantalla «Esta copia está modificada» y el
+//    resto de este archivo no llega a ejecutarse (un `return` de primer nivel es válido en un módulo
+//    de CommonJS). Solo se comprueba dentro de un asar porque es la forma del paquete —código dentro,
+//    backend fuera— y la única en la que existe un manifiesto; en desarrollo no hay nada que comparar.
+const { crearLicencia, estaEmpaquetada, enAsar } = require('./licencia')
+const { verificarBackend } = require('./integridad')
+const EMPAQUETADA = estaEmpaquetada(app)
+const integridad = enAsar(__dirname) ? verificarBackend() : { ok: true }
+if (!integridad.ok) {
+  require('./modificada').abrirVentanaModificada({ app, BrowserWindow, ipcMain, motivo: integridad.motivo })
+  return
+}
+
 const BACK = path.join(__dirname, '..', '..', 'node-backend', 'src')
 const { AssemblyLiveTranscriber } = require(path.join(BACK, 'assemblyLive'))
 const traductor = require(path.join(BACK, 'translator'))
@@ -67,8 +91,9 @@ const {
 
 // F051 (PLAN.md §17.7): la V2 sigue leyendo las claves y las reuniones de la v0.9, que
 // están en la carpeta de datos de siempre. Va aquí, al cargar el módulo, porque
-// `userData` solo se puede cambiar antes de `ready`. En desarrollo no hace nada.
-fijarCarpetaDeDatos(app)
+// `userData` solo se puede cambiar antes de `ready`. En desarrollo no hace nada. F054: con el
+// mismo «empaquetada» de arriba, no con `app.isPackaged`.
+fijarCarpetaDeDatos(app, EMPAQUETADA)
 
 let ventana = null
 let sesion = null          // { transcriptor, traductor, autosave, inicio, ... }
@@ -1210,6 +1235,11 @@ async function iniciarReunion (datos) {
   return empezarSesion({ ...datos, idioma, keyterms })
 }
 ipcMain.handle('app:empezar', async (_e, datos) => {
+  // F054: la licencia se exige AQUÍ, en el proceso principal. La pantalla de bloqueo de la
+  // interfaz es cortesía; lo que impide empezar una reunión sin licencia es esta línea.
+  const sinLicencia = licencia.motivoDeNegativa()
+  if (sinLicencia) return { ok: false, motivo: sinLicencia }
+
   // F052: se lee ANTES de arrancar y se pasa DESPUÉS de `datos`, para que la interfaz no
   // pueda ponerlo. Vive aquí y no dentro de `iniciarReunion` por lo que se cuenta allí:
   // las pruebas ejecutan ese tramo suelto, con nombres fijos.
@@ -1425,6 +1455,17 @@ ipcMain.handle('app:probarClaveLlm', (_e, clave) => probarClaveLlm(clave || leer
  * El audio lo comprueba el renderer, que es donde vive esa API.
  */
 ipcMain.handle('app:comprobar', async (_e, ctx) => {
+  // F054: sin licencia no se abre ni una conexión de prueba (cuesta una sesión de transcripción).
+  // La respuesta tiene la forma que la interfaz ya sabe pintar, un paso en rojo por clave; el
+  // porqué completo lo cuenta la pantalla de licencia, aquí solo lo que cabe en un paso.
+  if (licencia.motivoDeNegativa()) {
+    return {
+      pantalla: { aviso: true, valor: 'sin licencia' },
+      red: { mal: true, valor: 'sin licencia' },
+      extremo: { mal: true, valor: 'sin licencia' },
+    }
+  }
+
   const r = {}
 
   // ── Protección de pantalla ──
@@ -1714,13 +1755,33 @@ ipcMain.handle('app:leerIdioma', () => ({ idioma: leerAjustes(RUTA_AJUSTES()).id
 ipcMain.handle('app:elegirIdioma', (_e, codigo) =>
   elegirIdioma({ codigo, hayReunion: Boolean(sesion), ruta: RUTA_AJUSTES(), traductor }))
 
+// ── Licencia (F054, PLAN.md §17.6 y §0.21) ────────────────────────────
+/**
+ * La licencia de esta copia: huella, permiso firmado, activación sola y gracia sin red
+ * (`licencia.js`). El estado lo fija la comprobación del arranque, que empieza en
+ * `whenReady`, ANTES de crear la ventana; `app:empezar` y `app:comprobar` (más arriba) se
+ * niegan mientras no sea `ok`. En desarrollo (`!app.isPackaged`) no hay licencia.
+ *
+ * Nada de aquí para una reunión: ninguna ruta de `licencia.js` llama a `pararSesion`.
+ */
+const licencia = crearLicencia({ app, safeStorage, empaquetada: EMPAQUETADA })
+
+/** Lo primero que pregunta la interfaz: espera a la comprobación del arranque y devuelve cómo pintar la pantalla. */
+ipcMain.handle('app:licencia', () => licencia.iniciar())
+/** El botón «Reintentar» de la pantalla de licencia. Con la licencia en orden no hace nada. */
+ipcMain.handle('app:licenciaReintentar', () => licencia.reintentar())
+app.on('will-quit', () => licencia.detener())
+
 // ── Arranque y cierre ─────────────────────────────────────────────────
 app.whenReady().then(async () => {
+  // F054: la huella y, si hace falta, la activación empiezan ya y corren a la vez que la base de
+  // datos y la ventana. Sin `await`: la interfaz espera la respuesta por `app:licencia`.
+  licencia.iniciar()
   // F057: la base de perfiles y contextos vive en `userData`, no junto a la app.
   // Va AQUÍ y no al cargar el módulo: `db.js` ya está requerido (y `contexto.js`,
   // que lo requiere) antes de que `userData` sea la carpeta buena, así que la ruta
   // se le da al abrir la base, ya fijada. La primera vez trae la de la v0.9.
-  const { carpeta } = prepararBaseDeDatos({ app, recursos: process.resourcesPath })
+  const { carpeta } = prepararBaseDeDatos({ app, recursos: process.resourcesPath, empaquetada: EMPAQUETADA })
   await db.init({ carpeta })
   crearVentana()
   // F039b: cualquier informe que se quedara pendiente de una reunión anterior
@@ -1740,13 +1801,13 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('before-quit', ev => {
   if (!sesion) return
   ev.preventDefault()
-  pararSesion('la aplicación se cerró').finally(() => app.exit(0))
+  pararSesion('la aplicación se cerró').finally(() => { licencia.detener(); app.exit(0) })
 })
 
 module.exports = {
   _internos: {
     guardarClaves, leerClaves, empezarSesion, pararSesion,
     leerTokenInformes, maquinaSaneada, obtenerColaInformes, listarConversaciones,
-    leerConversacion, borrarConversacion, ensamblarPreguntas,
+    leerConversacion, borrarConversacion, ensamblarPreguntas, licencia,
   },
 }
