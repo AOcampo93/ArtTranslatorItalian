@@ -20,6 +20,9 @@
  * Conversaciones se pinta con una reunión de antes de la V2 (sin idioma en la
  * cabecera: sale como IT) y otra en inglés.
  *
+ * F057: al final empieza otra reunión desde la propia interfaz y captura la vista en
+ * vivo, que tiene que salir limpia (sin las burbujas ni las preguntas de la anterior).
+ *
  * La numeración cambia cada vez que se inserta una pantalla, y las capturas de
  * la pasada anterior se quedaban al lado con el mismo nombre: por eso al empezar
  * se borran los `NN-*.png` de `capturas/`.
@@ -239,17 +242,31 @@ async function main () {
   await capturar('inicio-en')
 
   // 12) El en vivo en inglés, con `app.html#demo-en`: la página nueva y directa a
-  // la vista en vivo, con la reunión de ejemplo en inglés. Se recarga en vez de
-  // seguir desde aquí porque la pantalla en vivo no se limpia entre reuniones de
-  // una misma ejecución, y la demo en italiano de arriba dejaría sus burbujas
-  // mezcladas con las inglesas. La demo tarda unos 13 s en llegar a la primera
-  // pregunta con su respuesta sugerida, en inglés.
+  // la vista en vivo, con la reunión de ejemplo en inglés. Se recarga porque el
+  // `#hash` solo se lee al cargar la página (empezar otra reunión desde la propia
+  // pantalla ya limpia la vista, F057). La demo tarda unos 13 s en llegar a la
+  // primera pregunta con su respuesta sugerida, en inglés.
   // Pasar por `about:blank` es lo que obliga a recargar: cambiar solo el `#hash`
   // de la misma página es una navegación interna y el script no volvería a correr.
   await ventana.loadURL('about:blank')
   await ventana.loadFile(APP_HTML, { hash: 'demo-en' })
   await esperar(13500)
   await capturar('envivo-en')
+
+  // 13) F057: otra reunión en la misma ejecución, desde la propia interfaz. La demo
+  // de arriba sigue a medias y no tiene otra forma de pararse que dejar correr sus
+  // temporizadores, así que se cancelan todos: sin eso pintaría sus burbujas en la
+  // reunión nueva y la captura enseñaría la demo, no la vista. Al empezar, la vista
+  // en vivo tiene que salir limpia: sin las burbujas ni la pregunta de la anterior.
+  const pararTemporizadores = `for (let t = setTimeout(() => {}, 0); t >= 0; t--) { clearTimeout(t); clearInterval(t) }`
+  await ejecutar(`${pararTemporizadores}; document.getElementById('btnParar').click()`)
+  await esperar(500)   // la vuelta automática al panel de inicio, tras el resumen
+  await ejecutar(`document.getElementById('irNueva').click()`)
+  await esperar(150)
+  await ejecutar(`document.getElementById('btnSaltar').click()`)
+  await ejecutar(`document.getElementById('btnEscuchar').click(); ${pararTemporizadores}`)
+  await esperar(150)
+  await capturar('envivo-segunda-reunion')
 
   console.log(`[captura-demo] ${n} pantallas guardadas en ${CAPTURAS_DIR}`)
   app.quit()

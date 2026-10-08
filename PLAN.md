@@ -1842,6 +1842,15 @@ Fijarla a mano sigue valiendo: protege a la V2 de que alguien cambie el `name` o
 F055: o el LEEME pide extraer sobre la carpeta anterior (o copiar esa `data`), o el paquete
 lleva la base a `userData`. **Decidido:** F057 lleva la base a `userData` y copia la de la carpeta de la app si la encuentra, y el LEEME de F055 pide extraer la V2 sobre la carpeta anterior para que esa copia la encuentre.
 
+**Hecho en F057 (08-10-2026).** Empaquetada, `mainApp.js` llama a `prepararBaseDeDatos`
+(`ajustes.js`) en `whenReady`, ya fijado `userData`, y le pasa la carpeta a `db.init({ carpeta })`:
+la ruta de `db.js` deja de calcularse al requerirlo, porque `db.js` y `contexto.js` se requieren
+antes de fijar `userData`. En el primer arranque, si `userData` no tiene `artranslator.db` y
+`resources\node-backend\data\artranslator.db` sí, se **copia** (a un `.copiando` y `rename`, para que
+un corte no deje una base truncada); el original no se mueve ni se borra. Si copiar falla se registra y
+arranca con una base vacía. En desarrollo no cambia nada. El LEEME de F055 sigue pidiendo extraer la V2
+sobre la carpeta anterior: la copia solo encuentra la base de la v0.9 si la V2 se extrae donde estaba ella.
+
 ### 17.8 Lo que midió el spike F046 (07-10-2026)
 
 **El idioma sí está fijado hoy.** `language_code=it` es un alias que la referencia de la API

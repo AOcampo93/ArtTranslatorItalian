@@ -61,7 +61,7 @@ const { crearLlamador, clasificarError, sanear, proveedorDeClave, MODELOS, NOMBR
 const { ColaDeInformes } = require(path.join(BACK, 'informes'))
 const { percentil, duracionMs, costeStt, costeLlm } = require(path.join(BACK, 'coste'))
 const { calcularBounds, leerEstado, guardarEstado } = require(path.join(BACK, 'ventanaEstado'))
-const { fijarCarpetaDeDatos, leerAjustes, elegirIdioma } = require(path.join(BACK, 'ajustes'))
+const { fijarCarpetaDeDatos, prepararBaseDeDatos, leerAjustes, elegirIdioma } = require(path.join(BACK, 'ajustes'))
 
 // F051 (PLAN.md §17.7): la V2 sigue leyendo las claves y las reuniones de la v0.9, que
 // están en la carpeta de datos de siempre. Va aquí, al cargar el módulo, porque
@@ -1625,7 +1625,12 @@ ipcMain.handle('app:elegirIdioma', (_e, codigo) =>
 
 // ── Arranque y cierre ─────────────────────────────────────────────────
 app.whenReady().then(async () => {
-  await db.init()
+  // F057: la base de perfiles y contextos vive en `userData`, no junto a la app.
+  // Va AQUÍ y no al cargar el módulo: `db.js` ya está requerido (y `contexto.js`,
+  // que lo requiere) antes de que `userData` sea la carpeta buena, así que la ruta
+  // se le da al abrir la base, ya fijada. La primera vez trae la de la v0.9.
+  const { carpeta } = prepararBaseDeDatos({ app, recursos: process.resourcesPath })
+  await db.init({ carpeta })
   crearVentana()
   // F039b: cualquier informe que se quedara pendiente de una reunión anterior
   // (sin red, VPS caído) se reintenta aquí. Sin `await`: el arranque de la

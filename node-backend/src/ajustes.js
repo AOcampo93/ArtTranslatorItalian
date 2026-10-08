@@ -1,10 +1,10 @@
 /**
  * ajustes.js — lo que la app recuerda entre arranques, y dónde lo guarda (F051).
  *
- * Tres cosas que no dependen de Electron más que por un objeto `app` que se les
+ * Cuatro cosas que no dependen de Electron más que por un objeto `app` que se les
  * pasa, para poder probarlas sin abrir una ventana (el mismo reparto que
- * `ventanaEstado.js`): la carpeta de datos, el archivo `ajustes.json` y la
- * elección de idioma que se guarda en él.
+ * `ventanaEstado.js`): la carpeta de datos, la base de perfiles que vive en ella
+ * (F057), el archivo `ajustes.json` y la elección de idioma que se guarda en él.
  */
 
 'use strict'
@@ -12,6 +12,7 @@
 const fs = require('fs')
 const path = require('path')
 const { obtenerIdioma, listarIdiomas } = require('./idiomas')
+const { NOMBRE_DE_LA_BASE } = require('./db')
 
 /**
  * La carpeta de datos de siempre dentro de `%APPDATA%` (PLAN.md §17.7).
@@ -49,6 +50,63 @@ function fijarCarpetaDeDatos (app) {
   const ruta = path.join(app.getPath('appData'), CARPETA_DE_DATOS)
   app.setPath('userData', ruta)
   return ruta
+}
+
+/**
+ * Dónde debe abrir `db.js` la base de perfiles y contextos, y, la primera vez,
+ * llevarla ahí desde donde la dejó la versión anterior (F057, PLAN.md §17.7).
+ *
+ * La v0.9 la guardaba junto a la app, en `resources/node-backend/data`: extraer la
+ * versión siguiente en otra carpeta dejaba al usuario sin perfiles ni contextos, y
+ * cada versión futura lo habría repetido. En `userData` sobrevive a las
+ * actualizaciones, como las claves y las reuniones.
+ *
+ * Empaquetada, si `userData` aún no tiene base y la carpeta de la app sí, se COPIA
+ * (nunca se mueve ni se borra la original: es lo único que queda si algo sale
+ * mal). La copia va a un nombre temporal y se renombra, para que un corte a medias
+ * no deje en `userData` una base truncada que el siguiente arranque tomaría por
+ * buena. Si copiar falla, se registra y se sigue con una base nueva y vacía: perder
+ * de vista los perfiles molesta, pero una app que no abre por eso no se puede usar.
+ * En desarrollo no se toca nada.
+ *
+ * Se llama desde `whenReady`, DESPUÉS de `fijarCarpetaDeDatos`: antes, `userData`
+ * todavía es la carpeta que Electron saca del nombre.
+ *
+ * @param {object} p
+ * @param {{ isPackaged: boolean, getPath: Function }} p.app
+ * @param {string} [p.recursos]  `process.resourcesPath`: la carpeta `resources` de la
+ *   app empaquetada, donde `extraResources` deja `node-backend`
+ * @returns {{ carpeta: string|null, copiada: boolean, error?: string }}
+ *   `carpeta` es lo que se pasa a `db.init`; `null`, la de desarrollo de siempre
+ */
+function prepararBaseDeDatos ({ app, recursos }) {
+  if (!app.isPackaged) return { carpeta: null, copiada: false }
+
+  const carpeta = app.getPath('userData')
+  const destino = path.join(carpeta, NOMBRE_DE_LA_BASE)
+  const temporal = destino + '.copiando'
+  try {
+    if (fs.existsSync(destino)) return { carpeta, copiada: false }
+    if (!recursos) return { carpeta, copiada: false }
+    const origen = path.join(recursos, 'node-backend', 'data', NOMBRE_DE_LA_BASE)
+    if (!fs.existsSync(origen)) return { carpeta, copiada: false }
+
+    fs.mkdirSync(carpeta, { recursive: true })
+    try {
+      fs.copyFileSync(origen, temporal)
+      fs.renameSync(temporal, destino)
+    } catch (err) {
+      // Sin esto quedaría un `.copiando` a medias; si ni siquiera se puede borrar,
+      // el siguiente arranque lo pisa al copiar, y la causa que importa es `err`.
+      try { fs.rmSync(temporal, { force: true }) } catch { /* se queda */ }
+      throw err
+    }
+    return { carpeta, copiada: true }
+  } catch (err) {
+    console.error('[datos] no se pudo llevar la base de perfiles a la carpeta de datos; '
+      + 'se empieza con una vacía:', err.message)
+    return { carpeta, copiada: false, error: err.message }
+  }
 }
 
 /**
@@ -135,4 +193,6 @@ function elegirIdioma ({ codigo, hayReunion, ruta, traductor }) {
   return { ok: true, idioma: idioma.codigo }
 }
 
-module.exports = { CARPETA_DE_DATOS, fijarCarpetaDeDatos, leerAjustes, guardarAjustes, elegirIdioma }
+module.exports = {
+  CARPETA_DE_DATOS, fijarCarpetaDeDatos, prepararBaseDeDatos, leerAjustes, guardarAjustes, elegirIdioma,
+}

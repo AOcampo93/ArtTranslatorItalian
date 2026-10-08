@@ -1,7 +1,8 @@
 /**
  * db.js
  * SQLite persistence via sql.js (pure WebAssembly — no native compilation).
- * Database file: node-backend/data/artranslator.db
+ * Database file: artranslator.db, in `DB_DATA_DIR` or, without it, in
+ * node-backend/data. The packaged app opens it in `userData` (F057).
  *
  * Usage: call await db.init() once before any other method.
  *
@@ -16,18 +17,37 @@
 const path = require('path')
 const fs   = require('fs')
 
-// In packaged mode, write to userData (always writable, even when app is on DMG).
-// main.js passes DB_DATA_DIR via env. Fall back to local data/ for dev.
-const DATA_DIR = process.env.DB_DATA_DIR || path.join(__dirname, '..', 'data')
-const DB_PATH  = path.join(DATA_DIR, 'artranslator.db')
+const NOMBRE_DE_LA_BASE = 'artranslator.db'
+
+// Dónde vive la base. Por defecto, la carpeta `data` de node-backend (o
+// `DB_DATA_DIR`, que usan las pruebas): lo que pasa en desarrollo. La app
+// empaquetada la mueve a `userData` con `init({ carpeta })` (F057).
+//
+// Es `let` y se decide en `init`, no al hacer `require`, a propósito: `userData`
+// solo es la carpeta buena DESPUÉS de que `mainApp.js` la fije, y `db.js` lo
+// requieren varios módulos antes de eso. Una ruta calculada aquí, al cargar,
+// dejaba la base junto a la app, y si el usuario extraía la versión siguiente en
+// otra carpeta se quedaba sin perfiles ni contextos.
+let DATA_DIR = process.env.DB_DATA_DIR || path.join(__dirname, '..', 'data')
+let DB_PATH  = path.join(DATA_DIR, NOMBRE_DE_LA_BASE)
 
 let SQL  = null   // sql.js module
 let db   = null   // Database instance
 
 // ── Init ──────────────────────────────────────────────────────────────────
-async function init () {
+/**
+ * @param {object} [opciones]
+ * @param {string} [opciones.carpeta]  dónde abrir la base; sin ella, la de
+ *   desarrollo de arriba. Solo cuenta en la primera llamada: con la base ya
+ *   abierta, `init` no hace nada.
+ */
+async function init ({ carpeta } = {}) {
   if (db) return   // already initialised
 
+  if (carpeta) {
+    DATA_DIR = carpeta
+    DB_PATH  = path.join(DATA_DIR, NOMBRE_DE_LA_BASE)
+  }
   fs.mkdirSync(DATA_DIR, { recursive: true })
 
   SQL = await require('sql.js')()
@@ -302,6 +322,7 @@ function deleteSession (sessionId) {
 }
 
 module.exports = {
+  NOMBRE_DE_LA_BASE,
   init,
   persist,
   persistAgrupado,

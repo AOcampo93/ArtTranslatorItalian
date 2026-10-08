@@ -432,7 +432,16 @@
   .tarjeta-lista .detalle-fila { font-size: 11.5px; color: var(--tx3); margin-top: 2px; }
   /* F038: duración, latencia y coste de cada reunión guardada. */
   .tarjeta-lista .coste-fila { font-size: 11px; color: var(--tx3); margin-top: 3px; }
-  .acciones-fila .borrar-fila { color: var(--mal, #e5534b); }
+  /* F057: «Borrar» se lee como lo que es. Antes era el botón verde de siempre con
+     el texto rojo: rojo sobre verde, casi ilegible. Ahora es el rojo de «Detener»
+     pero en contorno y tintado —el mismo recurso que el chip de idioma, en rojo—:
+     avisa de que es peligroso sin pesar más que «Ver». Al pasar el cursor se rellena. */
+  .acciones-fila .borrar-fila {
+    background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.45); color: var(--mal);
+  }
+  .acciones-fila .borrar-fila:hover:not(:disabled) {
+    background: var(--mal); border-color: var(--mal); color: #2B0907;
+  }
   #detalleConversacion {
     background: var(--sup); border: 1px solid var(--linea); border-radius: 10px;
     padding: 13px; margin-top: 12px;
@@ -1411,9 +1420,54 @@ let idiomaElegido = 'it'
  */
 let reunionEnMarcha = false
 
+/** Lo que dice el resumen de «de qué se está hablando» antes de que haya uno: el del marcado. */
+const TEXTO_SIN_CONTEXTO = $('#cuerpoContexto')?.textContent ?? ''
+
+/**
+ * Deja la vista en vivo como recién abierta (F057): sin las burbujas, las
+ * preguntas, el contador ni el resumen de la reunión anterior.
+ *
+ * Se llama al EMPEZAR una reunión, no al pararla: al parar, lo dicho todavía se
+ * puede leer. Y antes de abrir la sesión (`api.empezar`), no después: el proceso
+ * principal manda el aviso del panel de preguntas mientras arranca, y limpiar al
+ * volver esa llamada lo borraría. Ese aviso (`#avisoPreguntas`) no se toca aquí
+ * por lo mismo: cada reunión lo pone o lo quita al arrancar.
+ *
+ * Vive en este tramo, y no junto a cada zona, porque las pruebas de «Arrancar y
+ * parar» lo ejecutan suelto con las burbujas y sin los paneles de preguntas ni de
+ * contexto: de ahí los `?.`. `nPreguntas` es del bloque de preguntas; aquí solo se
+ * pone a cero.
+ */
+function limpiarVistaEnVivo () {
+  // Solo las `.burbuja`: `#contexto` y `#vacio` son del marcado y se quedan.
+  for (const b of $('#conversacion').querySelectorAll('.burbuja')) b.remove()
+  // La parcial y las provisionales ya no están en pantalla: si sus referencias
+  // quedaran vivas, la primera frase de la reunión nueva se pintaría sobre un
+  // nodo suelto y no aparecería nada.
+  burbujaParcial = null
+  burbujasProvisionales.clear()
+  $('#vacio')?.classList.remove('oculto')
+  $('#retardo')?.classList.add('oculto')
+
+  const lista = $('#listaPreguntas')
+  if (lista) lista.innerHTML = ''
+  nPreguntas = 0
+  const cuenta = $('#cuentaP')
+  if (cuenta) cuenta.textContent = nPreguntas
+
+  // «De qué se está hablando» vuelve a plegado y oculto, como antes de la primera
+  // vez: `pintarContexto` lo enseña cuando llegue el resumen de la reunión nueva.
+  const resumen = $('#contexto')
+  if (resumen) { resumen.classList.add('oculto'); resumen.open = false }
+  const cuerpo = $('#cuerpoContexto')
+  if (cuerpo) cuerpo.textContent = TEXTO_SIN_CONTEXTO
+}
+
 $('#btnEscuchar').onclick = async () => {
-  // Reunión nueva, medidas nuevas: ver `reiniciarMedidas()`.
+  // Reunión nueva, medidas y pantalla nuevas: ver `reiniciarMedidas()` y
+  // `limpiarVistaEnVivo()`.
   reiniciarMedidas()
+  limpiarVistaEnVivo()
   if (!api) {
     reunionEnMarcha = true
     $('#inicio')?.classList.add('oculto')
