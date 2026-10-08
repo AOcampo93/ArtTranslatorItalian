@@ -24,7 +24,7 @@ const assert = require('node:assert')
 const { EventEmitter } = require('events')
 
 const { AssemblyLiveTranscriber, _internos } = require('../src/assemblyLive')
-const { aPcm16, construirUrl, MUESTRAS_TROZO, MS_TROZO, MAX_CONEXIONES_MIN } = _internos
+const { aPcm16, construirUrl, recuperarPrincipio, MUESTRAS_TROZO, MS_TROZO, MAX_CONEXIONES_MIN } = _internos
 
 /** Socket de mentira: registra todo lo enviado y deja provocar los mensajes. */
 class SocketFalso extends EventEmitter {
@@ -265,6 +265,73 @@ describe('frases y parciales', () => {
     assert.ok(!errores[0].includes('sk-ant-api03-CLAVEFALSA12345678'), `se coló la clave: ${errores[0]}`)
     assert.match(errores[0], /sk-ant-\*\*\*\*/)
     await t.stop()
+  })
+})
+
+/**
+ * F056. Los mensajes de estas pruebas NO están escritos a mano: son los `Turn`
+ * que el servidor mandó de verdad a `AssemblyLiveTranscriber` con
+ * `italiano.wav` a tiempo real (`fixtures/turnos-f056.json`, 08-10-2026). En el
+ * caso real el servidor parte el turno en la pausa de 250 ms entre las dos
+ * oraciones y el final de la segunda llega SIN su primera palabra: «Il cliente
+ * ha chiesto…» → «cliente ha chiesto…». Esa palabra sí estuvo en algún parcial.
+ */
+describe('la primera palabra que el servidor pierde al partir el turno (F056)', () => {
+  const grabado = require('./fixtures/turnos-f056.json').sesiones
+
+  /** Repite una sesión grabada, mensaje a mensaje, y devuelve las frases que salen. */
+  async function reproducir (nombre) {
+    const { t, sockets } = montar()
+    const frases = []
+    t.on('frase', f => frases.push(f))
+    await t.start()
+    for (const m of grabado[nombre].mensajes) sockets[0].recibe(m)
+    await t.stop()
+    return frases
+  }
+
+  test('el «Il» que faltaba en el final del servidor vuelve a la frase', async () => {
+    // Las dos formas en que la palabra se vio en los parciales: en todos (con el
+    // contexto de la reunión) y solo en el del medio (como `app:comprobar`).
+    for (const nombre of ['partida_il_en_todos_los_parciales', 'partida_il_en_un_parcial']) {
+      const delServidor = grabado[nombre].mensajes.filter(m => m.end_of_turn).map(m => m.transcript)
+      assert.strictEqual(delServidor[1], 'cliente ha chiesto di anticipare la consegna alla prossima settimana.',
+        `${nombre}: el caso grabado debe traer el final SIN «Il»`)
+
+      const frases = await reproducir(nombre)
+      assert.deepStrictEqual(frases.map(f => f.texto), [
+        'Buongiorno a tutti, iniziamo la riunione.',
+        'Il cliente ha chiesto di anticipare la consegna alla prossima settimana.',
+      ], nombre)
+      assert.strictEqual(frases[1].principioRecuperado, 'Il', nombre)
+      assert.strictEqual(frases[0].principioRecuperado, null, nombre)
+    }
+  })
+
+  test('si el servidor no perdió nada, el texto sale tal cual lo dijo', async () => {
+    // Sin esto, cualquier arreglo que anteponga el primer parcial pasaría la
+    // prueba de arriba. Son sesiones reales en las que el final llegó entero: el
+    // turno sin partir, y el partido con una pausa de 700 ms.
+    for (const nombre of ['sin_partir', 'partida_con_pausa_de_700_ms']) {
+      const delServidor = grabado[nombre].mensajes.filter(m => m.end_of_turn).map(m => m.transcript)
+      const frases = await reproducir(nombre)
+      assert.deepStrictEqual(frases.map(f => f.texto), delServidor, nombre)
+      assert.ok(frases.every(f => f.principioRecuperado === null), nombre)
+    }
+  })
+
+  test('no completa una repetición ni se fía de un parcial que solo se parece', () => {
+    // «no no no no no»: quitada la primera, el resto del parcial también coincide
+    // con el comienzo del final. Sin la regla de «el parcial ya empieza igual»,
+    // la repetición saldría con un «no» de más.
+    assert.deepStrictEqual(
+      recuperarPrincipio('No, no, no, no, no.', ['No, no, no, no', 'No, no, no, no, no']),
+      { texto: 'No, no, no, no, no.', recuperado: null })
+    // Otra primera palabra y un resto distinto: el servidor cambió de idea, no
+    // perdió nada.
+    assert.deepStrictEqual(
+      recuperarPrincipio('Ha chiesto di anticipare la consegna.', ['Ho chiesto di anticipare']),
+      { texto: 'Ha chiesto di anticipare la consegna.', recuperado: null })
   })
 })
 

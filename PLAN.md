@@ -1845,11 +1845,28 @@ el modelo de streaming `[verificado]`; `universal-3-5-pro` sigue aceptado `[medi
 3.6 el idioma fijado pesa mucho más (`["ja"]` sobre audio italiano dio cero turnos). No se
 cambia de modelo sin repetir el spike: el troceo de F031 está calibrado con 3.5.
 
-**Una palabra que se pierde (F056).** Cuando el servidor parte el turno en la pausa entre
-las dos oraciones de `italiano.wav`, la segunda llega sin su primera palabra («Il cliente
-ha chiesto…» → «cliente ha chiesto…»), en 25 de 25 particiones `[medido]`. Es voz
-sintética con una pausa corta, y en los informes reales hay turnos que sí empiezan por
-«Il» o por «E». Hay que reproducirlo por `assemblyLive.js` antes de tocar nada.
+**Una palabra que se pierde (F056, 08-10-2026).** Cuando el servidor parte el turno en la
+pausa entre las dos oraciones de `italiano.wav` (250 ms), la segunda llega sin su primera
+palabra («Il cliente ha chiesto…» → «cliente ha chiesto…»), en 25 de 25 particiones en F046
+`[medido]`. **Se reproduce por `AssemblyLiveTranscriber`, tal como lo usa la app:** el servidor
+partió el turno en 11 de 17 sesiones con esa pausa y en las 11 el final llegó sin «Il»; con
+la pausa alargada a 700 ms lo partió en 2 de 2 y no perdió nada `[medido]`. La palabra **sí
+llega**, en algún parcial del turno nuevo (en uno de tres, o en los tres si la sesión lleva
+contexto y glosario), y el servidor la quita del final (`transcript`, `utterance` y `words`).
+No cae al final del turno anterior y no la provoca nada nuestro: cero `ForceEndpoint` en
+19 sesiones, el texto sale tal cual de `transcript`, y con los valores por defecto del
+servidor, sin nuestros dos parámetros de fin de turno, también se perdió `[medido]`. Lo que
+cuadra con los tiempos es que el servidor tarda más en decidir el corte que lo que dura la
+pausa, y la palabra ya estaba sonando `[estimado]`. Es voz sintética con una pausa muy
+corta, y en los informes reales hay turnos que sí empiezan por «Il» o por «E».
+
+**Qué se hizo:** `recuperarPrincipio()` en `assemblyLive.js` le devuelve al final del turno
+las ≤ 2 primeras palabras que un parcial del mismo turno traía y él no, solo si el resto del
+parcial es el comienzo del final en ≥ 3 palabras. No toca los tiempos de F031 ni el ciclo de
+vida del socket. Contra el servicio real, con el arreglo puesto, 2 de 2 particiones salieron
+con «Il» `[medido]`. El evento `frase` lleva `principioRecuperado` para poder contar cuántas
+veces ocurre en una reunión real, que sigue `[por medir]`; evitar el corte en el origen sería
+tocar `max_turn_silence` y el umbral de fin de turno, o sea los tiempos de F031. Guarda añadida en la revisión: una palabra del parcial que cierra oración («riunione.») es la cola del turno anterior y no se antepone, para no duplicarla.
 
 **Marian en→es** `[medido]` (Apple M5, `q8`, p50 de 15 muestras): 73,5 ms frente a 70,3 ms
 de it→es, es decir +6 %. Ocupa 119,4 MB en caché frente a 112,7 MB, y deja los mismos seis

@@ -8,6 +8,17 @@ frase de reunión que el italiano, dicha con la voz Samantha. `ingles.txt` lleva
 el texto original. Es la muestra de la comprobación previa del inglés
 (`PLAN.md` §17.3) y lo que se manda a AssemblyAI para medir el idioma (§17.8).
 
+`turnos-f056.json` — los mensajes `Turn` que AssemblyAI mandó de verdad a
+`AssemblyLiveTranscriber` con `italiano.wav` a tiempo real (08-10-2026, F056), en
+cuatro sesiones: dos en las que el servidor parte el turno en la pausa de 250 ms
+entre las dos oraciones y el final de la segunda llega sin «Il»; una partida con
+la pausa alargada a 700 ms, que llega entera; y una sin partir. Se conservan sólo
+los de tipo `Turn`, en su orden y sin tocar, y `assemblyLive.test.js` los repite
+sin red. No llevan claves ni identificadores de sesión. La pausa entre las dos
+oraciones de `italiano.wav` mide 250 ms (de 2.450 a 2.700 ms) `[medido]`. No se
+regenera con `say`: es una grabación del servicio, y se vuelve a medir con
+`.arnes/medicion/medir_palabra_perdida.js`.
+
 ## Cómo regenerarlo
 
 Se generan con las voces de macOS (Alice para el italiano, Samantha para el

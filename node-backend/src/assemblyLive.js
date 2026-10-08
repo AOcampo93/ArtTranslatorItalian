@@ -72,6 +72,31 @@
  *     [medido, sesion-2.jsonl].
  *  3. **Tope duro**, que corta aunque haya voz. El caso del monólogo sin
  *     pausas no lo resuelve nada más.
+ *
+ * ## Cuando el servidor parte el turno, el final nuevo puede llegar sin su primera palabra
+ *
+ * Con una pausa corta entre dos oraciones el servidor cierra el turno y el final
+ * del siguiente llega sin la primera palabra: «Il cliente ha chiesto…» →
+ * «cliente ha chiesto…» (F056). Medido por esta misma clase contra el servicio
+ * real, con `italiano.wav` a tiempo real y 250 ms de pausa entre sus dos
+ * oraciones: el servidor partió el turno en 11 de 17 sesiones y en las 11 el
+ * final llegó sin «Il»; con la pausa alargada a 700 ms lo partió en 2 de 2 y no
+ * perdió nada [medido, 08-10-2026].
+ *
+ * La palabra no se pierde en el camino: el servidor SÍ la manda, en algún
+ * parcial del turno nuevo (en uno de los tres, o en los tres si la sesión lleva
+ * contexto y glosario), y la quita del `transcript`, del `utterance` y de los
+ * `words` del final. No cae al final del turno anterior. Tampoco la provoca
+ * nada nuestro: no hubo ningún `ForceEndpoint` en las 19 sesiones, el texto sale
+ * tal cual de `transcript`, y con los valores por defecto del servidor, sin
+ * nuestros dos parámetros de fin de turno, también se perdió (1 de 1 partición)
+ * [medido]. Lo que cuadra con los tiempos es que el servidor tarda más en
+ * decidir el corte que lo que dura la pausa, y la palabra ya estaba sonando
+ * cuando lo hizo [estimado].
+ *
+ * Evitar el corte sería tocar los tiempos de F031, y eso no se hace aquí. Lo que
+ * sí se hace es `recuperarPrincipio()`: devolverle al final la palabra que un
+ * parcial del mismo turno traía y él no.
  */
 
 'use strict'
@@ -257,6 +282,31 @@ const TOPE_DURO_TURNO_MS = 8000
 const MS_SILENCIO_PARA_FORZAR = 300
 
 /**
+ * F056 — los topes de `recuperarPrincipio()`. Es una heurística, y está acotada
+ * para que se equivoque poco: devolver una palabra que no iba es peor que no
+ * devolver la que sí.
+ *
+ *  · Como mucho se recuperan las 2 primeras palabras. Lo medido es una sola
+ *    («Il», en 11 de 11 pérdidas [medido]); la segunda cubre «E poi…».
+ *  · El resto del parcial tiene que ser el comienzo del final, palabra por
+ *    palabra y en al menos 3. Un parcial que sólo se parece un poco no basta.
+ *  · Se comparan como mucho las 6 primeras: importa que parcial y final hablen
+ *    de lo mismo en el principio, no que coincidan en todo, porque el final
+ *    corrige palabras de más adelante.
+ */
+const MAX_PALABRAS_RECUPERADAS = 2
+const MIN_PALABRAS_COINCIDENTES = 3
+const MAX_PALABRAS_COMPARADAS = 6
+
+/**
+ * Parciales que se guardan por turno, para poder mirarlos al llegar el final. Un
+ * parcial llega cada ~1,2 s (mediana 1.209 ms, n=63 [medido]) y el tope duro corta
+ * a los 8 s, o sea ~7 por turno y ~12 hasta un reintento a los 14 s [estimado]; 40
+ * sobra.
+ */
+const MAX_PARCIALES_POR_TURNO = 40
+
+/**
  * Por debajo de esta energía (RMS sobre muestras en [-1,1]) el frame es
  * silencio.
  *
@@ -347,6 +397,67 @@ function rmsDe (muestras) {
  */
 function acabaEnPuntuacion (texto) {
   return /[.!?…]["»'’)\]]*$/.test(String(texto || '').trim())
+}
+
+/** Las palabras de un texto: tal cual salieron, y sin mayúsculas, acentos ni signos para comparar. */
+function palabrasParaComparar (texto) {
+  return String(texto || '').trim().split(/\s+/).map(tal => ({
+    tal,
+    forma: tal.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]/gu, ''),
+  })).filter(p => p.forma)
+}
+
+/**
+ * F056 — le devuelve al final de un turno las primeras palabras que el servidor
+ * le quitó y que un parcial de ese mismo turno sí traía. Ver la cabecera del
+ * módulo para lo medido.
+ *
+ * El caso: parciales «Il cliente ha chiesto di anticipare la consegna.» y final
+ * «cliente ha chiesto di anticipare la consegna alla prossima settimana.». Quitada
+ * la palabra de delante, el resto del parcial es el comienzo del final, así que
+ * esa palabra era del turno y se había perdido: el final sale «Il cliente ha
+ * chiesto…».
+ *
+ * Se mira del último parcial al primero, porque el último es el que más audio
+ * había oído. Y un parcial que ya empieza igual que el final no devuelve nada:
+ * sin esa regla, una repetición («no no no no») se "completaría" con un «no» más,
+ * porque su resto también coincide con su propio comienzo.
+ *
+ * Lo que NO hace, a propósito: no toca el final si ningún parcial discrepa en la
+ * primera palabra, no mira audio y no cambia ni el orden ni las palabras que el
+ * servidor sí mandó. Las mayúsculas del final se dejan como vinieron.
+ *
+ * @param {string} texto      el final tal como lo mandó el servidor, ya recortado
+ * @param {string[]} parciales los parciales de ese turno, del primero al último
+ * @returns {{texto: string, recuperado: string|null}} `recuperado` es lo que se
+ *   antepuso, o `null` si no se tocó nada
+ */
+function recuperarPrincipio (texto, parciales) {
+  const final = palabrasParaComparar(texto)
+  if (final.length < MIN_PALABRAS_COINCIDENTES) return { texto, recuperado: null }
+
+  for (let i = (parciales?.length ?? 0) - 1; i >= 0; i--) {
+    const parcial = palabrasParaComparar(parciales[i])
+    // ¿Lo que queda del parcial al quitarle `k` palabras de delante es el
+    // comienzo del final?
+    const coincideSinLasPrimeras = k => {
+      const n = Math.min(parcial.length - k, final.length, MAX_PALABRAS_COMPARADAS)
+      if (n < MIN_PALABRAS_COINCIDENTES) return false
+      for (let j = 0; j < n; j++) if (parcial[k + j].forma !== final[j].forma) return false
+      return true
+    }
+    if (coincideSinLasPrimeras(0)) continue
+    for (let k = 1; k <= MAX_PALABRAS_RECUPERADAS; k++) {
+      if (!coincideSinLasPrimeras(k)) continue
+      // Una palabra que cierra oración («riunione.») es la cola del turno
+      // anterior que se coló en el parcial, no el principio de este:
+      // anteponerla duplicaría el final de la frase de antes.
+      if (parcial.slice(0, k).some(p => /[.?!…]["»'’)\]]*$/.test(p.tal))) continue
+      const principio = parcial.slice(0, k).map(p => p.tal).join(' ')
+      return { texto: `${principio} ${texto}`, recuperado: principio }
+    }
+  }
+  return { texto, recuperado: null }
 }
 
 /**
@@ -700,12 +811,21 @@ class AssemblyLiveTranscriber extends EventEmitter {
           const msTurno = this._turno ? ahora - this._turno.abiertoEn : null
           const msHolgura = this._turno?.forzadoEn ? ahora - this._turno.forzadoEn : null
           const motivoCorte = this._turno?.motivoCorte ?? null
+          // F056: los parciales del turno se sacan ANTES de soltarlo; con el turno
+          // a null ya no queda dónde mirar la palabra que el final pudo perder.
+          const parciales = this._turno?.parciales
           this._turno = null
           if (!texto) return
+          // `principioRecuperado` es lo que se antepuso al final del servidor, o
+          // `null`: queda en el evento para poder contar cuántas veces ocurre en
+          // una reunión de verdad. `palabras` sigue siendo la lista del servidor,
+          // sin esa palabra: nadie la usa más que para pasarla.
+          const { texto: completo, recuperado } = recuperarPrincipio(texto, parciales)
           this.stats.frases++
           this.emit('frase', {
-            texto, orden: m.turn_order, palabras: m.words, msTranscribir, forzado,
-            msTurno, msHolgura, acabaEnPuntuacion: acabaEnPuntuacion(texto), motivoCorte,
+            texto: completo, orden: m.turn_order, palabras: m.words, msTranscribir, forzado,
+            msTurno, msHolgura, acabaEnPuntuacion: acabaEnPuntuacion(completo), motivoCorte,
+            principioRecuperado: recuperado,
           })
         } else {
           if (!texto) return
@@ -804,6 +924,10 @@ class AssemblyLiveTranscriber extends EventEmitter {
         forzadoEn: null,
         // El motivo del ÚLTIMO corte pedido, que es el que llega a la frase.
         motivoCorte: null,
+        // F056: los textos distintos que ha ido teniendo el turno. Al llegar el
+        // final se miran para devolverle la primera palabra que el servidor le
+        // haya quitado (`recuperarPrincipio()`).
+        parciales: [texto],
       }
       return
     }
@@ -811,6 +935,7 @@ class AssemblyLiveTranscriber extends EventEmitter {
     if (texto === t.ultimoTexto) return
     t.ultimoTexto = texto
     t.audioDelUltimoCrecimiento = this._ultimoAudioEn
+    if (t.parciales.length < MAX_PARCIALES_POR_TURNO) t.parciales.push(texto)
   }
 
   /**
@@ -1128,7 +1253,7 @@ class AssemblyLiveTranscriber extends EventEmitter {
 
 module.exports = { AssemblyLiveTranscriber, SAMPLE_RATE, MODELO, CIERRES }
 module.exports._internos = {
-  aPcm16, rmsDe, acabaEnPuntuacion, construirUrl, traducirErrorServidor,
+  aPcm16, rmsDe, acabaEnPuntuacion, construirUrl, traducirErrorServidor, recuperarPrincipio,
   MUESTRAS_TROZO, MS_TROZO, MS_TROZO_MIN, MS_TROZO_MAX,
   MAX_CONEXIONES_MIN, ESPERAS_MS, MAX_BUFFER_S, RELEVAR_A_LOS_MS, TOPE_SESION_MS,
   TOPE_TURNO_MS, TOPE_DURO_TURNO_MS, MS_SILENCIO_PARA_FORZAR, UMBRAL_SILENCIO_RMS,
