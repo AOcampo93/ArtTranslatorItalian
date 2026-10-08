@@ -38,6 +38,7 @@ const BACK = path.join(__dirname, '..', '..', 'node-backend', 'src')
 const { AssemblyLiveTranscriber } = require(path.join(BACK, 'assemblyLive'))
 const traductor = require(path.join(BACK, 'translator'))
 const { obtenerIdioma } = require(path.join(BACK, 'idiomas'))
+const { leerMuestrasWav } = require(path.join(BACK, 'wav'))
 
 /**
  * F036 (corrección) — el freno de conexiones por minuto de AssemblyAI es del
@@ -1346,10 +1347,9 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
     // F047: el idioma viaja en el mismo objeto que ya llega con el glosario. Un
     // código que no existe cae en el `catch` de abajo y sale como el fallo que es.
     const idioma = obtenerIdioma(ctx?.idioma)
-    const wav = fs.readFileSync(rutaFixture(idioma.muestra))
-    const pcm = wav.subarray(44)
-    const muestras = new Float32Array(pcm.length / 2)
-    for (let i = 0; i < muestras.length; i++) muestras[i] = pcm.readInt16LE(i * 2) / 32768
+    // F050: recorre los trozos del WAV hasta `data`. Con `subarray(44)` entraban
+    // como audio los 34 bytes del trozo `LIST` que lleva cada muestra.
+    const muestras = leerMuestrasWav(rutaFixture(idioma.muestra))
 
     // F048: los mismos términos que la reunión de verdad. Esta llamada solo
     // recibe el contexto, no el perfil, así que son el glosario y los nombres
@@ -1359,36 +1359,48 @@ ipcMain.handle('app:comprobar', async (_e, ctx) => {
       apiKey: claves.stt, idioma: idioma.codigoStt, glosario, registroConexiones: registroConexionesStt,
     })
 
-    const tConexion = Date.now()
-    await t.start()
-    r.red = { ok: true, valor: `${Date.now() - tConexion} ms` }
-
-    await traductor.cargar(idioma.modeloMarian, idioma.calentamientoMarian)
-
     // Las dos piernas salen de la misma fuente que en la reunión de verdad:
     // el transcriptor sella lo que costó oír y el traductor lo que costó
     // traducir. Antes se cronometraba aquí desde que se acababa de mandar el
     // audio, y si la frase llegaba antes de esa marca la comprobación acababa
     // diciendo «sin traducción» con la cadena funcionando.
-    let italiano = null, msExtremo = null
-    t.once('frase', async ({ texto, msTranscribir }) => {
-      italiano = texto
-      const tr = await traductor.traducir(texto, idioma.modeloMarian)
-      msExtremo = msTranscribir + tr.ms
-    })
+    let original = null, msExtremo = null
 
-    const POR_BLOQUE = 1600
-    for (let i = 0; i < muestras.length; i += POR_BLOQUE) {
-      t.alimentar(muestras.subarray(i, i + POR_BLOQUE))
-      await new Promise(x => setTimeout(x, 100))
+    // F050. La sesión de AssemblyAI se cierra pase lo que pase desde que se abre:
+    // lo que lance en medio —el modelo de Marian del idioma que no está, un fallo
+    // de red— ya no la deja viva. Un socket abierto factura (PLAN.md §10, «Dos
+    // bombas de facturación») y ocupa una de las cinco plazas, o sea que impide la
+    // reunión que el usuario va a empezar justo después de esta comprobación.
+    const tConexion = Date.now()
+    try {
+      await t.start()
+      r.red = { ok: true, valor: `${Date.now() - tConexion} ms` }
+
+      await traductor.cargar(idioma.modeloMarian, idioma.calentamientoMarian)
+
+      t.once('frase', async ({ texto, msTranscribir }) => {
+        original = texto
+        const tr = await traductor.traducir(texto, idioma.modeloMarian)
+        msExtremo = msTranscribir + tr.ms
+      })
+
+      const POR_BLOQUE = 1600
+      for (let i = 0; i < muestras.length; i += POR_BLOQUE) {
+        t.alimentar(muestras.subarray(i, i + POR_BLOQUE))
+        await new Promise(x => setTimeout(x, 100))
+      }
+
+      for (let i = 0; i < 40 && msExtremo == null; i++) await new Promise(x => setTimeout(x, 100))
+    } finally {
+      // Un fallo al parar no puede tapar el que ya venía en camino: ese es el que
+      // el usuario tiene que leer. `stop()` es seguro aunque `start()` no llegara a
+      // abrir nada.
+      await t.stop().catch(e => console.warn('[comprobar] al parar la sesión:', sanear(e.message)))
     }
-
-    for (let i = 0; i < 40 && msExtremo == null; i++) await new Promise(x => setTimeout(x, 100))
-    await t.stop()
 
     r.extremo = msExtremo != null
       ? { ok: msExtremo < 2000, aviso: msExtremo >= 2000, valor: `${msExtremo} ms` }
-      : { mal: true, valor: italiano ? 'sin traducción' : 'sin respuesta' }
+      : { mal: true, valor: original ? 'sin traducción' : 'sin respuesta' }
     r.coste = { valor: `$${t.costeAproximadoUsd(0.45)}` }
   } catch (err) {
     r.red = r.red || { mal: true, valor: 'falló' }

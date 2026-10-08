@@ -58,8 +58,12 @@ function sinComillasEnvolventes (t) {
   return t
 }
 
-/** Prefijos que el modelo añade aunque el prompt pida solo la traducción. */
-const RE_PREFIJO = /^(traducci[oó]n|traduzione|es|español)\s*:\s*/i
+/**
+ * Prefijos que el modelo añade aunque el prompt pida solo la traducción. El del
+ * idioma de la frase que se le dio: «Traduzione:» tras una frase italiana,
+ * «Translation:» tras una inglesa (F050).
+ */
+const RE_PREFIJO = /^(traducci[oó]n|traduzione|translation|es|español)\s*:\s*/i
 
 /**
  * Cuenta palabras con alguna letra (ignora puntuación suelta: «.», «¿», «!»).

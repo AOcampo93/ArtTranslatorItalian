@@ -21,6 +21,15 @@
  * comprueban dos cosas: la suite anterior pasa sin modificar ninguna prueba, y
  * `idiomasF047.test.js` compara cada pieza de la entrada con su original.
  *
+ * ## La entrada `en` trae piezas PROPIAS (F050)
+ *
+ * Cada una en un archivo nuevo —`abreviaturasIngles.js`, `detectorPreguntasIngles.js`,
+ * `shared/promptsIngles.js`—. Del italiano solo se importan los ayudantes que no
+ * dependen del idioma (`conContexto`, `conAnteriores` y `ESPANOL_DE_MEXICO` de
+ * `shared/prompts.js`, y el partidor de oraciones de `frases.js`), y ninguna pieza
+ * del italiano se abrió para esto (§0.20): añadir o cambiar el inglés no puede
+ * degradar el italiano porque no hay nada del inglés dentro de sus archivos.
+ *
  * ## Qué lleva una entrada
  *
  *  - `codigo`: el nombre del idioma en la app. Es lo que se guarda en la
@@ -48,6 +57,9 @@ const traductor = require('./translator')
 const { ABREVIATURAS } = require('./frases')
 const detectorItaliano = require('./questionDetector')
 const { promptTraduccion, promptRespuesta, promptResumen } = require('../../shared/prompts')
+const { ABREVIATURAS_INGLES } = require('./abreviaturasIngles')
+const detectorIngles = require('./detectorPreguntasIngles')
+const promptsIngles = require('../../shared/promptsIngles')
 
 /** El idioma que se usa cuando nadie dice cuál: el que ya funcionaba antes de la V2. */
 const IDIOMA_POR_DEFECTO = 'it'
@@ -72,6 +84,22 @@ const IDIOMAS = new Map([
     promptRespuesta,
     promptResumen,
     muestra: 'italiano.wav',
+  })],
+  ['en', Object.freeze({
+    codigo: 'en',
+    codigoStt: 'en',
+    // El mismo papel que «Progetto» en italiano: describe el audio que el modelo
+    // va a oír, así que va en el idioma de la reunión.
+    prefijoContexto: 'Project',
+    // 52,9 + 60,2 MB cuantizado, ya en la caché local `[verificado]` (PLAN.md §17.3).
+    modeloMarian: 'Xenova/opus-mt-en-es',
+    calentamientoMarian: 'hello',
+    abreviaturas: ABREVIATURAS_INGLES,
+    detector: detectorIngles,
+    promptTraduccion: promptsIngles.promptTraduccion,
+    promptRespuesta: promptsIngles.promptRespuesta,
+    promptResumen: promptsIngles.promptResumen,
+    muestra: 'ingles.wav',
   })],
 ])
 
