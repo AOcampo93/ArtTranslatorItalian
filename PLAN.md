@@ -55,7 +55,7 @@ se discute y se cambia el documento; no se salta.
 | 19 | Cada idioma que se ofrece lleva **su Marian embebido**, y `verificar-paquete.sh` lo comprueba. Un idioma sin su modelo no se ofrece | Quien elige ese idioma en un equipo sin clave de LLM se queda sin traducción, y se rompe el 16 |
 | 20 | **Las configuraciones de idioma son independientes**: añadir o cambiar un idioma no toca los archivos del otro, y la suite del otro sigue verde **sin modificar ninguna prueba** | Una mejora del inglés degrada en silencio el italiano, que es el que ya funciona en casa del cliente |
 | 21 | La licencia se comprueba **al arrancar, nunca a mitad de reunión**, y un equipo ya activado sigue funcionando sin el servidor mientras su permiso firmado esté vigente | Una caída del VPS deja sin app a todos los equipos, o una renovación fallida corta una llamada en curso |
-| 22 | Con el envío de informes apagado **no sale ninguna palabra** de la reunión, del perfil ni del contexto: solo números | El usuario apaga el envío creyendo que protege su privacidad, y su nombre, su empresa y su descripción siguen saliendo. **Hoy pasa**: el modo solo métricas conserva la cabecera entera (`informes.js:91-94`) |
+| 22 | Con el envío de informes apagado **no sale ninguna palabra** de la reunión, del perfil ni del contexto: solo números | El usuario apaga el envío creyendo que protege su privacidad, y su nombre, su empresa y su descripción siguen saliendo. **Pasaba hasta F052**: el modo solo métricas conservaba la cabecera entera. Ahora la cabecera se construye campo a campo (`recortarCabecera`, `informes.js`) y lo que no se nombra allí no sale |
 
 ---
 
@@ -1730,19 +1730,34 @@ no llega un informe, no se sabe si no se usó la app o si alguien apagó el env�
 
 - **Se registra el interruptor.** Cada cabecera lleva `modoInforme` y los cambios desde el
   informe anterior, con su hora. Así se sabe si alguien lo apagó y cuándo.
-- **Fuga que hay que cerrar en el mismo cambio (§0.22).** Hoy el modo solo métricas
-  conserva la cabecera tal cual, con el perfil (nombre, edad, ocupación, descripción) y el
-  contexto (`informes.js:91-94`). Pasan a sustituirse por longitudes y banderas.
+- **Fuga cerrada en el mismo cambio (§0.22).** El modo solo métricas conservaba la
+  cabecera tal cual, con el perfil (nombre, edad, ocupación, descripción) y el contexto.
+  Ahora los sustituye por longitudes y banderas (`{ nombreLen, ocupacionLen, contextoLen,
+  tieneEdad }`), y en el resto de líneas solo pasan las cadenas de una lista cerrada de
+  vocabulario (`tipo`, `traductor`, `cierre`…) y con forma de palabra clave: un campo nuevo
+  con texto, o una frase en uno de vocabulario, sale como longitud, y una clave que no es
+  un nombre de campo no sale. Una línea cortada a media escritura ya no se manda tal cual:
+  sale como línea ilegible con su longitud.
 - **Usuarios de v0.9.** Un `no` guardado se lee como `metricas`: quien apagó el envío en
-  v0.9 pasa a mandar números, y el aviso lo dice.
+  v0.9 pasa a mandar números, y el aviso lo dice. Un pendiente que la v0.9 dejó en la cola
+  grabado con `no` no sube: se descarta, porque se grabó con la promesa de que no saldría
+  nada.
+- **Qué modo vale.** El de una reunión es el más restrictivo entre el que había al empezar y
+  el que hay al parar (la lectura estricta de F039b), y el de cada pendiente se vuelve a leer
+  justo antes de subirlo: quien apaga el envío mientras sube uno no ve salir el siguiente con
+  texto.
 - **El aviso en Ajustes, con el texto exacto:** «Siempre se envían al equipo datos técnicos
   de cada reunión —tiempos, número de frases y versión—, nunca lo que se dijo. Con
   "Permitir el envío" encendido se envía también la conversación completa y tu perfil,
   para mejorar la traducción.»
-- **El LEEME.** Hoy no menciona los informes. Su apartado «SOBRE LA PRIVACIDAD» lo explicará
-  igual.
+- **El LEEME.** Su apartado «SOBRE LA PRIVACIDAD» lo explica igual (F052): qué sale siempre
+  y qué solo con el interruptor encendido.
 - **Métrica nueva:** cuántas veces se pidió «Otra respuesta». Es el único indicio numérico
-  de que una respuesta no sirvió.
+  de que una respuesta no sirvió. Una línea `{ tipo: 'otraRespuesta', t }`, sin texto.
+- **Métrica más (F056):** `recuperoPrincipio`, una bandera booleana en cada línea de
+  frase (nunca la palabra). Vale `true` solo en la primera línea que sale de cada turno
+  cuyo principio devolvió el transcriptor, para que contar las marcadas cuente turnos y
+  no oraciones.
 - **Uso sin reuniones.** Con la licencia (§17.6), cada arranque queda registrado en el
   servidor, así que «¿se usa?» se contesta aunque no haya reuniones.
 

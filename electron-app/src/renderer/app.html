@@ -741,17 +741,17 @@
       </div>
     </section>
 
-    <!-- F045: pedido del cliente — el selector de tres modos se oculta (el
-         marcado se queda, no se borra) y en su lugar va un aviso más un
-         interruptor único: «completo» encendido, «no» apagado. Protege la
-         privacidad dejando clara, con una frase, la única decisión que
-         queda: permitir el envío o no. -->
+    <!-- F045: pedido del cliente — el selector de modos se oculta (el marcado se
+         queda, no se borra) y en su lugar va un aviso más un interruptor único:
+         «completo» encendido, «metricas» apagado (F052; antes apagado era «no»,
+         que ya no existe: siempre salen los números). Deja clara, con una frase,
+         la única decisión que queda: si además sale la conversación. -->
     <section class="tarjeta">
       <h2>Informe de la reunión</h2>
-      <p class="ayuda" id="txtInformes">Se generan informes de cada reunión y se envían al equipo para la
-        optimización de la app.</p>
+      <p class="ayuda" id="txtInformes">Siempre se envían al equipo datos técnicos de cada reunión —tiempos, número
+        de frases y versión—, nunca lo que se dijo. Con "Permitir el envío" encendido se envía también la
+        conversación completa y tu perfil, para mejorar la traducción.</p>
       <div class="modo oculto" id="modoInformes">
-        <div class="op" data-valor="no"><b>No mandar nada</b><span>El informe se queda solo en este equipo.</span></div>
         <div class="op" data-valor="metricas"><b>Solo métricas</b><span>Tiempos y tamaños, nunca lo que se dijo.</span></div>
         <div class="op sel" data-valor="completo"><b>Completo</b><span>Incluye la transcripción, para revisar la calidad (beta).</span></div>
       </div>
@@ -1556,15 +1556,15 @@ $('#btnParar').onclick = async () => {
 }
 
 // ── Informe de la reunión (F039b: no | metricas | completo; F045: el
-// selector de tres modos se oculta y el usuario solo decide «permitir el
-// envío o no» — encendido manda 'completo', apagado manda 'no'. 'metricas'
-// sigue existiendo como valor posible (lo puede mandar una versión vieja
-// guardada), pero esta pantalla ya no lo ofrece. ) ────────────────────────
+// selector de modos se oculta y el usuario solo decide «permitir el envío o
+// no»; F052: encendido manda 'completo' y apagado manda 'metricas' —solo
+// números—, ya no 'no'. Un 'no' que dejó la v0.9 lo devuelve el proceso
+// principal como 'metricas'.) ─────────────────────────────────────────────
 let permitirEnvioElegido = true
 
-/** Pinta el interruptor según el modo guardado: cualquiera que no sea 'no' cuenta como encendido. */
+/** Pinta el interruptor según el modo guardado: solo 'completo' lo enciende. */
 function pintarPermitirEnvio (modo) {
-  permitirEnvioElegido = modo !== 'no'
+  permitirEnvioElegido = modo === 'completo'
   const c = $('#chkPermitirEnvio')
   if (c) c.checked = permitirEnvioElegido
 }
@@ -1585,6 +1585,11 @@ function pintarEstadoClave (id, hay, ultimos4) {
   p.textContent = hay ? `Guardada ✓ (termina en …${ultimos4})` : 'Sin clave'
 }
 
+/** Lo que dice el aviso del informe (F052). El mismo texto está en el marcado de `#txtInformes`. */
+const TEXTO_INFORMES = 'Siempre se envían al equipo datos técnicos de cada reunión —tiempos, número de frases '
+  + 'y versión—, nunca lo que se dijo. Con "Permitir el envío" encendido se envía también la conversación '
+  + 'completa y tu perfil, para mejorar la traducción.'
+
 /** Abre Ajustes desde el engranaje de la barra o desde el panel de inicio (F032). */
 async function abrirAjustes () {
   $('#ajustes').classList.remove('oculto')
@@ -1598,7 +1603,7 @@ async function abrirAjustes () {
     const txt = $('#txtInformes')
     if (txt) {
       txt.textContent = estado.informesDisponibles
-        ? 'Se generan informes de cada reunión y se envían al equipo para la optimización de la app.'
+        ? TEXTO_INFORMES
         : 'La subida está desactivada en este equipo (falta la configuración de subida); el informe se queda local pase lo que elijas aquí.'
     }
   }
@@ -1610,7 +1615,7 @@ $('#btnGuardarAjustes').onclick = async () => {
   // Solo se manda la clave que el usuario escribió: los campos se vacían tras
   // cada guardado, y mandar '' borraba la clave ya guardada al pulsar Guardar
   // solo para cambiar el permiso de envío del informe.
-  const claves = { informes: permitirEnvioElegido ? 'completo' : 'no' }
+  const claves = { informes: permitirEnvioElegido ? 'completo' : 'metricas' }
   if ($('#kSTT').value.trim()) claves.stt = $('#kSTT').value.trim()
   if ($('#kLLM').value.trim()) claves.llm = $('#kLLM').value.trim()
   await api?.guardarClaves(claves)

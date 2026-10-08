@@ -94,6 +94,22 @@ transcribirlo. La conversación sale de tu computadora. No se guarda audio en
 ningún servidor nuestro, y la traducción se hace en local, pero conviene que lo
 sepas y lo tengas en cuenta según de qué se hable.
 
+Además, al terminar cada reunión la aplicación manda un informe al equipo que
+la mantiene, para poder mejorarla. Qué sale depende del interruptor "Permitir
+el envío", en Ajustes:
+
+- Siempre salen datos técnicos de la reunión: cuánto duró, cuántas frases tuvo,
+  cuánto tardó cada una, la versión de la aplicación y el nombre de la
+  computadora. Nunca sale lo que se dijo, ni tu perfil, ni el contexto del
+  proyecto: ni una palabra. Esto sale aunque apagues el interruptor.
+
+- Con "Permitir el envío" encendido, que es como viene, sale además la
+  conversación completa —lo que se dijo y su traducción, las preguntas y las
+  respuestas sugeridas— y tu perfil y el contexto del proyecto, para mejorar la
+  traducción.
+
+Si lo apagas, desde ese momento sólo salen los datos técnicos.
+
 
 SI ALGO NO VA
 -------------

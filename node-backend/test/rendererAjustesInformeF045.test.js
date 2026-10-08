@@ -51,12 +51,14 @@ describe('F045 — el informe: selector de tres modos oculto, interruptor único
 
   test('el selector viejo (#modoInformes) está oculto, no borrado', () => {
     assert.match(seccion, /<div class="modo oculto" id="modoInformes">/)
-    assert.match(seccion, /data-valor="completo"/, 'las tres opciones siguen en el marcado')
+    assert.match(seccion, /data-valor="completo"/, 'las opciones siguen en el marcado')
   })
 
-  test('hay un aviso de que se generan y envían informes', () => {
-    assert.match(seccion, /se generan informes/i)
-    assert.match(seccion, /optimizaci[oó]n de la app/i)
+  test('hay un aviso de qué se envía siempre y qué solo con el interruptor encendido', () => {
+    // F052: el texto exacto lo fija `informesF052.test.js`; aquí solo que el aviso está.
+    const texto = seccion.replace(/\s+/g, ' ')
+    assert.match(texto, /datos técnicos de cada reunión/i)
+    assert.match(texto, /nunca lo que se dijo/i)
   })
 
   test('el interruptor «Permitir el envío» está en el marcado y NO oculto', () => {

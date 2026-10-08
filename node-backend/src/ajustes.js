@@ -5,6 +5,8 @@
  * pasa, para poder probarlas sin abrir una ventana (el mismo reparto que
  * `ventanaEstado.js`): la carpeta de datos, la base de perfiles que vive en ella
  * (F057), el archivo `ajustes.json` y la elección de idioma que se guarda en él.
+ * Desde F052 el mismo archivo apunta también los cambios del interruptor de informes,
+ * con su hora, hasta que la cabecera de una reunión los lleve.
  */
 
 'use strict'
@@ -13,6 +15,7 @@ const fs = require('fs')
 const path = require('path')
 const { obtenerIdioma, listarIdiomas } = require('./idiomas')
 const { NOMBRE_DE_LA_BASE } = require('./db')
+const { MODOS_DE_INFORME } = require('./informes')
 
 /**
  * La carpeta de datos de siempre dentro de `%APPDATA%` (PLAN.md §17.7).
@@ -114,7 +117,11 @@ function prepararBaseDeDatos ({ app, recursos }) {
  * último idioma no es motivo para tumbar el arranque. Un idioma guardado que el
  * registro ya no conoce se olvida, en vez de marcar un botón que no existe.
  *
- * @returns {{ idioma?: string }}
+ * `cambiosModo` (F052) solo aparece si queda algún cambio por escribir en una
+ * cabecera, y de cada uno solo se queda lo bien formado: `guardarAjustes` lo
+ * vuelve a escribir a partir de esto, así que lo que aquí se descarte no sobrevive.
+ *
+ * @returns {{ idioma?: string, cambiosModo?: { t: string, a: string }[] }}
  */
 function leerAjustes (ruta) {
   try {
@@ -122,6 +129,12 @@ function leerAjustes (ruta) {
     const ajustes = {}
     if (typeof datos?.idioma === 'string') {
       try { ajustes.idioma = obtenerIdioma(datos.idioma).codigo } catch { /* se olvida */ }
+    }
+    if (Array.isArray(datos?.cambiosModo)) {
+      const cambios = datos.cambiosModo
+        .filter(c => c && typeof c.t === 'string' && MODOS_DE_INFORME.includes(c.a))
+        .map(c => ({ t: c.t, a: c.a }))
+      if (cambios.length) ajustes.cambiosModo = cambios
     }
     return ajustes
   } catch {
@@ -143,6 +156,40 @@ function guardarAjustes (ruta, parche) {
     console.error('[ajustes] no se pudo guardar:', err.message)
     return false
   }
+}
+
+/**
+ * Apunta que el interruptor de informes pasó a `modo`, con su hora (F052, PLAN.md §17.5).
+ *
+ * Así se sabe si alguien apagó el envío y cuándo, aunque entre un cambio y el
+ * siguiente informe pasen días: la lista espera aquí hasta que la cabecera de una
+ * reunión la lleve (`descartarCambiosModo`). `t` es la hora en ISO, como la de cada
+ * línea del `.jsonl`; `a`, el modo al que pasó.
+ *
+ * @param {string} ruta  el `ajustes.json`
+ * @param {string} modo  `'completo'` o `'metricas'`
+ * @param {Date}  [ahora]  solo para las pruebas
+ * @returns {boolean} si se pudo escribir
+ */
+function registrarCambioModo (ruta, modo, ahora = new Date()) {
+  if (!MODOS_DE_INFORME.includes(modo)) return false
+  const previos = leerAjustes(ruta).cambiosModo || []
+  return guardarAjustes(ruta, { cambiosModo: [...previos, { t: ahora.toISOString(), a: modo }] })
+}
+
+/**
+ * Quita los primeros `cuantos` cambios de la lista: los que acaban de quedar escritos
+ * en una cabecera. Solo esos y no todos, porque entre leerlos y escribirlos pasa la
+ * carga de Marian (segundos), y un cambio que llegara en ese hueco no está en ninguna
+ * cabecera todavía. Y si la app muere entre escribir la cabecera y llamar a esto, el
+ * cambio sale en dos informes en vez de en ninguno.
+ *
+ * @returns {boolean} si se pudo escribir
+ */
+function descartarCambiosModo (ruta, cuantos) {
+  const previos = leerAjustes(ruta).cambiosModo || []
+  if (!previos.length || !(cuantos > 0)) return true
+  return guardarAjustes(ruta, { cambiosModo: previos.slice(cuantos) })
 }
 
 /**
@@ -195,4 +242,5 @@ function elegirIdioma ({ codigo, hayReunion, ruta, traductor }) {
 
 module.exports = {
   CARPETA_DE_DATOS, fijarCarpetaDeDatos, prepararBaseDeDatos, leerAjustes, guardarAjustes, elegirIdioma,
+  registrarCambioModo, descartarCambiosModo,
 }

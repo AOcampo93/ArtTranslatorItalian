@@ -58,10 +58,12 @@ const { partirTurno, arrastrar, acabaCerrada } = require(path.join(BACK, 'frases
 const { MotorRespuestas, MotorResumen } = require(path.join(BACK, 'respuestas'))
 const { crearTraductorLlm } = require(path.join(BACK, 'traduccionLlm'))
 const { crearLlamador, clasificarError, sanear, proveedorDeClave, MODELOS, NOMBRE_PROVEEDOR } = require(path.join(BACK, 'llm'))
-const { ColaDeInformes } = require(path.join(BACK, 'informes'))
+const { ColaDeInformes, normalizarModo } = require(path.join(BACK, 'informes'))
 const { percentil, duracionMs, costeStt, costeLlm } = require(path.join(BACK, 'coste'))
 const { calcularBounds, leerEstado, guardarEstado } = require(path.join(BACK, 'ventanaEstado'))
-const { fijarCarpetaDeDatos, prepararBaseDeDatos, leerAjustes, elegirIdioma } = require(path.join(BACK, 'ajustes'))
+const {
+  fijarCarpetaDeDatos, prepararBaseDeDatos, leerAjustes, elegirIdioma, registrarCambioModo, descartarCambiosModo,
+} = require(path.join(BACK, 'ajustes'))
 
 // F051 (PLAN.md §17.7): la V2 sigue leyendo las claves y las reuniones de la v0.9, que
 // están en la carpeta de datos de siempre. Va aquí, al cargar el módulo, porque
@@ -73,6 +75,17 @@ let sesion = null          // { transcriptor, traductor, autosave, inicio, ... }
 
 // ── Claves, cifradas con la protección del sistema ────────────────────
 const RUTA_CLAVES = () => path.join(app.getPath('userData'), 'claves.dat')
+
+/**
+ * F052 — a quién avisa `guardarClaves` cuando cambia algo que no es una clave.
+ * Hoy, uno: el interruptor de informes (`alCambiarInformes`, con el valor de antes y
+ * el de después), que se conecta más abajo, junto a `ajustes.json`.
+ *
+ * Es un gancho y no una llamada directa porque `guardarClaves` solo conoce el
+ * disco y `safeStorage`; saber dónde se apunta un cambio y qué modos cuentan como
+ * distintos es de `ajustes.js` e `informes.js`.
+ */
+const ganchos = { alCambiarInformes: null }
 
 /**
  * `safeStorage` ata el cifrado al usuario Y a la máquina (DPAPI en Windows).
@@ -88,6 +101,10 @@ function guardarClaves (claves) {
     throw new Error('el sistema no ofrece cifrado para guardar las claves')
   }
   fs.writeFileSync(RUTA_CLAVES(), safeStorage.encryptString(JSON.stringify(fusion)), { mode: 0o600 })
+  // F052: el interruptor de informes es lo único de aquí que no es una clave, y
+  // quien lo apaga tiene que quedar apuntado con su hora. Después de escribir y no
+  // antes: un guardado que falla no cambió nada.
+  if (claves?.informes !== undefined) ganchos.alCambiarInformes?.(actual.informes, fusion.informes)
   return Object.keys(fusion)
 }
 
@@ -138,7 +155,8 @@ function obtenerColaInformes () {
     directorioDatos: path.join(app.getPath('userData'), 'informes'),
     token: cfg?.token,
     url: cfg?.url,
-    obtenerModo: () => leerClaves().informes || 'completo', // beta: por defecto "completo"
+    // F052: dos modos. Un `no` de la v0.9 se lee como `metricas`; sin nada guardado, `completo` (beta).
+    obtenerModo: () => normalizarModo(leerClaves().informes),
   })
   return colaInformes
 }
@@ -151,6 +169,26 @@ const RUTA_VENTANA = () => path.join(app.getPath('userData'), 'ventana.json')
 // F051: lo que se recuerda entre arranques —hoy, el último idioma elegido—. Junto a
 // `ventana.json`, por lo mismo: sobrevive a una actualización de la app.
 const RUTA_AJUSTES = () => path.join(app.getPath('userData'), 'ajustes.json')
+
+// F052 (PLAN.md §17.5): cada vez que «Permitir el envío» cambia de valor se apunta en
+// `ajustes.json`, con su hora, y el siguiente informe lo lleva en su cabecera. Se
+// compara el modo YA normalizado: pulsar Guardar sin tocar el interruptor, o guardar
+// `metricas` donde la v0.9 había dejado `no`, no es un cambio.
+ganchos.alCambiarInformes = (antes, despues) => {
+  const modo = normalizarModo(despues)
+  if (normalizarModo(antes) !== modo) registrarCambioModo(RUTA_AJUSTES(), modo)
+}
+
+/**
+ * Lo que la cabecera de la reunión que empieza dice del interruptor: el modo con el
+ * que arranca y los cambios que se hicieron desde el informe anterior.
+ */
+function leerInterruptorDeInformes () {
+  return {
+    modo: normalizarModo(leerClaves().informes),
+    cambios: leerAjustes(RUTA_AJUSTES()).cambiosModo || [],
+  }
+}
 
 /**
  * Cuánto se espera tras un `resize`/`move` antes de guardar (F035).
@@ -523,6 +561,12 @@ async function traducirLinea (s, texto, turno, extra = {}) {
     // de la reunión. Por eso la marca la pone `cerrarColaEnMano`, que es por
     // donde pasan las tres.
     arrastre: false, msProvisional: null, cierre: 'frase', empiezaAMedias: false,
+    // F052. `recuperoPrincipio`: el transcriptor tuvo que devolverle a este texto la
+    // primera palabra que el servidor se comió al partir el turno (F056). Solo la
+    // BANDERA: la palabra ya está dentro de `it`, y esta es una de las líneas que
+    // salen aunque el envío esté apagado. La pone `procesarTurno` en la primera
+    // línea que sale de cada turno; el resto de las oraciones del turno no la llevan.
+    recuperoPrincipio: false,
     ...extra,
   }
 }
@@ -703,9 +747,15 @@ async function procesarTurno (s, turno, llegada) {
   // antes, y esa medida es la que vale.
   const msProvisional = union.arrastre ? colaPrevia.msProvisional ?? null : null
 
+  // F052. Una palabra recuperada es del TURNO, y un turno se parte en varias
+  // líneas: marcarlas todas contaría tres veces lo que pasó una. Va en la primera
+  // que sale de este turno; y si ese turno continúa una cola, en la línea que los
+  // une, que hereda además la marca de la cola (como `empiezaAMedias`).
+  let recuperoPrincipio = Boolean(turno.principioRecuperado || (union.arrastre && colaPrevia.recuperoPrincipio))
+
   if (completas) {
     const frase = await traducirOAvisar(s, completas, turno,
-      { arrastre: union.arrastre, msProvisional, empiezaAMedias })
+      { arrastre: union.arrastre, msProvisional, empiezaAMedias, recuperoPrincipio })
     if (!frase) {
       // Marian no pudo con la unión. El turno se pierde, como cualquier otra
       // frase que no se puede traducir, pero la cola NO: ya estaba traducida y
@@ -727,6 +777,7 @@ async function procesarTurno (s, turno, llegada) {
     }
     guardarYPintar(s, frase, aSustituir)
     aSustituir = null
+    recuperoPrincipio = false
 
     // Y después de pintar, nunca antes: el triaje y el LLM no pueden retrasar
     // la burbuja, que es lo que el usuario está leyendo.
@@ -759,6 +810,7 @@ async function procesarTurno (s, turno, llegada) {
       arrastre: union.arrastre,
       empiezaAMedias: colaEmpiezaAMedias,
       msProvisional: msProvisionalAhora,
+      recuperoPrincipio,
     })
     const id = aSustituir ?? nuevoIdProvisional()
     // Si Marian no pudo con la cola, el texto se guarda igual para reintentarlo
@@ -778,6 +830,9 @@ async function procesarTurno (s, turno, llegada) {
       id: frase ? id : aSustituir, it: cola, frase,
       empiezaAMedias: colaEmpiezaAMedias,
       msProvisional: frase ? msProvisionalAhora : (aSustituir ? msProvisional : null),
+      // Como las dos marcas de arriba: vive en la cola y no solo en su `frase`, que
+      // es `null` si Marian falló, y el turno que la continúe tiene que heredarla.
+      recuperoPrincipio,
     }
     if (frase) {
       aRenderer(aSustituir ? 'app:frase:reemplazo' : 'app:frase',
@@ -808,8 +863,14 @@ async function procesarTurno (s, turno, llegada) {
  * la misma razón que el idioma: este tramo lo ejecutan pruebas sueltas, con once
  * nombres fijos y sin acceso a `contexto.construirKeyterms`. Si falta, vale el
  * glosario manual solo.
+ *
+ * `informe` (F052) es `{ modo, cambios }`: el modo del interruptor «Permitir el
+ * envío» al empezar y los cambios hechos desde el informe anterior, que van a la
+ * cabecera del archivo. Los lee el manejador de `app:empezar`
+ * (`leerInterruptorDeInformes`), por la misma razón que el idioma, y se vacían
+ * cuando esto vuelve bien. Sin él, la cabecera no los lleva.
  */
-async function empezarSesion ({ perfil, contexto: ctx, idioma, keyterms }) {
+async function empezarSesion ({ perfil, contexto: ctx, idioma, keyterms, informe }) {
   if (sesion) return { ok: true, yaCorriendo: true }
 
   const claves = leerClaves()
@@ -895,6 +956,8 @@ async function empezarSesion ({ perfil, contexto: ctx, idioma, keyterms }) {
     claves: { stt: !!claves.stt, llm: !!claves.llm },
     // F047: ver el `typeof` de arriba. `undefined` se escribe como 'it'.
     idioma: typeof idioma === 'undefined' ? undefined : idioma?.codigo,
+    // F052: lo mismo con `informe`, por la misma prueba.
+    ...(typeof informe === 'undefined' ? {} : { modoInforme: informe?.modo, cambiosModo: informe?.cambios }),
   })
 
   // F040 (corrección): `traductorSesion` es el elegido para ESTA sesión — el
@@ -954,6 +1017,12 @@ async function empezarSesion ({ perfil, contexto: ctx, idioma, keyterms }) {
   // la sesión porque `mainAppFrase.test.js` ejecuta ese literal suelto, sin
   // `idioma`; mientras valga `undefined`, `partirTurno` usa las italianas.
   s.idioma = idioma
+
+  // F052: el modo del interruptor al EMPEZAR (el de la cabecera). `pararSesion` lo junta con
+  // el de al parar para decidir qué sube: quien empieza apagado no sube su conversación
+  // aunque lo encienda antes de parar. Fuera del literal de la sesión por lo mismo que
+  // `idioma`. Sin `informe` (solo las pruebas) queda `undefined` y cuenta el de ahora.
+  s.modoInforme = informe?.modo
 
   // `msTranscribir` lo sella el transcriptor: es la pierna de OÍR, y sin ella
   // el cronómetro arrancaba con el texto YA en la mano, o sea que medía sólo
@@ -1086,7 +1155,8 @@ async function pararSesion (motivo = 'el usuario paró', graciaMs = GRACIA_EN_VU
       if (leerTokenInformes()) {
         const reunion = path.basename(s.autosave.ruta, '.jsonl').replace(/^sesion-/, '')
         const cola = obtenerColaInformes()
-        cola.encolar(s.autosave.ruta, { maquina: maquinaSaneada(), version: app.getVersion(), reunion })
+        cola.encolar(s.autosave.ruta, { maquina: maquinaSaneada(), version: app.getVersion(), reunion },
+          { modoAlEmpezar: s.modoInforme })
         cola.enviarPendientes().catch(() => {})
       }
     } catch (err) {
@@ -1139,7 +1209,18 @@ async function iniciarReunion (datos) {
   const keyterms = contexto.construirKeyterms({ perfil: datos?.perfil, contexto: datos?.contexto })
   return empezarSesion({ ...datos, idioma, keyterms })
 }
-ipcMain.handle('app:empezar', (_e, datos) => iniciarReunion(datos))
+ipcMain.handle('app:empezar', async (_e, datos) => {
+  // F052: se lee ANTES de arrancar y se pasa DESPUÉS de `datos`, para que la interfaz no
+  // pueda ponerlo. Vive aquí y no dentro de `iniciarReunion` por lo que se cuenta allí:
+  // las pruebas ejecutan ese tramo suelto, con nombres fijos.
+  const informe = leerInterruptorDeInformes()
+  const r = await iniciarReunion({ ...datos, informe })
+  // La cabecera ya está en el archivo: esos cambios no se repiten en la siguiente.
+  // Con `yaCorriendo` no se escribió ninguna cabecera, y si arrancar lanzó, tampoco
+  // se llega aquí: los cambios esperan a la reunión que sí empiece.
+  if (r?.ok && !r.yaCorriendo) descartarCambiosModo(RUTA_AJUSTES(), informe.cambios.length)
+  return r
+})
 ipcMain.handle('app:parar', () => pararSesion())
 
 /** El audio llega en bloques de 100 ms desde el renderer. */
@@ -1163,6 +1244,12 @@ ipcMain.handle('app:otraRespuesta', (_e, id) => {
       detalle: '',
     })
     return { ok: false }
+  }
+  // F052: cuántas veces se pide otra es el único indicio numérico de que una respuesta
+  // no sirvió. Una línea sin texto (`Autosave.guardarOtraRespuesta`); si el disco falla,
+  // se dice y la petición sigue: pedir otra respuesta no puede depender de esto.
+  try { sesion.autosave?.guardarOtraRespuesta() } catch (err) {
+    console.error('[autoguardado] no se pudo apuntar la petición de otra respuesta:', err.message)
   }
   return { ok: sesion.motor.reintentar(id) }
 })
@@ -1263,7 +1350,11 @@ ipcMain.handle('app:estadoClaves', () => {
     sttUltimos4: ultimos4(c.stt),
     llmUltimos4: ultimos4(c.llm),
     cifradoDisponible: safeStorage.isEncryptionAvailable(),
-    informes: c.informes || 'completo',
+    // F052: dos modos. Un `no` de la v0.9 (no mandar nada) se lee como `metricas`, y
+    // también lo que no se reconozca: ante la duda no sale texto. Es la regla de
+    // `normalizarModo` (informes.js), en línea porque la prueba de este manejador lo
+    // ejecuta suelto, con cuatro nombres.
+    informes: !c.informes || c.informes === 'completo' ? 'completo' : 'metricas',
     informesDisponibles: Boolean(leerTokenInformes()),
   }
 })

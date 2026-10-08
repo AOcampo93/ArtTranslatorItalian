@@ -161,6 +161,17 @@ class Autosave {
   }
 
   /**
+   * Una petición de «Otra respuesta» (F052): una línea sin texto, solo `tipo` y la
+   * hora que `escribir()` le pone. Es el único indicio numérico de que una respuesta
+   * sugerida no sirvió, y por eso mismo no puede llevar la pregunta ni la respuesta:
+   * esas ya van en sus líneas, y esta es una de las que salen aunque el envío esté
+   * apagado.
+   */
+  guardarOtraRespuesta () {
+    this.escribir({ tipo: 'otraRespuesta' })
+  }
+
+  /**
    * Metadatos de la sesión: con qué perfil y contexto se grabó, con qué
    * versión de la app, cuándo empezó y con qué id de `db.js`.
    *
@@ -179,8 +190,14 @@ class Autosave {
    * idioma que se añada). Es el de la cabecera, no el de cada frase: el campo
    * `it` de las líneas sigue siendo «el texto original» sea cual sea el idioma.
    * Sin él se escribe `'it'`.
+   *
+   * `modoInforme` y `cambiosModo` (F052): cómo estaba «Permitir el envío» al
+   * empezar la reunión (`'completo'` o `'metricas'`) y los cambios de ese interruptor
+   * desde el informe anterior, cada uno `{ t, a }` (hora y modo al que pasó). Son lo
+   * que permite saber, desde el servidor, si alguien lo apagó y cuándo. Sin ellos no
+   * se escriben: no se inventa un modo que nadie leyó.
    */
-  guardarCabecera ({ perfil, contexto, version, inicio, id, claves, idioma } = {}) {
+  guardarCabecera ({ perfil, contexto, version, inicio, id, claves, idioma, modoInforme, cambiosModo } = {}) {
     this.escribir({
       tipo: 'cabecera',
       perfil: perfil || null,
@@ -190,6 +207,8 @@ class Autosave {
       id: id !== undefined ? id : this.idSesion,
       claves: { stt: Boolean(claves?.stt), llm: Boolean(claves?.llm) },
       idioma: idioma || IDIOMA_POR_DEFECTO,
+      modoInforme,
+      cambiosModo,
     })
   }
 

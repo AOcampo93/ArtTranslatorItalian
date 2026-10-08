@@ -130,9 +130,10 @@ test('en modo "metricas" no se manda ningún texto de italiano ni de español', 
   }
 })
 
-test('una reunión grabada en modo "no" no sube nunca, ni aunque el ajuste cambie después a "completo"', async () => {
-  // Corrección F039b tras revisión: el consentimiento que vale es el que
-  // había AL GRABAR, no el del día que se reintenta el envío.
+test('un pendiente que la v0.9 dejó grabado con "no" no sube nunca: se saca de la cola sin tocar la red', async () => {
+  // F052 (decisión del líder): como AJUSTE actual un "no" se lee "metricas", pero una reunión
+  // grabada con la promesa de que no saldría nada no la pierde porque cambie la versión. Y
+  // sigue valiendo el consentimiento de al grabar (corrección F039b), no el del día del envío.
   const dirVps = dirTemporal()
   const dirApp = dirTemporal()
   const { servidor, url } = await arrancarReceptor(dirVps)
@@ -142,18 +143,17 @@ test('una reunión grabada en modo "no" no sube nunca, ni aunque el ajuste cambi
       JSON.stringify({ tipo: 'cabecera', id: 6 }) + '\n' +
       JSON.stringify({ it: 'ciao', es: 'hola', ms: 100 }) + '\n')
 
-    let modo = 'no'
+    // La cola tal como la dejó la v0.9: lo que valía entonces era "no".
     const cola = new ColaDeInformes({
-      directorioDatos: dirApp, token: TOKEN, url, obtenerModo: () => modo,
+      directorioDatos: dirApp, token: TOKEN, url, obtenerModo: () => 'completo',
     })
-    cola.encolar(rutaJsonl, { maquina: 'pc-arturo', version: '0.5.0', reunion: '20260920-131500-6' })
-
-    // Semanas después, el usuario cambia el ajuste para otra reunión.
-    modo = 'completo'
+    fs.writeFileSync(cola.rutaCola, JSON.stringify([{
+      rutaJsonl, meta: { maquina: 'pc-arturo', version: '0.9.0', reunion: '20260920-131500-6' }, modoAlEncolar: 'no',
+    }]))
     await cola.enviarPendientes()
 
     const colaTrasIntento = JSON.parse(fs.readFileSync(path.join(dirApp, 'cola-informes.json'), 'utf8'))
-    assert.strictEqual(colaTrasIntento.length, 0, 'el pendiente grabado en modo "no" se descarta, no se reintenta')
+    assert.strictEqual(colaTrasIntento.length, 0, 'el pendiente grabado con "no" se descarta, no se reintenta')
     const dia = new Date().toISOString().slice(0, 10)
     assert.ok(!fs.existsSync(path.join(dirVps, dia)), 'no debe haber llegado nada al VPS')
   } finally {

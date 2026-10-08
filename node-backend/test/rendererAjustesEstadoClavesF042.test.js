@@ -131,11 +131,10 @@ describe('F042 — abrirAjustes() pinta el estado de las dos claves al abrir', (
   })
 })
 
-// F045: el selector de tres modos del informe se oculta; en su lugar el
-// interruptor «Permitir el envío» es el que manda, y al abrir Ajustes
-// refleja el estado guardado (`informes`): cualquiera que no sea 'no' es
-// «encendido», porque 'completo' es el único valor que esta pantalla puede
-// volver a guardar.
+// F045: el selector de modos del informe se oculta; en su lugar el interruptor
+// «Permitir el envío» es el que manda, y al abrir Ajustes refleja el estado
+// guardado (`informes`). F052: solo 'completo' lo enciende; 'metricas' (lo que
+// manda al apagarse) y el 'no' que dejó la v0.9 lo dejan apagado.
 describe('F045 — el interruptor «Permitir el envío» refleja el estado guardado', () => {
   test('informes: "completo" guardado -> el interruptor llega encendido', () => {
     const { pintarPermitirEnvio, nodos } = montar(null)
