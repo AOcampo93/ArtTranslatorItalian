@@ -1,6 +1,6 @@
 ARTTRANSLATORV2
 Traductor en vivo: italiano o inglés → español
-Versión 1.0.0
+Versión 1.1.0
 ==============================================
 
 
@@ -226,6 +226,14 @@ SI ALGO NO VA
 **No oye nada.** Casi siempre es que se compartió una ventana en vez de la
 pantalla completa, o que no se marcó la casilla del audio. Pulsa "Detener",
 vuelve a "Escuchar" y elige pantalla completa.
+
+**Aparece el aviso "La IA no responde".** El servicio de IA de tu clave
+(Gemini, Claude u OpenAI) no contesta: falta de saldo o de cuota, o está
+saturado. Mientras tanto, la traducción sigue con el traductor que va dentro
+de la aplicación, que es más simple, y las respuestas sugeridas pueden
+fallar. Cada minuto se vuelve a probar la IA, y el aviso desaparece solo en
+cuanto responde. Si se repite, revisa el saldo y la cuota de tu clave, o
+cambia de proveedor en Ajustes.
 
 **Dice "demasiadas sesiones".** Quedó una sesión anterior sin cerrar. Espera un
 minuto y vuelve a intentarlo.

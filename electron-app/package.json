@@ -1,6 +1,6 @@
 {
   "name": "art-translator-italian-diagnostico",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "ArtTranslatorV2: traductor en vivo de italiano o inglés a español, con respuestas sugeridas en el idioma de la reunión",
   "main": "src/mainApp.js",
   "scripts": {

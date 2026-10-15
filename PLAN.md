@@ -2038,10 +2038,28 @@ de error que corrige la vía del LLM.
 | F054 | Licencia, lado de la app | Sonnet | Opus (claves, red y dinero) |
 | F055 | Paquete v1.0.0: los dos Marian, los dos WAV, licencia incrustada, manifiesto del backend (`herramientas/manifiesto-backend.js` antes de `electron-builder`, y `verificarBackend` contra el paquete ya construido), fusibles (con `enableNodeOptionsEnvironmentVariable` apagado), verificador y LEEME. El líder despliega el servidor de F053 antes de publicar | Sonnet | Verificador del paquete |
 | F058 | Publicar la v1.0.0: desplegar el servidor de licencias, crear la licencia real, construir el zip definitivo y probar una activación real — **hecha el 08-10-2026**: release `app-v1.0.0` con el zip de 365 MB; activación real 200, con la firma verificada y la plaza de prueba liberada `[medido]`. El repo es público y se publicó así por decisión del humano: se vigilan las plazas con `vps/licencias.sh listar` | Líder | Verificador del paquete y activación real |
+| F059 | v1.1.0: si el LLM no responde, traducir sin esperarlo (cortacircuitos tras 2 fallos, prueba cada 60 s), aviso en vivo y diagnóstico del proveedor en el informe — **hecha** | Sonnet | Líder |
+| F060 | v1.1.0: la pregunta citada («he's like, …?», «the client said, …?») no es para el usuario; en italiano, la 2.ª persona con «?» cuenta aunque no abra la frase — **hecha** | Sonnet | Líder, con frases nuevas |
 
 Van una detrás de otra (`init.sh` no admite dos tareas en curso). Coste: unos **2 M tokens**
 de subagentes `[estimado]`, a razón de ~0,15 M por tarea Sonnet, que es lo que costaron
 F042–F045 `[medido]`, más tres revisiones Opus.
+
+### 17.11 La primera prueba de la v1.0.0 (13-10-2026)
+
+Un equipo, dos reuniones de vídeo: 8,5 min en inglés y 5,3 min en italiano, con el mismo
+vídeo de Bérgamo de la v0.8 `[medido]`.
+- **La licencia funcionó:** se activó sola y ocupa 1 de 6 plazas.
+- **La transcripción mejoró:** 0,55 s frente a 1,2 s, y «canederli» donde la v0.8 entendía
+  «cani da slitta».
+- **Gemini no respondió en toda la prueba:** 15 respuestas sin contestar en 20 s, cuatro 503
+  y un 429 de cuota. Las 103 frases cayeron a Marian después de esperar 3 s cada una:
+  traducir tardó 3,7 s frente a 0,9 s, y la calidad bajó a la de Marian («nella mata» →
+  «en el año 17»).
+- **La causa fue externa, pero la app la pagaba en latencia y en silencio.** F059 lo
+  corrige: el cortacircuitos, el aviso y el código del proveedor en el informe.
+- **El detector:** en italiano, 4 de 4 reales. En inglés, unas 13 de 16; los fallos eran
+  estilo indirecto, y F060 los corrige.
 
 ### 17.10 Lo que queda por medir
 
