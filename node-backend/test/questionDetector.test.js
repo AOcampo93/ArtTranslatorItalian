@@ -154,8 +154,8 @@ describe('F044 — las 8 frases reales del informe de v0.8.0', () => {
   const CASOS = [
     {
       it: 'Adesso stiamo per partire, stiamo per partire per la Sicilia. Ho già la valigia pronta. E in questi tanti viaggi hai fatto anche dei viaggi in Brasile?',
-      esperado: false,
-      nota: 'afirmación sobre el propio viaje; el "?" final no abre con marca dirigida al oyente',
+      esperado: true,
+      nota: 'F060 lo cambió a propósito: "hai fatto…?" lleva un verbo en 2.ª persona con "?", así que va al oyente',
     },
     {
       it: 'Mi fai ricordarti quante volte sei stata in Brasile? Perché Giulia per tanti anni è stata in Brasile.',
@@ -200,11 +200,11 @@ describe('F044 — las 8 frases reales del informe de v0.8.0', () => {
     })
   }
 
-  test('de las 8, acepta exactamente las 3 preguntas y rechaza las 5 afirmaciones', () => {
+  test('de las 8, acepta exactamente las 4 preguntas y rechaza las 4 afirmaciones', () => {
     const aciertos = CASOS.filter(c => analizar(c.it).esPregunta === c.esperado).length
     assert.strictEqual(aciertos, 8, 'las 8 deben clasificarse como en el informe')
-    assert.strictEqual(CASOS.filter(c => c.esperado).length, 3)
-    assert.strictEqual(CASOS.filter(c => !c.esperado).length, 5)
+    assert.strictEqual(CASOS.filter(c => c.esperado).length, 4)
+    assert.strictEqual(CASOS.filter(c => !c.esperado).length, 4)
   })
 })
 

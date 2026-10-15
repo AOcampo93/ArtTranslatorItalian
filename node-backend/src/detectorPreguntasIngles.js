@@ -206,6 +206,37 @@ const PALABRAS_TRAS_CORTESIA = 2
 const MIN_PALABRAS_SIN_SIGNO = 4
 const MIN_PALABRAS_CON_SIGNO = 3
 
+/**
+ * F060. Estilo indirecto: una pregunta citada tras un verbo de cita («he's like,
+ * do you want…?», «Elon texts me and he's like,», «she asked», «I was like,») la
+ * dice un personaje de la historia, no se dirige al oyente. MEDIDO en la primera
+ * prueba de la v1.0.0: 2 de 16 detectadas eran citas. Solo se aplica a una frase
+ * que NO abre con auxiliar ni interrogativa: «Did he just say, do you…?» y
+ * «Why did he say, …?» siguen siendo preguntas.
+ *
+ * Ronda 2: el que cita no siempre es un pronombre («my boss was like,», «the
+ * client said,»). `ESTILO_INDIRECTO` cubre los pronombres, con o sin coma;
+ * `CITA_CON_COMA` cubre cualquier sujeto, pero exige la coma detrás del verbo
+ * («is like a month behind?» no es una cita). Ver `esEstiloIndirecto`.
+ */
+const ESTILO_INDIRECTO = /(?:^| )(?:(?:he|she|they|i|we)(?:'s|'m|'re| was| were| is| am| are)? like|(?:he|she|they|i|we) (?:said|says|asked|asks|texted|texts|told)|texts me|asked me)(?: |$)/
+
+/** Verbo de cita + coma, sea cual sea el sujeto. Se aplica a la frase CRUDA, con su coma. */
+const CITA_CON_COMA = /(?:(?:\b(?:was|were|is|am|are)|'s|'m|'re)\s+like|\b(?:said|says|asked|asks|goes)|\b(?:told|asked)\s+(?:me|us|him|her|them)|\b(?:texts|texted|dms)\s+me)\s*,/
+
+/** «As I said, can you…?», «Like I said, …»: una comparación, no una cita. */
+const COMPARATIVA_DE_CITA = /^(?:as|like) (?:\S+ ){1,3}?(?:said|says|asked|asks|told|goes)\b/
+
+/**
+ * F060. Sin «?», un auxiliar invertido de menos de 5 palabras (sin el relleno
+ * inicial) no basta: es un fragmento («Did you finish» cortado). Tampoco basta si
+ * tras auxiliar + sujeto viene una interrupción: «And did he Sorry, go on.» tiene
+ * 5 palabras, pero la pregunta se quedó a medias. Con «?» valen las 3 de siempre.
+ * El 5 y la lista son `[por medir]`.
+ */
+const MIN_PALABRAS_INVERSION_SIN_SIGNO = 5
+const INTERRUPCIONES = new Set(['sorry', 'anyway', 'wait', 'hold'])
+
 // ── Texto ───────────────────────────────────────────────────────────────────
 
 /**
@@ -289,6 +320,24 @@ function tieneColetilla (frase) {
     .replace(/[\s?!.…"'”’»)\]]+$/, '')
   const m = sinCierre.match(COLETILLA)
   return m ? m[0].replace(/^,\s*/, '').toLowerCase() : null
+}
+
+/**
+ * F060. ¿La frase con «?» es una pregunta citada, o sea del personaje y no del
+ * oyente? Quien cita puede ser un pronombre o cualquiera («my boss was like,»,
+ * «the client said,»). No cuenta si:
+ *  - quien cita es «you» («You said, three weeks?» se lo pregunta al oyente);
+ *  - es una comparación («As I said, can you send it?»);
+ *  - cierra con coletilla («Everything goes, right?»): esa va al oyente.
+ * @param {string} frase cruda, con su puntuación
+ * @param {string} norm  la misma frase, normalizada y sin relleno
+ */
+function esEstiloIndirecto (frase, norm) {
+  if (COMPARATIVA_DE_CITA.test(norm) || tieneColetilla(frase)) return false
+  if (ESTILO_INDIRECTO.test(norm)) return true
+  const cruda = String(frase || '').toLowerCase().replace(/[\u2018\u2019\u02BC]/g, "'")
+  const m = CITA_CON_COMA.exec(cruda)
+  return Boolean(m) && !/\byou\s*$/.test(cruda.slice(0, m.index))
 }
 
 // ── Reglas ──────────────────────────────────────────────────────────────────
@@ -398,6 +447,7 @@ function analizar (texto) {
     const normSigno = sinRelleno(normalizar(frase))
     if (!normSigno) continue
     const apertura = detectarApertura(normSigno, { conSigno: true })
+    if (!apertura && esEstiloIndirecto(frase, normSigno)) continue
     const dirigida = apertura
       ? apertura.apertura
       : (normSigno.match(SEGUNDA_PERSONA)?.[0].trim() || tieneColetilla(frase))
@@ -429,6 +479,9 @@ function analizar (texto) {
 
   const cierre = cierreDe(cola)
   const apertura = detectarApertura(norm, { afirmada: cierre !== '' && !cierre.includes('?') })
+  if (apertura && apertura.motivo === 'inversión' && !cierre.includes('?') &&
+      (norm.split(' ').length < MIN_PALABRAS_INVERSION_SIN_SIGNO ||
+       INTERRUPCIONES.has(norm.split(' ')[apertura.apertura.split(' ').length]))) return nulo
   const coletilla = apertura ? null : tieneColetilla(cola)
   if (!apertura && !coletilla) return nulo
 

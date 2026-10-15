@@ -89,6 +89,17 @@ const MULETILLA_INICIAL = /^\s*(?:sai|senti)\s*,\s*/i
  */
 const PRONOMBRES_2A = ['tu', 'voi']
 
+/**
+ * F060. Con «?» explícito, un verbo en 2ª persona EN CUALQUIER PUNTO de la
+ * frase la dirige al oyente, aunque no la abra: «E in questi tanti viaggi hai
+ * fatto anche dei viaggi in Brasile?». MEDIDO en la primera prueba de la v1.0.0
+ * (se perdía una pregunta real). Salen las de percepción («senti», «vede»…):
+ * «sente»/«vede» son también 3.ª persona y «senti» es muletilla.
+ */
+const VERBOS_2A_EN_FRASE = new Set(
+  VERBOS_2A.filter(v => !v.includes(' ') && !/^(?:senti|sentite|sente|vedi|vedete|vede)$/.test(v))
+)
+
 /** Perífrasis que introducen pregunta indirecta. */
 const PERIFRASIS = [
   'mi puoi dire', 'mi potresti dire', 'mi spieghi', 'mi spiega',
@@ -295,14 +306,17 @@ function analizar (texto) {
   //    la puerta lo descartaba y el paso 2 miraba la misma frase y tampoco
   //    hallaba apertura. El pronombre «tu»/«voi» es la marca más explícita de
   //    todas. La narración que cierra con «?» y sin esa marca (F044: «E in
-  //    questi tanti viaggi hai fatto…?») sigue sin pasar.
+  //    questi tanti viaggi hai fatto…?») dejó de ser así en F060: un verbo en
+  //    2ª persona con «?» la dirige al oyente (ver `VERBOS_2A_EN_FRASE`).
   const frases = todasLasFrases(crudo)
   const conSigno = ultimaConSigno(crudo)
   if (conSigno) {
     const normSigno = sinRelleno(normalizar(conSigno))
     if (normSigno) {
       const apertura = detectarApertura(normSigno, { conSigno: true })
-      const dirigida = apertura ? apertura.apertura : abrePor(normSigno, PRONOMBRES_2A)
+      const dirigida = apertura
+        ? apertura.apertura
+        : (abrePor(normSigno, PRONOMBRES_2A) || normSigno.split(' ').find(w => VERBOS_2A_EN_FRASE.has(w)))
       if (frases.length <= 1 || dirigida) {
         return {
           esPregunta: true,
