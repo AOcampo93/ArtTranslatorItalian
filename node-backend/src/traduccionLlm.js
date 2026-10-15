@@ -32,6 +32,19 @@
 // El de siempre, el italiano: es lo que se usa si quien construye el traductor
 // no dice otra cosa (F047). Cada idioma trae el suyo en `idiomas.js`.
 const { promptTraduccion: promptTraduccionItaliano } = require('../../shared/prompts')
+const { diagnosticoLlm } = require('./llm')
+
+/**
+ * F059. Cortacircuitos, por traductor (o sea, por reunión). Medido en la primera
+ * prueba de la v1.0.0, con Gemini sin responder: las 103 frases esperaron los 3 s de
+ * `plazoMs` antes de caer a Marian (traducir p50 3,7 s frente a 0,87 s). `[medido]`
+ *  - Tras `FALLOS_PARA_ABRIR` fallos seguidos (error, plazo agotado), las frases van
+ *    DIRECTAS a Marian, con `motivo: 'llm-caido'`.
+ *  - Cada `REINTENTO_MS`, UNA frase prueba el LLM; si responde, el circuito se cierra.
+ *  - Una respuesta charlatana o vacía NO es un fallo del servicio: el LLM contestó.
+ */
+const FALLOS_PARA_ABRIR = 2
+const REINTENTO_MS = 60000
 
 /** Quita las vallas de markdown que el modelo añade aunque se le prohíba. */
 function quitarVallas (bruto) {
@@ -152,6 +165,9 @@ function limpiar (bruto) {
  * @param {number} [opts.plazoMs]
  * @param {Function} [opts.promptTraduccion] (bloque) => prompt del sistema; el
  *   del idioma de la reunión (F047). Por defecto, el italiano de siempre.
+ * @param {Function} [opts.ahora] reloj en ms (F059); se inyecta en las pruebas.
+ * @param {Function} [opts.alCambiarCircuito] ({ abierto, causa }) => void, al abrirse
+ *   y al cerrarse el cortacircuitos (F059); `causa` es corta («sin respuesta»).
  * @param {{ traducir: (texto: string) => Promise<object> }} opts.respaldo
  *   Marian, ya cargado. Su resultado se devuelve TAL CUAL en el fallback —
  *   es él quien anota `traductor: 'marian'` en lo que devuelve. Marian no recibe
@@ -164,6 +180,7 @@ function limpiar (bruto) {
  */
 function crearTraductorLlm ({
   llamar, bloqueContexto, plazoMs = 3000, respaldo, promptTraduccion = promptTraduccionItaliano,
+  ahora = Date.now, alCambiarCircuito = null,
 } = {}) {
   if (typeof llamar !== 'function') {
     throw new Error('hace falta una función para llamar al LLM')
@@ -173,15 +190,49 @@ function crearTraductorLlm ({
   }
   const bloque = bloqueContexto || (() => '')
 
+  // F059: estado del cortacircuitos.
+  let fallosSeguidos = 0
+  let abierto = false
+  let proximaPruebaMs = 0
+  let ultimoFallo = null   // { llmTipo, llmEstado, llmCodigo, causa }
+
+  function avisar () {
+    if (typeof alCambiarCircuito !== 'function') return
+    try { alCambiarCircuito({ abierto, causa: abierto ? ultimoFallo?.causa ?? null : null }) } catch (_) { /* el aviso no puede tumbar la traducción */ }
+  }
+
+  function registrarFallo (err) {
+    ultimoFallo = diagnosticoLlm(err)
+    fallosSeguidos++
+    if (!abierto && fallosSeguidos >= FALLOS_PARA_ABRIR) {
+      abierto = true
+      proximaPruebaMs = ahora() + REINTENTO_MS
+      avisar()
+    } else if (abierto) {
+      avisar()   // la causa pudo cambiar
+    }
+    return ultimoFallo
+  }
+
+  function registrarRespuesta () {
+    fallosSeguidos = 0
+    if (abierto) { abierto = false; avisar() }
+  }
+
+  /** Lo que el `.jsonl` guarda del fallo: sin `causa`, que es para la pantalla. */
+  function diagnostico (d) {
+    return { llmTipo: d.llmTipo, llmEstado: d.llmEstado, llmCodigo: d.llmCodigo }
+  }
+
   /**
    * `motivoJsonl`, si se da, viaja hasta el `.jsonl` de la sesión (F043): es
    * lo que permite comprobar en el informe que el LLM SÍ intentó traducir y
    * cayó a Marian por una respuesta charlatana, no por elección.
    */
-  async function conRespaldo (texto, motivo, err, motivoJsonl) {
+  async function conRespaldo (texto, motivo, err, motivoJsonl, diag) {
     console.warn(`[traduccionLlm] ${motivo}, se traduce con Marian:`, err?.message || motivo)
     const resultado = await respaldo.traducir(texto)
-    return motivoJsonl ? { ...resultado, motivo: motivoJsonl } : resultado
+    return { ...resultado, ...(motivoJsonl ? { motivo: motivoJsonl } : {}), ...(diag ? diagnostico(diag) : {}) }
   }
 
   async function traducir (texto, opciones) {
@@ -200,6 +251,14 @@ function crearTraductorLlm ({
       return { es: limpio, ms: 0, traductor: 'ninguno', modelo: null }
     }
 
+    // F059: circuito abierto y todavía no toca probar → directo a Marian, sin plazo.
+    if (abierto) {
+      if (ahora() < proximaPruebaMs) {
+        return conRespaldo(limpio, 'el LLM está caído (cortacircuitos abierto)', null, 'llm-caido', ultimoFallo)
+      }
+      proximaPruebaMs = ahora() + REINTENTO_MS   // esta frase es la prueba; las demás no
+    }
+
     const t0 = Date.now()
     let venció = false
     let reloj = null
@@ -214,13 +273,16 @@ function crearTraductorLlm ({
       bruto = await Promise.race([llamar(sistema, limpio, { maxTokens: 300 }), tope])
     } catch (err) {
       clearTimeout(reloj)
-      return conRespaldo(limpio, 'el LLM falló', err)
+      return conRespaldo(limpio, 'el LLM falló', err, null, registrarFallo(err))
     }
     clearTimeout(reloj)
 
     if (venció) {
-      return conRespaldo(limpio, `el LLM no respondió en ${Math.round(plazoMs / 1000)} s`, null)
+      const d = registrarFallo(new Error(`no respondió en ${Math.round(plazoMs / 1000)} s`))
+      return conRespaldo(limpio, `el LLM no respondió en ${Math.round(plazoMs / 1000)} s`, null, null, d)
     }
+    // Contestó (aunque sea mal): el servicio está vivo.
+    registrarRespuesta()
 
     const crudo = typeof bruto === 'string' ? bruto : bruto?.texto
     const modelo = typeof bruto === 'string' ? null : (bruto?.modelo ?? null)

@@ -40,7 +40,7 @@
 'use strict'
 
 const { EventEmitter } = require('events')
-const { clasificarError } = require('./llm')
+const { clasificarError, diagnosticoLlm } = require('./llm')
 
 // Lo de siempre, el italiano: es lo que usan los dos motores si quien los
 // construye no dice otra cosa (F047). Cada idioma trae lo suyo en `idiomas.js`.
@@ -318,7 +318,9 @@ class MotorRespuestas extends EventEmitter {
       // de OpenAI). `clasificarError` decide QUÉ pasó y QUÉ hacer; `detalle`
       // ya viene saneado para el «ver detalle» plegado.
       const { tipo, mensaje, detalle } = clasificarError(err)
-      this.emit('respuesta', { id: pregunta.id, texto: null, tipo, mensaje, detalle })
+      // F059: el diagnóstico en vocabulario cerrado, para el `.jsonl`.
+      const { llmTipo, llmEstado, llmCodigo } = diagnosticoLlm(err)
+      this.emit('respuesta', { id: pregunta.id, texto: null, tipo, mensaje, detalle, llmTipo, llmEstado, llmCodigo })
     }
   }
 

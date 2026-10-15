@@ -114,6 +114,8 @@ contextBridge.exposeInMainWorld('app', {
   alRespuesta: fn => escuchar('app:respuesta', fn),
   /** Por qué el panel de preguntas no va a dar respuestas (p. ej. falta la clave). */
   alAvisoPreguntas: fn => escuchar('app:avisoPreguntas', fn),
+  /** F059: el LLM no responde (`{ abierto, causa }`); se traduce con Marian. */
+  alAvisoLlm: fn => escuchar('app:avisoLlm', fn),
   alContexto: fn => escuchar('app:contexto', fn),
   alEstado: fn => escuchar('app:estado', fn),
 })

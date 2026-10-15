@@ -89,6 +89,8 @@ function masRestrictivo (a, b) {
  */
 const CAMPOS_DE_VOCABULARIO = new Set([
   'tipo', 't', 'traductor', 'motivo', 'motivoCorte', 'cierre', 'modelo', 'idioma',
+  // F059: el diagnóstico de un fallo del LLM (`llmEstado` es un número y sale solo).
+  'llmTipo', 'llmCodigo',
 ])
 
 /*

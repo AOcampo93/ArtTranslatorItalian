@@ -149,7 +149,7 @@ class Autosave {
    * devuelve; si no, quedan `null` y el coste de la reunión los estima por
    * caracteres — nunca se inventa un 0.
    */
-  guardarRespuestaLlm ({ it, es, manual, texto, tokensEntrada, tokensSalida, modelo, mensaje }) {
+  guardarRespuestaLlm ({ it, es, manual, texto, tokensEntrada, tokensSalida, modelo, mensaje, llmTipo, llmEstado, llmCodigo }) {
     this.escribir({
       tipo: 'respuestaLlm',
       it, es: es || '', manual: Boolean(manual),
@@ -157,6 +157,8 @@ class Autosave {
       tokensEntrada: tokensEntrada ?? null, tokensSalida: tokensSalida ?? null,
       modelo: modelo || null,
       mensaje: mensaje || null,
+      // F059: por qué falló, en vocabulario cerrado (`null` si no falló).
+      llmTipo: llmTipo ?? null, llmEstado: llmEstado ?? null, llmCodigo: llmCodigo ?? null,
     })
   }
 

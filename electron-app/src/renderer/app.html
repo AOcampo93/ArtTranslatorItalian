@@ -236,7 +236,7 @@
     background: transparent; border: 1px dashed var(--mal);
     color: var(--tx2); font-size: 12.5px;
   }
-  #avisoPreguntas {
+  #avisoPreguntas, #avisoLlm {
     margin: 12px; padding: 11px 13px; border-radius: 8px;
     background: rgba(227,179,65,.07); border: 1px solid rgba(227,179,65,.3);
     font-size: 12.5px; color: var(--tx2); line-height: 1.45;
@@ -730,6 +730,7 @@
   <aside id="preguntas">
     <div class="titulo">Preguntas para ti <span class="cuenta" id="cuentaP">0</span></div>
     <div id="avisoPreguntas" class="oculto"></div>
+    <div id="avisoLlm" class="oculto" role="status"></div>
     <div id="listaPreguntas"></div>
   </aside>
 </main>
@@ -1171,6 +1172,16 @@ function pintarAvisoPreguntas (texto) {
   const a = $('#avisoPreguntas')
   a.textContent = texto
   a.classList.toggle('oculto', !texto)
+}
+
+/** F059: el LLM no responde. Va y viene solo con el circuito de la traducción. */
+function pintarAvisoLlm (c) {
+  const a = $('#avisoLlm')
+  const abierto = Boolean(c && c.abierto)
+  a.textContent = abierto
+    ? `La IA no responde (${c.causa || 'sin causa conocida'}): traduciendo con el traductor local; las respuestas sugeridas pueden fallar.`
+    : ''
+  a.classList.toggle('oculto', !abierto)
 }
 
 // ── Contexto general ──────────────────────────────────────────────────
@@ -1716,6 +1727,7 @@ if (api) {
   api.alPregunta(pintarPregunta)
   api.alRespuesta(pintarRespuesta)
   api.alAvisoPreguntas(pintarAvisoPreguntas)
+  if (api.alAvisoLlm) api.alAvisoLlm(pintarAvisoLlm)   // F059; condicional: las pruebas de pantalla montan un `api` reducido
   api.alContexto(pintarContexto)
   api.alEstado(({ clase, texto }) => estado(clase, texto))
 }

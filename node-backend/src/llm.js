@@ -250,6 +250,40 @@ function clasificarError (err) {
 }
 
 /**
+ * F059. El diagnóstico de un fallo del LLM para el `.jsonl` y el aviso en vivo, en
+ * vocabulario cerrado: nada de texto del proveedor, ni saneado. Sin esto, 15 respuestas
+ * sin respuesta, 4 con 503 y 1 con 429 se distinguían solo por la pantalla (informes de
+ * la v1.0.0).
+ *  - `llmTipo`: el `tipo` de `clasificarError`.
+ *  - `llmEstado`: el estado HTTP como número, o `null` (red, plazo, config).
+ *  - `llmCodigo`: el código que el proveedor da en su cuerpo de error
+ *    (`UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `overloaded_error`, `insufficient_quota`…),
+ *    leído SOLO de las claves `status`/`code`/`type` y solo si es `[A-Za-z_]{3,40}`
+ *    entero; `error` (el envoltorio de Anthropic) no cuenta. Si no, `null`.
+ *  - `causa`: dos o tres palabras para el aviso («sin crédito», «error 503»).
+ */
+const RE_CODIGO_PROVEEDOR = /"(?:status|code|type)"\s*:\s*"([A-Za-z_]{3,40})"/g
+const CAUSA_CORTA = {
+  clave_invalida: 'clave no válida', sin_credito: 'sin crédito', sin_red: 'sin conexión',
+  sin_respuesta: 'sin respuesta', modelo_inexistente: 'modelo inexistente',
+}
+
+function diagnosticoLlm (err) {
+  const { tipo } = clasificarError(err)
+  const msg = String(err?.message ?? err ?? '')
+  const m = msg.match(/^(\w+)\s+(\d{3}):?\s*([\s\S]*)$/)
+  const llmEstado = m ? Number(m[2]) : null
+  let llmCodigo = null
+  if (m) {
+    for (const c of m[3].matchAll(RE_CODIGO_PROVEEDOR)) {
+      if (c[1] !== 'error') { llmCodigo = c[1]; break }
+    }
+  }
+  const causa = CAUSA_CORTA[tipo] || (llmEstado ? `error ${llmEstado}` : 'error desconocido')
+  return { llmTipo: tipo, llmEstado, llmCodigo, causa }
+}
+
+/**
  * Tacha todo lo que tenga forma de clave, para que NINGÚN texto de proveedor
  * llegue crudo a un log, a un `.jsonl` o a la pantalla.
  *
@@ -412,6 +446,6 @@ function crearLlamador ({ clave, proveedor, modelo, fetchImpl, plazoMs = PLAZO_M
 
 module.exports = {
   crearLlamador, proveedorDeClave, MODELOS, LISTA_DE_MODELOS, MAX_TOKENS, PLAZO_MS,
-  clasificarError, sanear, NOMBRE_PROVEEDOR,
+  clasificarError, diagnosticoLlm, sanear, NOMBRE_PROVEEDOR,
 }
 module.exports._internos = { quitarVallas, API, motivoDelFallo, NOMBRE_PROVEEDOR }

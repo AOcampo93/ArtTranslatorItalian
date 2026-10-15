@@ -360,6 +360,7 @@ function montarMotores ({ perfil, ctx, claveLlm, autosave, idioma = obtenerIdiom
   // Se limpia el aviso: si el usuario acaba de pegar la clave y ha vuelto a
   // empezar, el cartel de la reunión anterior ya no dice la verdad.
   aRenderer('app:avisoPreguntas', '')
+  aRenderer('app:avisoLlm', { abierto: false, causa: null })
 
   // F038: para guardar la respuesta junto a su pregunta en el `.jsonl` hace
   // falta recordar `it`/`es`/`manual` entre el evento `pregunta` (que llega
@@ -391,6 +392,7 @@ function montarMotores ({ perfil, ctx, claveLlm, autosave, idioma = obtenerIdiom
         it: datos.it, es: datos.es, manual: datos.manual,
         texto: r.texto, tokensEntrada: r.tokensEntrada, tokensSalida: r.tokensSalida,
         modelo: r.modelo, mensaje: r.mensaje || null,
+        llmTipo: r.llmTipo, llmEstado: r.llmEstado, llmCodigo: r.llmCodigo,
       })
     }
   })
@@ -404,6 +406,8 @@ function montarMotores ({ perfil, ctx, claveLlm, autosave, idioma = obtenerIdiom
   // devuelve vacío.
   const traductorLlm = crearTraductorLlm({
     llamar, bloqueContexto, respaldo: traductorMarian, promptTraduccion: idioma.promptTraduccion,
+    // F059: el aviso en vivo mientras el circuito está abierto.
+    alCambiarCircuito: c => aRenderer('app:avisoLlm', c),
   })
 
   return { motor, resumen, traductor: traductorLlm }
@@ -563,6 +567,9 @@ async function traducirLinea (s, texto, turno, extra = {}) {
     // 'respuesta-no-valida' (el LLM charló en vez de traducir). `null` en el
     // resto de los casos, incluida la traducción normal por LLM.
     motivo: tr.motivo ?? null,
+    // F059: si el LLM falló y por eso se tradujo con Marian, el diagnóstico del fallo.
+    // Solo en esas líneas: en el resto las tres serían un `null` que no mide nada.
+    ...(tr.llmTipo ? { llmTipo: tr.llmTipo, llmEstado: tr.llmEstado ?? null, llmCodigo: tr.llmCodigo ?? null } : {}),
     forzado: Boolean(turno.forzado),
     msTurno: turno.msTurno ?? null,
     msHolgura: turno.msHolgura ?? null,
